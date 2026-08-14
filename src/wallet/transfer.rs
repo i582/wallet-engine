@@ -7,8 +7,6 @@
 use std::str::FromStr;
 use std::str::Utf8Error;
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
 use ton::block_tlb::{CommonMsgInfoInt, Msg};
 use ton::errors::TonError;
 use ton::ton_core::cell::TonCell;
@@ -17,8 +15,8 @@ use ton::ton_core::traits::tlb::TLB;
 use ton::ton_core::types::TonAddress;
 use ton::ton_core::types::tlb_core::TLBCoins;
 
-use crate::bigint::parse_positive_decimal;
-use crate::{Network, SendRequest};
+use crate::types::{Boc, BocError, parse_positive_decimal};
+use crate::{Base64Hash, Base64HashError, Network, SendRequest};
 
 use super::crypto::{WalletCryptoError, derive_v5r1_wallet};
 use super::send::{FreshSendAccount, PreparedTransfer};
@@ -43,8 +41,12 @@ pub(crate) enum TransferError {
     MessageNormalization(#[source] TonCoreError),
     #[error("normalized message hash calculation failed")]
     MessageHash(#[source] TonCoreError),
+    #[error("normalized message hash has an invalid size")]
+    InvalidMessageHash(#[source] Base64HashError),
     #[error("signed BOC encoding failed")]
     BocEncoding(#[source] TonCoreError),
+    #[error("signed BOC validation failed")]
+    InvalidBoc(#[source] BocError),
 }
 
 pub(crate) fn prepare_transfer(
@@ -86,12 +88,13 @@ pub(crate) fn prepare_transfer(
 
     let normalized =
         Msg::<TonCell>::from_cell(&external).map_err(TransferError::MessageNormalization)?;
-    let message_hash = STANDARD.encode(
-        normalized
-            .cell_hash_normalized()
-            .map_err(TransferError::MessageHash)?,
-    );
-    let signed_boc = external.to_boc().map_err(TransferError::BocEncoding)?;
+    let message_hash_bytes = normalized
+        .cell_hash_normalized()
+        .map_err(TransferError::MessageHash)?;
+    let message_hash = Base64Hash::from_bytes(message_hash_bytes.as_slice())
+        .map_err(TransferError::InvalidMessageHash)?;
+    let signed_boc = Boc::try_from(external.to_boc().map_err(TransferError::BocEncoding)?)
+        .map_err(TransferError::InvalidBoc)?;
 
     Ok(PreparedTransfer {
         operation_id: request.operation_id.clone(),

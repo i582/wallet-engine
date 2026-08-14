@@ -1,5 +1,12 @@
 export type Network = "mainnet" | "testnet"
 
+declare const base64HashBrand: unique symbol
+
+/** A runtime-validated 256-bit hash in standard padded Base64. */
+export type Base64Hash = string & {
+  readonly [base64HashBrand]: "Base64Hash"
+}
+
 export interface ProviderConfig {
   readonly toncenterBaseUrl: string
 }
@@ -49,11 +56,8 @@ export interface AccountSnapshot {
 
 export interface ActivityItem {
   readonly id: string
-  /**
-   * Transaction hash normalized to standard padded Base64 when Toncenter
-   * supplies a valid 256-bit hash. Otherwise, the provider value is preserved.
-   */
-  readonly transactionHash: string
+  /** Transaction hash in standard padded Base64. */
+  readonly transactionHash: Base64Hash
   readonly logicalTime: string
   readonly timestamp: number
   readonly direction: "sent" | "received"
@@ -63,8 +67,8 @@ export interface ActivityItem {
 
 export interface ActivityCursor {
   readonly logicalTime: string
-  /** Uses the same encoding rules as ActivityItem.transactionHash. */
-  readonly hash: string
+  /** Oldest loaded transaction hash in standard padded Base64. */
+  readonly hash: Base64Hash
 }
 
 export interface DomainError {
@@ -175,7 +179,7 @@ export interface SendRequest {
 export interface SendResult {
   readonly operationId: string
   /** Normalized signed external-message hash in standard padded Base64. */
-  readonly messageHash: string
+  readonly messageHash: Base64Hash
   readonly phase: SendPhase
 }
 

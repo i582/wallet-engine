@@ -211,9 +211,10 @@ impl WalletClient {
 
         let summary = prepared.public_summary(config.network);
         let submit_request =
-            build_send_boc_request(&config, submit_request_id, &prepared.signed_boc).map_err(
-                |_| self.send_failed_error(generation, "failed to construct submission"),
-            )?;
+            build_send_boc_request(&config, submit_request_id, prepared.signed_boc.as_bytes())
+                .map_err(|_| {
+                    self.send_failed_error(generation, "failed to construct submission")
+                })?;
         let directive = workflow
             .transfer_prepared(prepared)
             .map_err(|error| self.send_failed_error(generation, error.to_string()))?;

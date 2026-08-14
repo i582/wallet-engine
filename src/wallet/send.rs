@@ -4,19 +4,18 @@
 //! callbacks itself. Its journal record prevents a second signature after an
 //! ambiguous submission result.
 
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use ton::ton_core::types::TonAddress;
 
-use crate::address::TonAddressExt as _;
-use crate::bigint::parse_positive_decimal;
+use crate::Base64Hash;
 use crate::domain::{
     AccountStatus, JournalCompareExchange, JournalCompareExchangeResult, JournalKey, JournalRecord,
     PreparedSend, ProtectedSecretRead, SecretAccessReason, SendPhase, SendRequest, SendSnapshot,
     bounded_diagnostic,
 };
+use crate::types::{Boc, TonAddressExt as _, parse_positive_decimal};
 
 const JOURNAL_SCHEMA_VERSION: u32 = 1;
 const FIRST_JOURNAL_VERSION: u64 = 1;
@@ -58,18 +57,16 @@ pub(crate) struct PreparedTransfer {
     pub operation_id: String,
 
     /// The application record that owns the source wallet and journal slot.
-    /// This is not the TON V5 `wallet_id` contract parameter.
     pub record_id: String,
 
     /// The configured source address after the mnemonic-derived wallet matches it.
     pub source: TonAddress,
 
-    /// The destination string from the request.
-    /// Transfer construction parses and validates it before this value exists.
+    /// The validated destination TON address from the request.
     pub destination: TonAddress,
 
     /// The exact transfer value in nanograms.
-    /// Conversion to a decimal string happens only at public and durable boundaries.
+    /// Arbitrary precision prevents truncation before public or journal serialization.
     pub amount_nanograms: BigUint,
 
     /// The fresh wallet sequence number signed into the external message.
@@ -83,13 +80,13 @@ pub(crate) struct PreparedTransfer {
     /// The engine derives it from provider time and the configured validity interval.
     pub valid_until: u32,
 
-    /// The exact signed external-message BOC submitted to Toncenter.
-    /// The journal stores this value before submission and preserves it after an ambiguous transport result.
-    pub signed_boc: Vec<u8>,
+    /// The validated signed external-message BOC submitted to Toncenter.
+    /// The journal preserves it after an ambiguous transport result.
+    pub signed_boc: Boc,
 
     /// The normalized external-message hash in standard padded Base64.
     /// Applications can use it to locate the submitted message without storing the recovery phrase.
-    pub message_hash: String,
+    pub message_hash: Base64Hash,
 }
 
 impl PreparedTransfer {
@@ -177,9 +174,9 @@ pub(crate) enum SendDirective {
     },
     PersistJournal(JournalCompareExchange),
     Submit {
-        signed_boc: Vec<u8>,
+        signed_boc: Boc,
         /// The normalized external-message hash in standard padded Base64.
-        message_hash: String,
+        message_hash: Base64Hash,
     },
     Finished,
 }
@@ -216,12 +213,12 @@ struct DurableSendRecord {
     /// The application record that owns the wallet-wide send slot.
     record_id: String,
     /// The source TON address.
-    /// Serde stores it as raw `workchain:hex` and accepts older friendly values.
-    #[serde(with = "crate::address::raw_serde")]
+    /// Serde stores it as raw `workchain:hex` and accepts friendly values.
+    #[serde(with = "crate::types::raw_address_serde")]
     source: TonAddress,
     /// The destination TON address.
-    /// Serde stores it as raw `workchain:hex` and accepts older friendly values.
-    #[serde(with = "crate::address::raw_serde")]
+    /// Serde stores it as raw `workchain:hex` and accepts friendly values.
+    #[serde(with = "crate::types::raw_address_serde")]
     destination: TonAddress,
     /// The exact transfer value as a canonical base-10 nanogram string.
     amount_nanograms: String,
@@ -231,10 +228,12 @@ struct DurableSendRecord {
     needs_state_init: bool,
     /// The unsigned Unix expiration time signed into the wallet message.
     valid_until: u32,
-    /// The signed BOC encoded as standard padded Base64 for durable storage.
-    signed_boc_base64: String,
+    /// The validated signed BOC.
+    /// JSON clients receive it as standard padded Base64.
+    #[serde(rename = "signed_boc_base64")]
+    signed_boc: Boc,
     /// The normalized external-message hash in standard padded Base64.
-    message_hash: String,
+    message_hash: Base64Hash,
     /// The reducer stage stored by the latest successful journal CAS.
     stage: SendStage,
     /// The optional receipt returned by the provider after submission.
@@ -550,7 +549,7 @@ impl SendWorkflow {
             seqno: prepared.seqno,
             needs_state_init: prepared.needs_state_init,
             valid_until: prepared.valid_until,
-            signed_boc_base64: BASE64.encode(&prepared.signed_boc),
+            signed_boc: prepared.signed_boc.clone(),
             message_hash: prepared.message_hash.clone(),
             stage: self.stage,
             provider_reference: self.provider_reference.clone(),
@@ -591,8 +590,6 @@ impl SendWorkflow {
             || prepared.amount_nanograms != request_amount
             || prepared.seqno != account.seqno
             || prepared.needs_state_init != account.needs_state_init()
-            || prepared.signed_boc.is_empty()
-            || prepared.message_hash.is_empty()
         {
             return Err(SendWorkflowError::PreparedTransferMismatch);
         }
@@ -667,16 +664,9 @@ fn decode_durable_record(record: &JournalRecord) -> Result<DurableSendRecord, Se
         ));
     }
 
-    let boc_is_invalid = match BASE64.decode(&durable.signed_boc_base64) {
-        Ok(boc) => boc.is_empty(),
-        Err(_) => true,
-    };
     if durable.operation_id.trim().is_empty()
         || durable.record_id.trim().is_empty()
-        || durable.message_hash.trim().is_empty()
         || parse_positive_decimal(&durable.amount_nanograms).is_none()
-        || durable.signed_boc_base64.is_empty()
-        || boc_is_invalid
     {
         return Err(SendWorkflowError::InvalidJournal(
             "record fields are invalid".to_owned(),

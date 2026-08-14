@@ -24,14 +24,14 @@
 //! Host callbacks can therefore call unrelated application code without a
 //! wallet-state lock cycle. Streaming updates remain outside this crate.
 
-mod address;
-mod bigint;
 mod domain;
 mod engine;
+mod types;
 mod wallet;
 
 pub use domain::*;
 pub use engine::{WalletClient, WalletHttpHost, WalletPlatformHost};
+pub use types::{Base64Hash, Base64HashError};
 pub use wallet::*;
 
 uniffi::setup_scaffolding!();

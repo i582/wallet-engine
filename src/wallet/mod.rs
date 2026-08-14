@@ -12,12 +12,12 @@ use std::sync::Arc;
 use ton::ton_core::types::TonAddress;
 
 use self::crypto::{SensitiveMnemonic, derive_v5r1_wallet, generate_mnemonic};
-use crate::address::TonAddressExt as _;
 use crate::domain::{
     Network, ProtectedSecretHostError, ProtectedSecretHostErrorKind, ProtectedSecretRead,
     ProtectedSecretRef, ProtectedSecretStore, SecretAccessReason, bounded_diagnostic,
 };
 use crate::engine::WalletPlatformHost;
+use crate::types::TonAddressExt as _;
 
 const MAX_RECORD_ID_BYTES: usize = 128;
 

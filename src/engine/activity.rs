@@ -175,10 +175,6 @@ pub(super) fn build_activity_page_request(
     cursor: &ActivityPageCursor,
     id: HttpRequestId,
 ) -> Result<HttpRequest, WalletClientError> {
-    if cursor.hash.is_empty() {
-        return Err(WalletClientError::InvalidConfig);
-    }
-
     let logical_time = cursor.logical_time.to_string();
 
     build_toncenter_request(

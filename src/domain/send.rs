@@ -1,6 +1,7 @@
 //! Public transfer requests, phases, snapshots, and results.
 
 use super::ProtectedSecretRef;
+use crate::Base64Hash;
 
 /// Requests one signed V5R1 transfer.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
@@ -77,7 +78,7 @@ pub struct SendResult {
     /// The application operation identifier.
     pub operation_id: String,
     /// The normalized signed external-message hash in standard padded Base64.
-    pub message_hash: String,
+    pub message_hash: Base64Hash,
     /// The terminal phase. This can be [`SendPhase::SubmissionUnknown`].
     pub phase: SendPhase,
 }

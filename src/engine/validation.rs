@@ -5,7 +5,7 @@ use std::str::FromStr;
 use ton::ton_core::types::TonAddress;
 use url::Url;
 
-use crate::bigint::parse_positive_decimal;
+use crate::types::parse_positive_decimal;
 use crate::{SendRequest, WalletClientConfig, WalletClientError};
 
 pub(super) fn validate_config(config: &WalletClientConfig) -> Result<(), WalletClientError> {

@@ -3,19 +3,17 @@
 //! The wallet client uses this private module to convert provider JSON into
 //! stable account and activity records. It also sanitizes external diagnostics.
 
-use base64::Engine as _;
-use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD};
 use num_bigint::BigUint;
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::Value;
 use std::str::FromStr;
 use ton::ton_core::types::TonAddress;
 
-use crate::address::TonAddressExt as _;
 use crate::domain::bounded_diagnostic;
+use crate::types::TonAddressExt as _;
 use crate::{
-    AccountSnapshot, AccountStatus, ActivityCursor, ActivityDirection, ActivityItem, DomainError,
-    ErrorCategory, ErrorCode, HttpHeader, Network, RetryAdvice,
+    AccountSnapshot, AccountStatus, ActivityCursor, ActivityDirection, ActivityItem, Base64Hash,
+    DomainError, ErrorCategory, ErrorCode, HttpHeader, Network, RetryAdvice,
 };
 
 #[derive(Debug, Deserialize)]
@@ -77,9 +75,8 @@ pub(crate) struct ActivityRecord {
     /// It combines the transaction hash, direction, and deterministic message index.
     pub id: String,
 
-    /// The transaction hash in standard padded Base64 when the provider value is a valid 256-bit hash.
-    /// Otherwise, it preserves the nonempty provider value for diagnostics and pagination consistency.
-    pub transaction_hash: String,
+    /// The validated transaction hash in standard padded Base64.
+    pub transaction_hash: Base64Hash,
 
     /// The transaction logical time as an arbitrary-precision integer.
     /// Activity sorting uses this value before the timestamp and row identifier.
@@ -131,8 +128,8 @@ pub(crate) struct ActivityPageCursor {
     pub logical_time: BigUint,
 
     /// The matching transaction hash.
-    /// A valid 256-bit hash uses standard padded Base64. Other nonempty provider values remain unchanged.
-    pub hash: String,
+    /// The validated transaction hash in standard padded Base64.
+    pub hash: Base64Hash,
 }
 
 impl ActivityPageCursor {
@@ -220,15 +217,12 @@ pub(crate) fn parse_activity(body: &[u8], page_size: u32) -> Result<ActivityPage
     let cursor = transactions
         .last()
         .map(|transaction| {
-            if transaction.transaction_id.hash.is_empty() {
-                return Err(invalid_response("transaction hash must not be empty"));
-            }
             Ok(ActivityPageCursor {
                 logical_time: parse_unsigned_decimal(
                     &transaction.transaction_id.lt,
                     "logical time",
                 )?,
-                hash: canonical_hash(&transaction.transaction_id.hash),
+                hash: parse_hash(&transaction.transaction_id.hash, "transaction hash")?,
             })
         })
         .transpose()?;
@@ -301,10 +295,7 @@ fn activity_from_message(
         ActivityDirection::Sent => "sent",
     };
 
-    let transaction_hash = canonical_hash(&transaction.transaction_id.hash);
-    if transaction_hash.is_empty() {
-        return Err(invalid_response("transaction hash must not be empty"));
-    }
+    let transaction_hash = parse_hash(&transaction.transaction_id.hash, "transaction hash")?;
 
     Ok(Some(ActivityRecord {
         id: format!("{transaction_hash}:{direction_name}:{index}"),
@@ -319,8 +310,8 @@ fn activity_from_message(
 
 struct OrderedMessage<'a> {
     created_logical_time: Option<BigUint>,
-    /// The provider message hash normalized to standard padded Base64 when valid.
-    hash: String,
+    /// The optional provider message hash in standard padded Base64.
+    hash: Option<Base64Hash>,
     original_index: usize,
     message: &'a Message,
 }
@@ -340,9 +331,8 @@ fn ordered_out_messages(transaction: &Transaction) -> Result<Vec<OrderedMessage<
             let message_hash = message
                 .hash
                 .as_deref()
-                .filter(|hash| !hash.is_empty())
-                .map(canonical_hash)
-                .unwrap_or_default();
+                .map(|hash| parse_hash(hash, "message hash"))
+                .transpose()?;
 
             Ok(OrderedMessage {
                 created_logical_time: created_lt,
@@ -471,17 +461,9 @@ fn message_address(value: &Value, field: &str) -> Result<TonAddress, DomainError
         .map_err(|_| invalid_response(format!("{field} is missing or invalid")))
 }
 
-fn canonical_hash(value: &str) -> String {
-    let decoded = STANDARD
-        .decode(value)
-        .or_else(|_| STANDARD_NO_PAD.decode(value))
-        .or_else(|_| URL_SAFE.decode(value))
-        .or_else(|_| URL_SAFE_NO_PAD.decode(value));
-
-    match decoded {
-        Ok(bytes) if bytes.len() == 32 => STANDARD.encode(bytes),
-        _ => value.to_owned(),
-    }
+fn parse_hash(value: &str, field: &str) -> Result<Base64Hash, DomainError> {
+    Base64Hash::try_from(value)
+        .map_err(|_| invalid_response(format!("{field} is not a 256-bit Base64 value")))
 }
 
 fn provider_message(body: &[u8]) -> Option<String> {
