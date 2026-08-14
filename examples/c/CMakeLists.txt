@@ -21,6 +21,15 @@ target_include_directories(
 )
 target_link_libraries(wallet_engine_c_example PRIVATE "${WALLET_ENGINE_LIBRARY}")
 
+if(MSVC)
+    target_compile_options(wallet_engine_c_example PRIVATE /W4 /WX)
+else()
+    target_compile_options(
+        wallet_engine_c_example
+        PRIVATE -Wall -Wextra -Wpedantic -Werror
+    )
+endif()
+
 get_filename_component(WALLET_ENGINE_LIBRARY_DIR "${WALLET_ENGINE_LIBRARY}" DIRECTORY)
 set_target_properties(
     wallet_engine_c_example
