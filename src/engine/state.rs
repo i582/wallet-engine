@@ -5,7 +5,7 @@ use futures::channel::oneshot;
 use crate::provider::{ActivityPageCursor, ActivityRecord};
 use crate::send::SendWorkflow;
 use crate::{
-    HttpCallId, WalletClientConfig, WalletClientError, WalletOperationOutcome, WalletSnapshot,
+    HttpRequestId, WalletClientConfig, WalletClientError, WalletOperationOutcome, WalletSnapshot,
     WalletUpdate,
 };
 
@@ -29,9 +29,9 @@ pub(super) struct State {
     pub(super) refresh_generation: u64,
     pub(super) pagination_generation: u64,
     pub(super) send_generation: u64,
-    pub(super) active_refresh: Option<(u64, Vec<HttpCallId>)>,
-    pub(super) active_pagination: Option<(u64, HttpCallId)>,
-    pub(super) active_send: Option<(u64, Vec<HttpCallId>)>,
+    pub(super) active_refresh: Option<(u64, Vec<HttpRequestId>)>,
+    pub(super) active_pagination: Option<(u64, HttpRequestId)>,
+    pub(super) active_send: Option<(u64, Vec<HttpRequestId>)>,
     pub(super) send_commit_started: bool,
     pub(super) send_workflow: Option<SendWorkflow>,
     pub(super) waiters: Vec<(u64, oneshot::Sender<()>)>,

@@ -4,13 +4,13 @@ use std::collections::HashMap;
 
 use crate::provider::{ActivityPage, ActivityPageCursor, activity_record_order};
 use crate::{
-    ErrorCode, HttpCall, HttpCallId, ResourcePhase, ResourceState, WalletClientConfig,
+    ErrorCode, HttpRequest, HttpRequestId, ResourcePhase, ResourceState, WalletClientConfig,
     WalletClientError, WalletOperationOutcome, WalletUpdate,
 };
 
 use super::WalletClient;
 use super::http::build_toncenter_request;
-use super::http::evaluate_for_call;
+use super::http::evaluate_response;
 use super::state::{OperationFamily, State, ensure_running, update};
 
 #[uniffi::export]
@@ -21,7 +21,7 @@ impl WalletClient {
     /// or when no advancing cursor exists. A page must move to an older logical
     /// time. Otherwise pagination stops and adds no items.
     pub async fn load_more_activity(&self) -> Result<WalletUpdate, WalletClientError> {
-        let (generation, call) = {
+        let (generation, request) = {
             let mut state = self.lock()?;
             ensure_running(&state)?;
 
@@ -36,10 +36,10 @@ impl WalletClient {
                 return Ok(update(WalletOperationOutcome::Skipped, 0, &state));
             };
 
-            let id = HttpCallId {
+            let id = HttpRequestId {
                 value: state.allocate_id()?,
             };
-            let call = build_activity_page_request(&state.config, &cursor, id)?;
+            let request = build_activity_page_request(&state.config, &cursor, id)?;
 
             state.pagination_generation = state
                 .pagination_generation
@@ -50,12 +50,12 @@ impl WalletClient {
             state.snapshot.activity_pagination_resource = ResourceState::loading();
             state.next_revision()?;
 
-            (generation, call)
+            (generation, request)
         };
 
-        let result = evaluate_for_call(
-            &call,
-            self.http_host.execute_http(call.clone()).await,
+        let result = evaluate_response(
+            &request,
+            self.http_host.execute_http(request.clone()).await,
             |body| crate::provider::parse_activity(body, PAGE_SIZE),
         );
 
@@ -91,19 +91,19 @@ impl WalletClient {
     ///
     /// This method has no effect when no page load is active.
     pub async fn cancel_load_more_activity(&self) -> Result<(), WalletClientError> {
-        let call = {
+        let request_id = {
             let mut state = self.lock()?;
-            let call = state.active_pagination.take().map(|active| active.1);
-            if call.is_some() {
+            let request_id = state.active_pagination.take().map(|active| active.1);
+            if request_id.is_some() {
                 state.snapshot.activity_pagination_resource = ResourceState::idle();
                 state.next_revision()?;
             }
 
-            call
+            request_id
         };
 
-        if let Some(call_id) = call {
-            self.http_host.cancel_http(call_id).await;
+        if let Some(request_id) = request_id {
+            self.http_host.cancel_http(request_id).await;
         }
 
         Ok(())
@@ -153,9 +153,9 @@ pub(super) fn apply_activity_page(state: &mut State, page: ActivityPage) -> u64 
 
 pub(super) fn build_refresh_requests(
     config: &WalletClientConfig,
-    account_id: HttpCallId,
-    activity_id: HttpCallId,
-) -> Result<(HttpCall, HttpCall), WalletClientError> {
+    account_id: HttpRequestId,
+    activity_id: HttpRequestId,
+) -> Result<(HttpRequest, HttpRequest), WalletClientError> {
     Ok((
         build_toncenter_request(
             config,
@@ -175,8 +175,8 @@ pub(super) fn build_refresh_requests(
 pub(super) fn build_activity_page_request(
     config: &WalletClientConfig,
     cursor: &ActivityPageCursor,
-    id: HttpCallId,
-) -> Result<HttpCall, WalletClientError> {
+    id: HttpRequestId,
+) -> Result<HttpRequest, WalletClientError> {
     if cursor.hash.is_empty() {
         return Err(WalletClientError::InvalidConfig);
     }

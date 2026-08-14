@@ -13,7 +13,7 @@ use wasm_bindgen::prelude::wasm_bindgen;
 #[wasm_bindgen(typescript_custom_section)]
 const TYPESCRIPT_HOST_API: &str = r#"
 export interface WalletHttpHost {
-  executeHttp(call: unknown): Promise<unknown>;
+  executeHttp(request: unknown): Promise<unknown>;
   cancelHttp(callId: unknown): Promise<void>;
 }
 

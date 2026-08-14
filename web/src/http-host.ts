@@ -1,8 +1,8 @@
 import type {
   CredentialRef,
   HostFailure,
-  HttpCall,
-  HttpCallId,
+  HttpRequest,
+  HttpRequestId,
   HttpHeader,
   HttpResponse,
 } from "./types"
@@ -34,72 +34,72 @@ export class BrowserHttpHost {
     this.fetch = options.fetch ?? globalThis.fetch.bind(globalThis)
   }
 
-  async executeHttp(call: HttpCall): Promise<HttpResponse> {
-    this.validateCall(call)
-    const callId = call.id.value
-    if (this.cancelledBeforeStart.delete(callId)) {
-      throw hostFailure("cancelled", "The HTTP call was cancelled before it started")
+  async executeHttp(request: HttpRequest): Promise<HttpResponse> {
+    this.validateRequest(request)
+    const requestId = request.id.value
+    if (this.cancelledBeforeStart.delete(requestId)) {
+      throw hostFailure("cancelled", "The HTTP request was cancelled before it started")
     }
 
     const controller = new AbortController()
-    this.tasks.set(callId, controller)
+    this.tasks.set(requestId, controller)
     let credential: string | undefined
     try {
-      const url = new URL(call.url)
+      const url = new URL(request.url)
       const headers = new Headers()
-      for (const header of call.headers) {
+      for (const header of request.headers) {
         if (isReservedHeader(header.name)) {
           throw hostFailure("policyViolation", "The request contains a reserved header")
         }
         headers.append(header.name, header.value)
       }
 
-      if (call.credential !== undefined) {
-        credential = await this.credentialProvider(call.credential)
+      if (request.credential !== undefined) {
+        credential = await this.credentialProvider(request.credential)
         if (!credential) {
           throw hostFailure("policyViolation", "The requested credential is unavailable")
         }
-        if (effectiveOrigin(url) !== call.credentialOrigin) {
+        if (effectiveOrigin(url) !== request.credentialOrigin) {
           throw hostFailure("policyViolation", "The credential origin does not match the request")
         }
         headers.set("X-API-Key", credential)
       }
 
       const response = await this.fetch(url, {
-        method: call.method === "get" ? "GET" : "POST",
+        method: request.method === "get" ? "GET" : "POST",
         headers,
-        body: call.method === "post" ? new Uint8Array(call.body) : undefined,
+        body: request.method === "post" ? new Uint8Array(request.body) : undefined,
         redirect: "error",
         credentials: "omit",
         cache: "no-store",
         signal: controller.signal,
       })
       const responseHeaders = collectHeaders(response.headers, credential)
-      enforceHeaderLimit(responseHeaders, call.maxResponseHeaderBytes)
-      const body = await collectBody(response, call.maxResponseBodyBytes, controller)
+      enforceHeaderLimit(responseHeaders, request.maxResponseHeaderBytes)
+      const body = await collectBody(response, request.maxResponseBodyBytes, controller)
       return {
         status: response.status,
         headers: responseHeaders,
         body: [...body],
-        finalUrl: response.url || call.url,
+        finalUrl: response.url || request.url,
       }
     } catch (error) {
       throw normalizeHttpFailure(error, controller.signal.aborted)
     } finally {
-      this.tasks.delete(callId)
+      this.tasks.delete(requestId)
     }
   }
 
-  async cancelHttp(callId: HttpCallId): Promise<void> {
-    const task = this.tasks.get(callId.value)
+  async cancelHttp(requestId: HttpRequestId): Promise<void> {
+    const task = this.tasks.get(requestId.value)
     if (task) {
-      this.tasks.delete(callId.value)
+      this.tasks.delete(requestId.value)
       task.abort()
       return
     }
-    if (!this.cancelledBeforeStart.has(callId.value)) {
-      this.cancelledBeforeStart.add(callId.value)
-      this.cancelledOrder.push(callId.value)
+    if (!this.cancelledBeforeStart.has(requestId.value)) {
+      this.cancelledBeforeStart.add(requestId.value)
+      this.cancelledOrder.push(requestId.value)
     }
     while (this.cancelledOrder.length > MAX_EARLY_CANCELLATIONS) {
       const expired = this.cancelledOrder.shift()
@@ -109,23 +109,23 @@ export class BrowserHttpHost {
     }
   }
 
-  private validateCall(call: HttpCall): void {
-    const url = new URL(call.url)
+  private validateRequest(request: HttpRequest): void {
+    const url = new URL(request.url)
     if (url.protocol !== "https:") {
       throw hostFailure("policyViolation", "Only HTTPS requests are permitted")
     }
-    if (call.body.length > MAX_REQUEST_BODY_BYTES) {
+    if (request.body.length > MAX_REQUEST_BODY_BYTES) {
       throw hostFailure("policyViolation", "The request body is too large")
     }
     if (
-      call.maxResponseBodyBytes <= 0 ||
-      call.maxResponseBodyBytes > MAX_RESPONSE_BODY_BYTES ||
-      call.maxResponseHeaderBytes <= 0 ||
-      call.maxResponseHeaderBytes > MAX_RESPONSE_HEADER_BYTES
+      request.maxResponseBodyBytes <= 0 ||
+      request.maxResponseBodyBytes > MAX_RESPONSE_BODY_BYTES ||
+      request.maxResponseHeaderBytes <= 0 ||
+      request.maxResponseHeaderBytes > MAX_RESPONSE_HEADER_BYTES
     ) {
       throw hostFailure("policyViolation", "The response limit is invalid")
     }
-    if ((call.credential === undefined) !== (call.credentialOrigin === undefined)) {
+    if ((request.credential === undefined) !== (request.credentialOrigin === undefined)) {
       throw hostFailure("policyViolation", "The credential policy is incomplete")
     }
   }
@@ -213,7 +213,7 @@ function normalizeHttpFailure(error: unknown, cancelled: boolean): HostFailure {
     return error
   }
   if (cancelled || (error instanceof DOMException && error.name === "AbortError")) {
-    return hostFailure("cancelled", "The HTTP call was cancelled")
+    return hostFailure("cancelled", "The HTTP request was cancelled")
   }
   if (error instanceof TypeError) {
     return hostFailure("connectionLost", "The browser fetch request failed")

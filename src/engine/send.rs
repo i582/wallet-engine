@@ -1,6 +1,6 @@
 //! V5R1 transfer orchestration.
 use super::client::WalletClient;
-use super::http::{build_toncenter_request, evaluate_for_call};
+use super::http::{build_toncenter_request, evaluate_response};
 use super::send_http::{
     SendBocResponse, build_send_boc_request, build_seqno_request, is_explicit_send_rejection,
     parse_send_response, parse_seqno,
@@ -13,7 +13,7 @@ use crate::diagnostic::bounded_diagnostic;
 use crate::provider::parse_account;
 use crate::send::{FreshSendAccount, SendDirective, SendWorkflow};
 use crate::signer::{derive_source, prepare_transfer};
-use crate::{AccountStatus, HttpCallId, SendPhase, SendRequest, SendResult, WalletClientError};
+use crate::{AccountStatus, HttpRequestId, SendPhase, SendRequest, SendResult, WalletClientError};
 
 #[uniffi::export]
 impl WalletClient {
@@ -39,9 +39,9 @@ impl WalletClient {
             generation,
             config,
             expected_source,
-            account_call,
-            seqno_call,
-            submit_call_id,
+            account_request,
+            seqno_request,
+            submit_request_id,
             journal_key,
             mut workflow,
         ) = {
@@ -58,21 +58,21 @@ impl WalletClient {
             let config = state.config.clone();
             let expected_source = config.parsed_address()?;
 
-            let account_call = build_toncenter_request(
+            let account_request = build_toncenter_request(
                 &config,
-                HttpCallId {
+                HttpRequestId {
                     value: state.allocate_id()?,
                 },
                 "getAddressInformation",
                 &[("address", config.address.as_str())],
             )?;
-            let seqno_call = build_seqno_request(
+            let seqno_request = build_seqno_request(
                 &config,
-                HttpCallId {
+                HttpRequestId {
                     value: state.allocate_id()?,
                 },
             )?;
-            let submit_call_id = HttpCallId {
+            let submit_request_id = HttpRequestId {
                 value: state.allocate_id()?,
             };
             let mut workflow = SendWorkflow::new(
@@ -95,9 +95,9 @@ impl WalletClient {
                 generation,
                 config,
                 expected_source,
-                account_call,
-                seqno_call,
-                submit_call_id,
+                account_request,
+                seqno_request,
+                submit_request_id,
                 journal_key,
                 workflow,
             )
@@ -122,18 +122,18 @@ impl WalletClient {
         // Fetch current account status before authorization. A stale cached status can produce
         // an invalid seqno or incorrectly include StateInit in the external message.
         let account_response = self
-            .execute_tracked_send_call(generation, &account_call)
+            .execute_tracked_send_request(generation, &account_request)
             .await?;
-        let account = evaluate_for_call(&account_call, account_response, parse_account)
+        let account = evaluate_response(&account_request, account_response, parse_account)
             .map_err(|error| self.send_failed_error(generation, error.developer_message))?;
         // Active wallets require a fresh seqno for replay protection. A wallet that is not yet
         // deployed starts at seqno zero; the workflow rejects unsupported account states later.
         let seqno = if account.status == AccountStatus::Active {
             let seqno_response = self
-                .execute_tracked_send_call(generation, &seqno_call)
+                .execute_tracked_send_request(generation, &seqno_request)
                 .await?;
 
-            evaluate_for_call(&seqno_call, seqno_response, parse_seqno)
+            evaluate_response(&seqno_request, seqno_response, parse_seqno)
                 .map_err(|error| self.send_failed_error(generation, error.developer_message))?
         } else {
             0
@@ -218,8 +218,10 @@ impl WalletClient {
         })?;
 
         let summary = prepared.public_summary();
-        let submit_call = build_send_boc_request(&config, submit_call_id, &prepared.signed_boc)
-            .map_err(|_| self.send_failed_error(generation, "failed to construct submission"))?;
+        let submit_request =
+            build_send_boc_request(&config, submit_request_id, &prepared.signed_boc).map_err(
+                |_| self.send_failed_error(generation, "failed to construct submission"),
+            )?;
         let directive = workflow
             .transfer_prepared(prepared)
             .map_err(|error| self.send_failed_error(generation, error.to_string()))?;
@@ -265,12 +267,12 @@ impl WalletClient {
         // Submit exactly the BOC stored above. Transport or malformed-response failures are
         // classified as SubmissionUnknown because the provider might have accepted the POST.
         let submit_result = self
-            .execute_tracked_send_call(generation, &submit_call)
+            .execute_tracked_send_request(generation, &submit_request)
             .await?;
 
         let final_directive = match submit_result {
             Ok(response) => {
-                match evaluate_for_call(&submit_call, Ok(response), parse_send_response) {
+                match evaluate_response(&submit_request, Ok(response), parse_send_response) {
                     Ok(SendBocResponse::Accepted) => workflow.submission_succeeded(None),
                     Ok(SendBocResponse::Rejected(message)) => workflow.submission_rejected(message),
                     Err(error) if is_explicit_send_rejection(&error) => {
@@ -328,7 +330,7 @@ impl WalletClient {
     /// [`WalletClientError::SendCancellationTooLate`]. The caller must let the
     /// send finish because the signed BOC can already be durable or submitted.
     pub async fn cancel_send(&self) -> Result<(), WalletClientError> {
-        let calls = {
+        let request_ids = {
             let mut state = self.lock()?;
             if state.active_send.is_some() && state.send_commit_started {
                 return Err(WalletClientError::SendCancellationTooLate);
@@ -350,8 +352,8 @@ impl WalletClient {
             active.map(|active| active.1).unwrap_or_default()
         };
 
-        for call in calls {
-            self.http_host.cancel_http(call).await;
+        for request_id in request_ids {
+            self.http_host.cancel_http(request_id).await;
         }
 
         Ok(())

@@ -5,21 +5,21 @@ use url::Url;
 use crate::diagnostic::bounded_diagnostic;
 use crate::provider::response_error;
 use crate::{
-    DomainError, ErrorCategory, ErrorCode, HttpCall, HttpCallId, HttpHeader, HttpHostError,
-    HttpHostErrorKind, HttpMethod, HttpResponse, RetryAdvice, WalletClientConfig,
+    DomainError, ErrorCategory, ErrorCode, HttpHeader, HttpHostError, HttpHostErrorKind,
+    HttpMethod, HttpRequest, HttpRequestId, HttpResponse, RetryAdvice, WalletClientConfig,
     WalletClientError,
 };
 
 const MAX_RESPONSE_BODY_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_RESPONSE_HEADER_BYTES: u64 = 64 * 1024;
 
-pub(super) fn evaluate_for_call<T>(
-    call: &HttpCall,
+pub(super) fn evaluate_response<T>(
+    request: &HttpRequest,
     result: Result<HttpResponse, HttpHostError>,
     parse: impl FnOnce(&[u8]) -> Result<T, DomainError>,
 ) -> Result<T, DomainError> {
     if let Ok(response) = &result
-        && response.final_url != call.url
+        && response.final_url != request.url
     {
         return Err(host_error(
             HttpHostErrorKind::PolicyViolation,
@@ -28,7 +28,7 @@ pub(super) fn evaluate_for_call<T>(
     }
 
     if let Ok(response) = &result {
-        if response.body.len() as u64 > call.max_response_body_bytes {
+        if response.body.len() as u64 > request.max_response_body_bytes {
             return Err(host_error(
                 HttpHostErrorKind::ResponseTooLarge,
                 "HTTP response exceeded the requested limit",
@@ -38,7 +38,7 @@ pub(super) fn evaluate_for_call<T>(
         let header_bytes = response.headers.iter().fold(0_u64, |size, header| {
             size.saturating_add((header.name.len() + header.value.len()) as u64)
         });
-        if header_bytes > call.max_response_header_bytes {
+        if header_bytes > request.max_response_header_bytes {
             return Err(host_error(
                 HttpHostErrorKind::ResponseTooLarge,
                 "HTTP response headers exceeded the requested limit",
@@ -51,18 +51,20 @@ pub(super) fn evaluate_for_call<T>(
 
 pub(super) fn build_toncenter_request(
     config: &WalletClientConfig,
-    id: HttpCallId,
+    id: HttpRequestId,
     path: &str,
     query: &[(&str, &str)],
-) -> Result<HttpCall, WalletClientError> {
-    let mut call = build_public_request(id, &config.providers.toncenter_base_url, path, query)?;
+) -> Result<HttpRequest, WalletClientError> {
+    let mut request = build_public_request(id, &config.providers.toncenter_base_url, path, query)?;
 
-    call.credential
+    request
+        .credential
         .clone_from(&config.providers.toncenter_credential);
-    call.credential_origin
+    request
+        .credential_origin
         .clone_from(&config.providers.toncenter_credential_origin);
 
-    Ok(call)
+    Ok(request)
 }
 
 fn evaluate<T>(
@@ -118,12 +120,12 @@ fn host_error(kind: HttpHostErrorKind, message: &str) -> DomainError {
 }
 
 fn build_public_request(
-    id: HttpCallId,
+    id: HttpRequestId,
     base: &str,
     path: &str,
     query: &[(&str, &str)],
-) -> Result<HttpCall, WalletClientError> {
-    Ok(HttpCall {
+) -> Result<HttpRequest, WalletClientError> {
+    Ok(HttpRequest {
         id,
         method: HttpMethod::Get,
         url: build_provider_url(base, path, query)?,

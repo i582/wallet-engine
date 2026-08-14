@@ -79,7 +79,7 @@ pub enum WalletOperationOutcome {
     Skipped,
 }
 
-/// The result of a refresh or pagination call and its resulting snapshot.
+/// The result of a refresh or pagination operation and its resulting snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct WalletUpdate {

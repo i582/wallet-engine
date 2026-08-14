@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use crate::diagnostic::bounded_diagnostic;
 use crate::{
-    DomainError, ErrorCategory, ErrorCode, HttpCall, HttpCallId, HttpHeader, HttpMethod,
+    DomainError, ErrorCategory, ErrorCode, HttpHeader, HttpMethod, HttpRequest, HttpRequestId,
     RetryAdvice, WalletClientConfig, WalletClientError,
 };
 
@@ -17,8 +17,8 @@ pub(super) enum SendBocResponse {
 
 pub(super) fn build_seqno_request(
     config: &WalletClientConfig,
-    id: HttpCallId,
-) -> Result<HttpCall, WalletClientError> {
+    id: HttpRequestId,
+) -> Result<HttpRequest, WalletClientError> {
     build_json_rpc_request(
         config,
         id,
@@ -33,9 +33,9 @@ pub(super) fn build_seqno_request(
 
 pub(super) fn build_send_boc_request(
     config: &WalletClientConfig,
-    id: HttpCallId,
+    id: HttpRequestId,
     boc: &[u8],
-) -> Result<HttpCall, WalletClientError> {
+) -> Result<HttpRequest, WalletClientError> {
     use base64::Engine as _;
 
     let encoded = base64::engine::general_purpose::STANDARD.encode(boc);
@@ -101,10 +101,10 @@ pub(super) fn is_explicit_send_rejection(error: &DomainError) -> bool {
 
 fn build_json_rpc_request(
     config: &WalletClientConfig,
-    id: HttpCallId,
+    id: HttpRequestId,
     method: &str,
     params: Value,
-) -> Result<HttpCall, WalletClientError> {
+) -> Result<HttpRequest, WalletClientError> {
     let body = serde_json::to_vec(&serde_json::json!({
         "jsonrpc": "2.0",
         "id": id.value.to_string(),
@@ -113,16 +113,16 @@ fn build_json_rpc_request(
     }))
     .map_err(|_| WalletClientError::StateUnavailable)?;
 
-    let mut call = build_toncenter_request(config, id, "jsonRPC", &[])?;
+    let mut request = build_toncenter_request(config, id, "jsonRPC", &[])?;
 
-    call.method = HttpMethod::Post;
-    call.headers.push(HttpHeader {
+    request.method = HttpMethod::Post;
+    request.headers.push(HttpHeader {
         name: "Content-Type".to_owned(),
         value: "application/json".to_owned(),
     });
-    call.body = body;
+    request.body = body;
 
-    Ok(call)
+    Ok(request)
 }
 
 fn json_error_message(value: &Value) -> String {

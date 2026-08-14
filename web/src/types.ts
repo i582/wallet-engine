@@ -18,7 +18,7 @@ export interface WalletClientConfig {
   readonly providers: ProviderConfig
 }
 
-export interface HttpCallId {
+export interface HttpRequestId {
   readonly value: number
 }
 
@@ -27,8 +27,8 @@ export interface HttpHeader {
   readonly value: string
 }
 
-export interface HttpCall {
-  readonly id: HttpCallId
+export interface HttpRequest {
+  readonly id: HttpRequestId
   readonly method: "get" | "post"
   readonly url: string
   readonly headers: HttpHeader[]

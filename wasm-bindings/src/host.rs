@@ -9,10 +9,10 @@ use async_trait::async_trait;
 use js_sys::Promise;
 use send_wrapper::SendWrapper;
 use wallet_engine::{
-    HttpCall, HttpCallId, HttpHostError, HttpHostErrorKind, HttpResponse, JournalCompareExchange,
-    JournalCompareExchangeResult, JournalHostError, JournalHostErrorKind, JournalKey,
-    JournalRecord, ProtectedSecretHostError, ProtectedSecretHostErrorKind, ProtectedSecretRead,
-    ProtectedSecretRef, ProtectedSecretStore,
+    HttpHostError, HttpHostErrorKind, HttpRequest, HttpRequestId, HttpResponse,
+    JournalCompareExchange, JournalCompareExchangeResult, JournalHostError, JournalHostErrorKind,
+    JournalKey, JournalRecord, ProtectedSecretHostError, ProtectedSecretHostErrorKind,
+    ProtectedSecretRead, ProtectedSecretRef, ProtectedSecretStore,
 };
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
@@ -62,8 +62,8 @@ impl Drop for HttpHostAdapter {
 
 #[async_trait]
 impl wallet_engine::WalletHttpHost for HttpHostAdapter {
-    async fn execute_http(&self, call: HttpCall) -> Result<HttpResponse, HttpHostError> {
-        let argument = to_value(&call).map_err(|value| http_rejection(&value))?;
+    async fn execute_http(&self, request: HttpRequest) -> Result<HttpResponse, HttpHostError> {
+        let argument = to_value(&request).map_err(|value| http_rejection(&value))?;
         let promise = invoke_promise(&HTTP_HOSTS, self.id, "executeHttp", &[argument])
             .map_err(|value| http_rejection(&value))?;
         let value = SendJsFuture::new(promise)
@@ -72,8 +72,8 @@ impl wallet_engine::WalletHttpHost for HttpHostAdapter {
         from_value(value).map_err(|value| http_rejection(&value))
     }
 
-    async fn cancel_http(&self, call_id: HttpCallId) {
-        let Ok(argument) = to_value(&call_id) else {
+    async fn cancel_http(&self, request_id: HttpRequestId) {
+        let Ok(argument) = to_value(&request_id) else {
             return;
         };
         let Ok(promise) = invoke_promise(&HTTP_HOSTS, self.id, "cancelHttp", &[argument]) else {

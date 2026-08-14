@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 
 use crate::{
-    HttpCall, HttpCallId, HttpHostError, HttpResponse, JournalCompareExchange,
+    HttpHostError, HttpRequest, HttpRequestId, HttpResponse, JournalCompareExchange,
     JournalCompareExchangeResult, JournalHostError, JournalKey, JournalRecord,
     ProtectedSecretHostError, ProtectedSecretRead, ProtectedSecretRef, ProtectedSecretStore,
 };
@@ -15,17 +15,17 @@ use crate::{
 #[uniffi::export(foreign)]
 #[async_trait]
 pub trait WalletHttpHost: Send + Sync {
-    /// Executes one complete HTTP call and returns a bounded response.
+    /// Executes one complete HTTP request and returns a bounded response.
     ///
     /// If `credential` is present, resolve it locally. Add it only when the
     /// request origin exactly equals `credential_origin`.
-    async fn execute_http(&self, call: HttpCall) -> Result<HttpResponse, HttpHostError>;
+    async fn execute_http(&self, request: HttpRequest) -> Result<HttpResponse, HttpHostError>;
 
-    /// Requests cancellation of the call with `call_id`.
+    /// Requests cancellation of the request with `request_id`.
     ///
     /// This callback must be idempotent. It can run before `execute_http`
-    /// registers the call, so the host must remember an early cancellation.
-    async fn cancel_http(&self, call_id: HttpCallId);
+    /// registers the request, so the host must remember an early cancellation.
+    async fn cancel_http(&self, request_id: HttpRequestId);
 }
 
 /// Supplies protected storage and durable journal storage.

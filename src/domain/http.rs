@@ -1,4 +1,4 @@
-//! Bounded HTTP calls and host transport errors.
+//! Bounded HTTP requests and host transport errors.
 
 use super::CredentialRef;
 
@@ -19,7 +19,7 @@ pub enum HttpMethod {
     Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, uniffi::Record,
 )]
 #[serde(rename_all = "camelCase")]
-pub struct HttpCallId {
+pub struct HttpRequestId {
     /// An opaque numeric value allocated by this client instance.
     pub value: u64,
 }
@@ -34,15 +34,15 @@ pub struct HttpHeader {
     pub value: String,
 }
 
-/// A complete, bounded HTTP invocation for the embedding language.
+/// A complete, bounded HTTP request for the embedding language.
 ///
 /// The host resolves `credential` locally and must inject it only when the
 /// request origin exactly equals `credential_origin`. Redirects are forbidden.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
-pub struct HttpCall {
+pub struct HttpRequest {
     /// The identifier used for host cancellation.
-    pub id: HttpCallId,
+    pub id: HttpRequestId,
     /// The request method.
     pub method: HttpMethod,
     /// The complete HTTPS request URL.
@@ -71,7 +71,7 @@ pub struct HttpResponse {
     pub headers: Vec<HttpHeader>,
     /// The response body that fits within the requested limit.
     pub body: Vec<u8>,
-    /// The final response URL reported by the host. It must equal the call URL
+    /// The final response URL reported by the host. It must equal the request URL
     /// because the engine does not permit redirects.
     pub final_url: String,
 }
@@ -92,9 +92,9 @@ pub enum HttpHostErrorKind {
     Tls,
     /// The request violated a host security policy.
     PolicyViolation,
-    /// The response exceeded a limit in [`HttpCall`].
+    /// The response exceeded a limit in [`HttpRequest`].
     ResponseTooLarge,
-    /// The host cancelled the call.
+    /// The host cancelled the request.
     Cancelled,
     /// The failure does not match another kind.
     Other,

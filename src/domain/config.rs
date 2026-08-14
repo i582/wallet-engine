@@ -26,7 +26,7 @@ pub struct CredentialRef {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderConfig {
-    /// The HTTPS base URL for Toncenter API v2 calls.
+    /// The HTTPS base URL for Toncenter API v2 requests.
     pub toncenter_base_url: String,
     /// The optional reference that the HTTP host resolves before a request.
     pub toncenter_credential: Option<CredentialRef>,
@@ -67,7 +67,7 @@ pub struct WalletClientConfig {
     pub record_id: String,
     /// The friendly TON address that the client reads and sends from.
     pub address: String,
-    /// The network for the address and all provider calls.
+    /// The network for the address and all provider requests.
     pub network: Network,
     /// Lifetime of a newly signed external message, in seconds.
     ///

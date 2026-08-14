@@ -2,7 +2,9 @@
 
 use crate::diagnostic::bounded_diagnostic;
 use crate::send::SendWorkflow;
-use crate::{HttpCall, HttpCallId, HttpHostError, HttpResponse, SendPhase, WalletClientError};
+use crate::{
+    HttpHostError, HttpRequest, HttpRequestId, HttpResponse, SendPhase, WalletClientError,
+};
 
 use super::WalletClient;
 use super::state::OperationFamily;
@@ -127,17 +129,17 @@ impl WalletClient {
         Ok(())
     }
 
-    fn start_send_http_call(
+    fn start_send_http_request(
         &self,
         generation: u64,
-        call_id: HttpCallId,
+        request_id: HttpRequestId,
     ) -> Result<(), WalletClientError> {
         let mut state = self.lock()?;
         if state.shutdown {
             return Err(WalletClientError::Shutdown);
         }
 
-        let Some((active_generation, calls)) = state.active_send.as_mut() else {
+        let Some((active_generation, request_ids)) = state.active_send.as_mut() else {
             return Err(WalletClientError::StateUnavailable);
         };
 
@@ -145,37 +147,37 @@ impl WalletClient {
             return Err(WalletClientError::StateUnavailable);
         }
 
-        calls.push(call_id);
+        request_ids.push(request_id);
 
         Ok(())
     }
 
-    pub(super) async fn execute_tracked_send_call(
+    pub(super) async fn execute_tracked_send_request(
         &self,
         generation: u64,
-        call: &HttpCall,
+        request: &HttpRequest,
     ) -> Result<Result<HttpResponse, HttpHostError>, WalletClientError> {
-        self.start_send_http_call(generation, call.id)?;
+        self.start_send_http_request(generation, request.id)?;
 
         // Do not hold the state lock while the foreign host performs I/O.
-        let result = self.http_host.execute_http(call.clone()).await;
+        let result = self.http_host.execute_http(request.clone()).await;
 
-        self.finish_send_http_call(generation, call.id)?;
+        self.finish_send_http_request(generation, request.id)?;
 
         Ok(result)
     }
 
-    fn finish_send_http_call(
+    fn finish_send_http_request(
         &self,
         generation: u64,
-        call_id: HttpCallId,
+        request_id: HttpRequestId,
     ) -> Result<(), WalletClientError> {
         let mut state = self.lock()?;
         if state.shutdown {
             return Err(WalletClientError::Shutdown);
         }
 
-        let Some((active_generation, calls)) = state.active_send.as_mut() else {
+        let Some((active_generation, request_ids)) = state.active_send.as_mut() else {
             return Err(WalletClientError::StateUnavailable);
         };
 
@@ -183,7 +185,7 @@ impl WalletClient {
             return Err(WalletClientError::StateUnavailable);
         }
 
-        calls.retain(|active| *active != call_id);
+        request_ids.retain(|active| *active != request_id);
 
         Ok(())
     }

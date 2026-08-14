@@ -102,13 +102,13 @@ impl WalletClient {
         Ok(state.snapshot.clone())
     }
 
-    /// Stops new work, cancels active host calls, and releases snapshot waiters.
+    /// Stops new work, cancels active host requests, and releases snapshot waiters.
     ///
     /// The operation is idempotent. It returns `SendCancellationTooLate` while
     /// a send is past its durable commit boundary. Call it again after that
     /// send reaches a terminal phase.
     pub async fn shutdown(&self) -> Result<(), WalletClientError> {
-        let (calls, waiters) = {
+        let (request_ids, waiters) = {
             let mut state = self.lock()?;
             if state.shutdown {
                 return Ok(());
@@ -120,26 +120,26 @@ impl WalletClient {
 
             state.shutdown = true;
 
-            let mut calls = state
+            let mut request_ids = state
                 .active_refresh
                 .take()
                 .map(|active| active.1)
                 .unwrap_or_default();
-            if let Some((_, call)) = state.active_pagination.take() {
-                calls.push(call);
+            if let Some((_, request_id)) = state.active_pagination.take() {
+                request_ids.push(request_id);
             }
 
-            if let Some((_, send_calls)) = state.active_send.take() {
-                calls.extend(send_calls);
+            if let Some((_, send_request_ids)) = state.active_send.take() {
+                request_ids.extend(send_request_ids);
             }
 
             state.send_commit_started = false;
 
-            (calls, std::mem::take(&mut state.waiters))
+            (request_ids, std::mem::take(&mut state.waiters))
         };
 
-        for call in calls {
-            self.http_host.cancel_http(call).await;
+        for request_id in request_ids {
+            self.http_host.cancel_http(request_id).await;
         }
 
         drop(waiters);

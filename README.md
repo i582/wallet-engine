@@ -75,7 +75,7 @@ asynchronous host interfaces.
 
 | Interface | Your application provides |
 | --- | --- |
-| `WalletHttpHost` | Bounded HTTP requests and cancellation by call ID |
+| `WalletHttpHost` | Bounded HTTP requests and cancellation by request ID |
 | `WalletPlatformHost` | Protected secrets and durable journal storage |
 
 The host callbacks let the same Rust engine run on Apple, Android, and browser
@@ -165,8 +165,8 @@ refresh when its product behavior requires new wallet data.
 - Require user authentication according to your product policy.
 - Do not log recovery phrases, secret values, or signed BoCs.
 - Bind provider credentials to an exact HTTPS origin.
-- Enforce the request and response limits from each `HttpCall`.
-- Honor `cancelHttp` for calls that have not completed.
+- Enforce the request and response limits from each `HttpRequest`.
+- Honor `cancelHttp` for requests that have not completed.
 - Store wallet descriptors separately from protected recovery phrases.
 
 The engine clears its temporary recovery-phrase buffer. The host language and

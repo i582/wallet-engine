@@ -6,7 +6,7 @@ import {
   WalletClient,
   WalletLifecycle,
   initializeWalletEngine,
-  type HttpCall,
+  type HttpRequest,
   type WalletClientConfig,
 } from "../src"
 import {MemoryJournal} from "./memory-journal"
@@ -42,7 +42,7 @@ describe("BrowserHttpHost", () => {
     })
 
     const response = await host.executeHttp(
-      httpCall(1, {
+      httpRequest(1, {
         credential: {value: "test-key"},
         credentialOrigin: "https://testnet.toncenter.com:443",
       }),
@@ -63,7 +63,7 @@ describe("BrowserHttpHost", () => {
     })
 
     await host.cancelHttp({value: 7})
-    await expect(host.executeHttp(httpCall(7))).rejects.toMatchObject({kind: "cancelled"})
+    await expect(host.executeHttp(httpRequest(7))).rejects.toMatchObject({kind: "cancelled"})
     expect(fetchCount).toBe(0)
   })
 
@@ -71,9 +71,9 @@ describe("BrowserHttpHost", () => {
     const host = new BrowserHttpHost({
       fetch: mockFetch(async () => new Response(new Uint8Array(32))),
     })
-    const call: HttpCall = {...httpCall(9), maxResponseBodyBytes: 8}
+    const request: HttpRequest = {...httpRequest(9), maxResponseBodyBytes: 8}
 
-    await expect(host.executeHttp(call)).rejects.toMatchObject({
+    await expect(host.executeHttp(request)).rejects.toMatchObject({
       kind: "responseTooLarge",
     })
   })
@@ -132,7 +132,7 @@ describe("high-level WASM API", () => {
   })
 })
 
-function httpCall(id: number, overrides: Partial<HttpCall> = {}): HttpCall {
+function httpRequest(id: number, overrides: Partial<HttpRequest> = {}): HttpRequest {
   return {
     id: {value: id},
     method: "get",
