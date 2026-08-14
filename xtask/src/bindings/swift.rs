@@ -14,6 +14,7 @@ pub(crate) fn generate_swift(check: bool) -> Result<()> {
     let c_output_root = output_root.join("Sources/wallet_engineFFI");
     let header_output = c_output_root.join("wallet_engineFFI.h");
     let modulemap_output = c_output_root.join("module.modulemap");
+    let package_output = output_root.join("Package.swift");
     let temporary = tempfile::Builder::new()
         .prefix("wallet-engine-swift-bindings-")
         .tempdir()
@@ -59,9 +60,39 @@ pub(crate) fn generate_swift(check: bool) -> Result<()> {
         copy_generated(&swift, &swift_output)?;
         copy_generated(&header, &header_output)?;
         copy_generated(&modulemap, &modulemap_output)?;
+        fs::create_dir_all(&output_root).context("failed to create Swift package directory")?;
+        fs::write(&package_output, SWIFT_PACKAGE_MANIFEST)
+            .context("failed to write generated Swift package manifest")?;
     }
     Ok(())
 }
+
+const SWIFT_PACKAGE_MANIFEST: &str = r#"// swift-tools-version: 6.2
+import PackageDescription
+
+let package = Package(
+    name: "WalletEngineFFI",
+    platforms: [
+        .iOS(.v18),
+        .macOS(.v15),
+    ],
+    products: [
+        .library(name: "WalletEngineFFI", targets: ["WalletEngineFFI"]),
+    ],
+    targets: [
+        .systemLibrary(
+            name: "wallet_engineFFI",
+            path: "Sources/wallet_engineFFI"
+        ),
+        .target(
+            name: "WalletEngineFFI",
+            dependencies: ["wallet_engineFFI"],
+            path: "Sources/WalletEngineFFI",
+            swiftSettings: [.defaultIsolation(nil)]
+        ),
+    ]
+)
+"#;
 
 fn validate_swift(source: &str) -> Result<()> {
     if source.contains("@preconcurrency import wallet_engineFFI\n")

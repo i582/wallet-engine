@@ -1,0 +1,193 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A10000000000000000000001 /* WalletEngineFFI in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000020 /* WalletEngineFFI */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A10000000000000000000002 /* WalletEngineApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WalletEngineApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		A10000000000000000000003 /* WalletEngineApp */ = {isa = PBXFileSystemSynchronizedRootGroup; path = WalletEngineApp; sourceTree = "<group>"; };
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A10000000000000000000004 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (A10000000000000000000001 /* WalletEngineFFI in Frameworks */,);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A10000000000000000000005 = {
+			isa = PBXGroup;
+			children = (A10000000000000000000003 /* WalletEngineApp */, A10000000000000000000006 /* Products */,);
+			sourceTree = "<group>";
+		};
+		A10000000000000000000006 /* Products */ = {
+			isa = PBXGroup;
+			children = (A10000000000000000000002 /* WalletEngineApp.app */,);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A10000000000000000000007 /* WalletEngineApp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A10000000000000000000008 /* Build configuration list for PBXNativeTarget "WalletEngineApp" */;
+			buildPhases = (A10000000000000000000009 /* Build Rust */, A1000000000000000000000A /* Sources */, A10000000000000000000004 /* Frameworks */, A1000000000000000000000B /* Resources */, A10000000000000000000021 /* Copy Local Environment */,);
+			buildRules = ();
+			dependencies = ();
+			fileSystemSynchronizedGroups = (A10000000000000000000003 /* WalletEngineApp */,);
+			name = WalletEngineApp;
+			packageProductDependencies = (A10000000000000000000020 /* WalletEngineFFI */,);
+			productName = WalletEngineApp;
+			productReference = A10000000000000000000002 /* WalletEngineApp.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A1000000000000000000000C /* Project object */ = {
+			isa = PBXProject;
+			attributes = {BuildIndependentTargetsInParallel = 1; LastSwiftUpdateCheck = 2660; LastUpgradeCheck = 2660;};
+			buildConfigurationList = A1000000000000000000000D /* Build configuration list for PBXProject "WalletEngineApp" */;
+			compatibilityVersion = "Xcode 16.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (en, Base,);
+			mainGroup = A10000000000000000000005;
+			packageReferences = (A1000000000000000000001F /* XCLocalSwiftPackageReference "WalletEngineFFI" */,);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = A10000000000000000000006 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (A10000000000000000000007 /* WalletEngineApp */,);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A1000000000000000000000B /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0;};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		A10000000000000000000009 /* Build Rust */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = ();
+			inputPaths = ("$(SRCROOT)/../../Cargo.toml", "$(SRCROOT)/../../Cargo.lock", "$(SRCROOT)/build-rust.sh",);
+			name = "Build Rust";
+			outputPaths = ("$(DERIVED_FILE_DIR)/wallet-engine-universal/libwallet_engine.a",);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${SRCROOT}/build-rust.sh\"\n";
+		};
+		A10000000000000000000021 /* Copy Local Environment */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = ();
+			inputPaths = ("$(SRCROOT)/copy-local-environment.sh",);
+			name = "Copy Local Environment";
+			outputPaths = ("$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/toncenter-testnet-api-key",);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${SRCROOT}/copy-local-environment.sh\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A1000000000000000000000A /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0;};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A1000000000000000000000E /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; SWIFT_VERSION = 6.0;}; name = Debug;};
+		A1000000000000000000000F /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; SWIFT_VERSION = 6.0;}; name = Release;};
+		A10000000000000000000010 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = WalletEngineApp/WalletEngineApp.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LIBRARY_SEARCH_PATHS = ("$(inherited)", "$(DERIVED_FILE_DIR)/wallet-engine-universal",);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = ("$(inherited)", "-lwallet_engine",);
+				PRODUCT_BUNDLE_IDENTIFIER = org.ton.wallet-engine.example;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A10000000000000000000011 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = WalletEngineApp/WalletEngineApp.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LIBRARY_SEARCH_PATHS = ("$(inherited)", "$(DERIVED_FILE_DIR)/wallet-engine-universal",);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = ("$(inherited)", "-lwallet_engine",);
+				PRODUCT_BUNDLE_IDENTIFIER = org.ton.wallet-engine.example;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A10000000000000000000008 /* Build configuration list for PBXNativeTarget "WalletEngineApp" */ = {isa = XCConfigurationList; buildConfigurations = (A10000000000000000000010 /* Debug */, A10000000000000000000011 /* Release */,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;};
+		A1000000000000000000000D /* Build configuration list for PBXProject "WalletEngineApp" */ = {isa = XCConfigurationList; buildConfigurations = (A1000000000000000000000E /* Debug */, A1000000000000000000000F /* Release */,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		A1000000000000000000001F /* XCLocalSwiftPackageReference "WalletEngineFFI" */ = {isa = XCLocalSwiftPackageReference; relativePath = ../../bindings/swift;};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A10000000000000000000020 /* WalletEngineFFI */ = {isa = XCSwiftPackageProductDependency; package = A1000000000000000000001F /* XCLocalSwiftPackageReference "WalletEngineFFI" */; productName = WalletEngineFFI;};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = A1000000000000000000000C /* Project object */;
+}

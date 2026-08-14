@@ -29,6 +29,10 @@ just bindings-swift
 Then read [SWIFT.md](SWIFT.md) for the generated paths and Apple integration
 requirements.
 
+For a complete SwiftUI integration, see the
+[Swift wallet example](examples/swift/README.md). It runs on macOS and iOS and
+implements the HTTP, Keychain, and journal callbacks required by the engine.
+
 ### Kotlin and Android
 
 Generate the Kotlin source:

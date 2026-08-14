@@ -148,6 +148,15 @@ example-tui-clippy:
 example-tui-test:
     cargo test --locked --manifest-path examples/tui/Cargo.toml
 
+example-swift-build-macos: bindings-swift
+    xcodebuild -project examples/swift/WalletEngineApp.xcodeproj -scheme WalletEngineApp -configuration Debug -destination 'platform=macOS,arch=arm64' -derivedDataPath target/swift-example CODE_SIGNING_ALLOWED=NO build
+
+example-swift-build-ios: bindings-swift
+    xcodebuild -project examples/swift/WalletEngineApp.xcodeproj -scheme WalletEngineApp -configuration Debug -destination 'generic/platform=iOS Simulator' -derivedDataPath target/swift-example-ios ARCHS=arm64 ONLY_ACTIVE_ARCH=YES build
+
+example-swift-open: bindings-swift
+    open examples/swift/WalletEngineApp.xcodeproj
+
 build-android abi="all":
     cargo xtask android --abi {{abi}}
 
