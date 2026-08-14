@@ -6,7 +6,6 @@ export interface CredentialRef {
 
 export interface ProviderConfig {
   readonly toncenterBaseUrl: string
-  readonly tonapiBaseUrl: string
   readonly toncenterCredential?: CredentialRef
   readonly toncenterCredentialOrigin?: string
 }
@@ -117,8 +116,6 @@ export interface WalletSnapshot {
   readonly activityPaginationResource: ResourceState
   readonly activityCursor?: ActivityCursor
   readonly activityHasMore: boolean
-  readonly usdPerGram?: number
-  readonly rateResource: ResourceState
   readonly send: SendSnapshot
 }
 

@@ -108,7 +108,7 @@ describe("high-level WASM API", () => {
 
     const update = await client.refresh()
 
-    expect(fetchCount).toBe(3)
+    expect(fetchCount).toBe(2)
     expect(update.outcome).toBe("failed")
     expect(update.snapshot.accountResource.phase).toBe("failed")
     expect(update.snapshot.accountResource.error?.hostKind).toBe("connectionLost")
@@ -153,7 +153,6 @@ function walletConfig(walletId: string): WalletClientConfig {
     network: "testnet",
     providers: {
       toncenterBaseUrl: "https://testnet.toncenter.com/api/v2",
-      tonapiBaseUrl: "https://tonapi.io/v2",
     },
   }
 }

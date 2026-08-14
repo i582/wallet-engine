@@ -17,7 +17,6 @@ pub struct CredentialRef {
 #[serde(rename_all = "camelCase")]
 pub struct ProviderConfig {
     pub toncenter_base_url: String,
-    pub tonapi_base_url: String,
     pub toncenter_credential: Option<CredentialRef>,
     /// Normalized HTTPS origin allowed to receive `toncenter_credential`.
     /// It includes the effective port, for example
@@ -38,7 +37,6 @@ impl ProviderConfig {
         });
         Self {
             toncenter_base_url: toncenter_base_url.to_owned(),
-            tonapi_base_url: "https://tonapi.io/v2".to_owned(),
             toncenter_credential: credential,
             toncenter_credential_origin,
         }
@@ -275,7 +273,7 @@ pub struct DomainError {
     pub host_kind: Option<HttpHostErrorKind>,
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct WalletSnapshot {
     pub revision: u64,
@@ -289,8 +287,6 @@ pub struct WalletSnapshot {
     pub activity_pagination_resource: ResourceState,
     pub activity_cursor: Option<ActivityCursor>,
     pub activity_has_more: bool,
-    pub usd_per_gram: Option<f64>,
-    pub rate_resource: ResourceState,
     pub send: SendSnapshot,
 }
 
@@ -308,8 +304,6 @@ impl WalletSnapshot {
             activity_pagination_resource: ResourceState::idle(),
             activity_cursor: None,
             activity_has_more: false,
-            usd_per_gram: None,
-            rate_resource: ResourceState::idle(),
             send: SendSnapshot {
                 operation_id: None,
                 phase: SendPhase::Idle,
@@ -330,7 +324,7 @@ pub enum WalletOperationOutcome {
     Skipped,
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct WalletUpdate {
     pub outcome: WalletOperationOutcome,

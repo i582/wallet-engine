@@ -3,13 +3,13 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use futures::channel::oneshot;
-use futures::future::join3;
+use futures::future::join;
 use serde_json::Value;
 use url::Url;
 
 use crate::provider::{
-    ActivityPage, activity_item_order, decimal_cmp, parse_account, parse_activity, parse_rate,
-    response_error, sanitize_diagnostic,
+    ActivityPage, activity_item_order, decimal_cmp, parse_account, parse_activity, response_error,
+    sanitize_diagnostic,
 };
 use crate::send::{FreshSendAccount, SendDirective, SendWorkflow};
 use crate::signer::{derive_source, prepare_transfer, same_address};
@@ -206,10 +206,7 @@ impl WalletClient {
             let activity_id = HttpCallId {
                 value: state.allocate_id()?,
             };
-            let rate_id = HttpCallId {
-                value: state.allocate_id()?,
-            };
-            let calls = refresh_calls(&config, account_id, activity_id, rate_id)?;
+            let calls = refresh_calls(&config, account_id, activity_id)?;
             state.refresh_generation = state
                 .refresh_generation
                 .checked_add(1)
@@ -217,7 +214,7 @@ impl WalletClient {
             let generation = state.refresh_generation;
             let mut previous_calls = state
                 .active_refresh
-                .replace((generation, vec![account_id, activity_id, rate_id]))
+                .replace((generation, vec![account_id, activity_id]))
                 .map(|active| active.1)
                 .unwrap_or_default();
             if let Some((_, page_call)) = state.active_pagination.take() {
@@ -226,7 +223,6 @@ impl WalletClient {
             state.snapshot.account_resource = ResourceState::loading();
             state.snapshot.activity_resource = ResourceState::loading();
             state.snapshot.activity_pagination_resource = ResourceState::idle();
-            state.snapshot.rate_resource = ResourceState::loading();
             state.next_revision()?;
             (generation, calls, previous_calls)
         };
@@ -234,10 +230,9 @@ impl WalletClient {
             self.http_host.cancel_http(call_id).await;
         }
 
-        let (account, activity, rate) = join3(
+        let (account, activity) = join(
             self.http_host.execute_http(calls.0.clone()),
             self.http_host.execute_http(calls.1.clone()),
-            self.http_host.execute_http(calls.2.clone()),
         )
         .await;
 
@@ -246,9 +241,6 @@ impl WalletClient {
         let activity =
             evaluate_for_call(&calls.1, activity, |body| parse_activity(body, PAGE_SIZE));
         self.publish_refresh_component(generation, RefreshValue::Activity(activity))?;
-        let rate = evaluate_for_call(&calls.2, rate, parse_rate);
-        self.publish_refresh_component(generation, RefreshValue::Rate(rate))?;
-
         let mut state = self.lock()?;
         if !state.is_current(OperationFamily::Refresh, generation) {
             return Ok(update(WalletOperationOutcome::Superseded, 0, &state));
@@ -257,14 +249,13 @@ impl WalletClient {
         let failed = [
             &state.snapshot.account_resource,
             &state.snapshot.activity_resource,
-            &state.snapshot.rate_resource,
         ]
         .into_iter()
         .filter(|resource| resource.phase == ResourcePhase::Failed)
         .count();
         let outcome = match failed {
             0 => WalletOperationOutcome::Completed,
-            3 => WalletOperationOutcome::Failed,
+            2 => WalletOperationOutcome::Failed,
             _ => WalletOperationOutcome::PartiallyCompleted,
         };
         Ok(update(outcome, 0, &state))
@@ -281,7 +272,6 @@ impl WalletClient {
             if !calls.is_empty() {
                 mark_loading_cancelled(&mut state.snapshot.account_resource);
                 mark_loading_cancelled(&mut state.snapshot.activity_resource);
-                mark_loading_cancelled(&mut state.snapshot.rate_resource);
                 state.next_revision()?;
             }
             calls
@@ -744,13 +734,6 @@ impl WalletClient {
                 }
                 Err(error) => state.snapshot.activity_resource = ResourceState::failed(error),
             },
-            RefreshValue::Rate(result) => match result {
-                Ok(rate) => {
-                    state.snapshot.usd_per_gram = Some(rate);
-                    state.snapshot.rate_resource = ResourceState::ready();
-                }
-                Err(error) => state.snapshot.rate_resource = ResourceState::failed(error),
-            },
         }
         state.next_revision()?;
         Ok(())
@@ -860,7 +843,6 @@ impl WalletClient {
 enum RefreshValue {
     Account(Result<AccountSnapshot, DomainError>),
     Activity(Result<ActivityPage, DomainError>),
-    Rate(Result<f64, DomainError>),
 }
 
 const fn ensure_running(state: &State) -> Result<(), WalletClientError> {
@@ -1016,8 +998,7 @@ fn refresh_calls(
     config: &WalletClientConfig,
     account_id: HttpCallId,
     activity_id: HttpCallId,
-    rate_id: HttpCallId,
-) -> Result<(HttpCall, HttpCall, HttpCall), WalletClientError> {
+) -> Result<(HttpCall, HttpCall), WalletClientError> {
     Ok((
         toncenter_call(
             config,
@@ -1030,12 +1011,6 @@ fn refresh_calls(
             activity_id,
             "getTransactions",
             &[("address", config.address.as_str()), ("limit", "10")],
-        )?,
-        public_call(
-            rate_id,
-            &config.providers.tonapi_base_url,
-            "rates",
-            &[("tokens", "ton"), ("currencies", "usd")],
         )?,
     ))
 }
@@ -1245,7 +1220,6 @@ fn validate_config(config: &WalletClientConfig) -> Result<(), WalletClientError>
         return Err(WalletClientError::InvalidConfig);
     }
     validate_https_url(&config.providers.toncenter_base_url)?;
-    validate_https_url(&config.providers.tonapi_base_url)?;
     match (
         &config.providers.toncenter_credential,
         &config.providers.toncenter_credential_origin,

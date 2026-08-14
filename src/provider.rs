@@ -165,20 +165,6 @@ pub(crate) fn parse_activity(body: &[u8], page_size: u32) -> Result<ActivityPage
     })
 }
 
-pub(crate) fn parse_rate(body: &[u8]) -> Result<f64, DomainError> {
-    let value: Value = decode(body)?;
-    let price = ["TON", "GRAM"]
-        .into_iter()
-        .find_map(|token| {
-            value
-                .pointer(&format!("/rates/{token}/prices/USD"))
-                .and_then(Value::as_f64)
-        })
-        .filter(|price| price.is_finite() && *price > 0.0)
-        .ok_or_else(|| invalid_response("missing GRAM/USD rate"))?;
-    Ok(price)
-}
-
 pub(crate) fn activity_item_order(left: &ActivityItem, right: &ActivityItem) -> Ordering {
     decimal_cmp(&right.logical_time, &left.logical_time)
         .then_with(|| right.timestamp.cmp(&left.timestamp))

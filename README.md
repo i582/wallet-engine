@@ -9,7 +9,6 @@ Use Wallet Engine to:
 - protect recovery phrases with platform storage.
 - read balances and transaction history.
 - load additional history pages.
-- get the GRAM/USD price.
 - sign and submit transfers.
 - observe immutable wallet snapshots.
 - cancel active wallet operations.
@@ -100,7 +99,7 @@ restart.
 
 - the account balance and status.
 - recent activity and its pagination cursor.
-- independent states for account, activity, pagination, and price resources.
+- independent states for account, activity, and pagination resources.
 - the latest send state.
 - a monotonic revision number.
 

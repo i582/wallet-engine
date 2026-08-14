@@ -113,7 +113,6 @@ const client = await WalletClient.create(
     network: descriptor.network,
     providers: {
       toncenterBaseUrl: "https://testnet.toncenter.com/api/v2",
-      tonapiBaseUrl: "https://tonapi.io/v2",
     },
   },
   {platformHost},
