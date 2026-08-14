@@ -1,5 +1,6 @@
 //! C representations of Wallet Engine domain types.
 
+#[allow(unsafe_code)]
 mod secret;
 #[allow(unsafe_code)]
 mod wallet;
@@ -51,9 +52,9 @@ pub use secret::{
     WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_OTHER,
     WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_POLICY_VIOLATION,
     WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_UNAVAILABLE,
-    WalletEngineProtectedSecretHostErrorKind, WalletEngineProtectedSecretRefView,
-    WalletEngineProtectedSecretStoreView, protected_secret_host_error_kind_from_abi,
-    protected_secret_host_error_kind_to_abi,
+    WalletEngineProtectedSecretHostErrorKind, WalletEngineProtectedSecretHostErrorView,
+    WalletEngineProtectedSecretRefView, WalletEngineProtectedSecretStoreView,
+    protected_secret_host_error_kind_from_abi, protected_secret_host_error_kind_to_abi,
 };
 pub use wallet::{
     WalletEngineCreateWalletRequest, WalletEngineCreatedWalletView, WalletEngineRecoveryPhraseView,

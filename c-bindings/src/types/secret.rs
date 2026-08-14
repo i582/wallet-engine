@@ -1,6 +1,9 @@
 //! C representations of protected-secret types.
 
-use wallet_engine::{ProtectedSecretHostErrorKind, ProtectedSecretRef, ProtectedSecretStore};
+use wallet_engine::{
+    ProtectedSecretHostError, ProtectedSecretHostErrorKind, ProtectedSecretRef,
+    ProtectedSecretStore,
+};
 
 use crate::abi::{WalletEngineAbiStatus, WalletEngineBytesView, WalletEngineStringView};
 
@@ -84,6 +87,36 @@ pub const fn protected_secret_host_error_kind_to_abi(
             WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_POLICY_VIOLATION
         }
         ProtectedSecretHostErrorKind::Other => WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_OTHER,
+    }
+}
+
+/// A borrowed protected-storage error supplied by the C host.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct WalletEngineProtectedSecretHostErrorView {
+    /// Stable failure classification.
+    pub kind: WalletEngineProtectedSecretHostErrorKind,
+    /// Developer-facing diagnostic without secret values.
+    pub diagnostic: WalletEngineStringView,
+}
+
+impl WalletEngineProtectedSecretHostErrorView {
+    /// Validates and copies this C error into the core domain type.
+    ///
+    /// # Errors
+    ///
+    /// Returns an ABI status when the kind or diagnostic view is malformed.
+    ///
+    /// # Safety
+    ///
+    /// When `diagnostic.data` is non-null and its length is accepted, it must
+    /// remain readable for the duration of this call.
+    pub unsafe fn try_to_core(self) -> Result<ProtectedSecretHostError, WalletEngineAbiStatus> {
+        let kind = protected_secret_host_error_kind_from_abi(self.kind)?;
+        // SAFETY: The caller upholds the readable-range requirement documented
+        // by this method. The string-view helper validates null and length.
+        let diagnostic = unsafe { self.diagnostic.try_to_string()? };
+        Ok(ProtectedSecretHostError::Failed { kind, diagnostic })
     }
 }
 

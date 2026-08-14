@@ -8,11 +8,19 @@
 // that exception local to the ABI modules.
 #[allow(unsafe_code)]
 mod abi;
+#[allow(unsafe_code)]
+mod host;
 mod types;
 
 pub use abi::{
     ABI_VERSION, WalletEngineAbiStatus, WalletEngineBytesView, WalletEngineStringView,
     wallet_engine_abi_version,
+};
+pub use host::{
+    WALLET_ENGINE_PLATFORM_HOST_CALLBACKS_SIZE, WalletEngineCompletionId,
+    WalletEngineContextReleaseFn, WalletEngineContextRetainFn, WalletEnginePlatformHostAdapter,
+    WalletEnginePlatformHostCallbacks, WalletEngineStoreProtectedSecretFn,
+    wallet_engine_store_protected_secret_complete,
 };
 pub use types::{
     WALLET_ENGINE_NETWORK_MAINNET, WALLET_ENGINE_NETWORK_TESTNET,
@@ -23,8 +31,9 @@ pub use types::{
     WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_POLICY_VIOLATION,
     WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_UNAVAILABLE, WalletEngineCreateWalletRequest,
     WalletEngineCreatedWalletView, WalletEngineNetwork, WalletEngineProtectedSecretHostErrorKind,
-    WalletEngineProtectedSecretRefView, WalletEngineProtectedSecretStoreView,
-    WalletEngineRecoveryPhraseView, WalletEngineStringViewSlice, WalletEngineWalletDescriptorView,
+    WalletEngineProtectedSecretHostErrorView, WalletEngineProtectedSecretRefView,
+    WalletEngineProtectedSecretStoreView, WalletEngineRecoveryPhraseView,
+    WalletEngineStringViewSlice, WalletEngineWalletDescriptorView,
     WalletEngineWalletLifecycleErrorCode, WalletEngineWalletLifecycleErrorView, network_from_abi,
     network_to_abi, protected_secret_host_error_kind_from_abi,
     protected_secret_host_error_kind_to_abi, with_created_wallet_view,

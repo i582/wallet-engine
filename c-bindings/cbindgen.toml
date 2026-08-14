@@ -40,6 +40,7 @@ include = [
     "WalletEngineRecoveryPhraseView",
     "WalletEngineCreatedWalletView",
     "WalletEngineProtectedSecretHostErrorKind",
+    "WalletEngineProtectedSecretHostErrorView",
     "WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_NOT_FOUND",
     "WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_AUTHENTICATION_FAILED",
     "WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_CANCELLED",
@@ -48,6 +49,12 @@ include = [
     "WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_OTHER",
     "WalletEngineWalletLifecycleErrorCode",
     "WalletEngineWalletLifecycleErrorView",
+    "WalletEngineCompletionId",
+    "WalletEngineContextRetainFn",
+    "WalletEngineContextReleaseFn",
+    "WalletEngineStoreProtectedSecretFn",
+    "WalletEnginePlatformHostCallbacks",
+    "wallet_engine_store_protected_secret_complete",
     "wallet_engine_abi_version",
 ]
 

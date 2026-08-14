@@ -162,11 +162,57 @@ static int test_create_wallet_types(void) {
     return 1;
 }
 
+static void retain_context(void *context) {
+    size_t *retain_count = context;
+    *retain_count += 1;
+}
+
+static void release_context(void *context) {
+    size_t *release_count = context;
+    *release_count += 1;
+}
+
+static void store_protected_secret(
+    void *context,
+    WalletEngineCompletionId completion_id,
+    const WalletEngineProtectedSecretStoreView *request
+) {
+    (void)context;
+    (void)completion_id;
+    (void)request;
+}
+
+static int test_platform_host_contract(void) {
+    size_t context = 0;
+    const WalletEnginePlatformHostCallbacks callbacks = {
+        .struct_size = sizeof(WalletEnginePlatformHostCallbacks),
+        .context = &context,
+        .retain = retain_context,
+        .release = release_context,
+        .store_protected_secret = store_protected_secret,
+    };
+
+    CHECK(callbacks.struct_size == sizeof(callbacks));
+    CHECK(callbacks.context == &context);
+    CHECK(callbacks.retain != NULL);
+    CHECK(callbacks.release != NULL);
+    CHECK(callbacks.store_protected_secret != NULL);
+    CHECK(
+        wallet_engine_store_protected_secret_complete(0, NULL) ==
+        WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT
+    );
+    CHECK(
+        wallet_engine_store_protected_secret_complete(UINT64_MAX, NULL) ==
+        WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT
+    );
+    return 1;
+}
+
 int main(void) {
     if (!test_abi_version() || !test_status_values() || !test_network_values() ||
         !test_protected_secret_host_error_values() ||
         !test_wallet_lifecycle_error_values() || !test_borrowed_views() ||
-        !test_create_wallet_types()) {
+        !test_create_wallet_types() || !test_platform_host_contract()) {
         return 1;
     }
 
