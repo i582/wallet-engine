@@ -24,8 +24,17 @@ pub(crate) const SEND_SLOT: &str = "outgoing-transfer";
 /// state machine.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FreshSendAccount {
+    /// The account state from the same fresh provider response used for this send.
+    /// Frozen and unknown states stop the operation before secret authorization.
     pub status: AccountStatus,
+
+    /// The current wallet contract sequence number.
+    /// A new send after a submitted operation requires this value to increase.
+    /// Nonexistent and uninitialized accounts can send only with a zero value.
     pub seqno: u32,
+
+    /// The provider synchronization time as a Unix timestamp.
+    /// Transfer expiration uses this value instead of the device clock.
     pub observed_at: u64,
 }
 
@@ -39,16 +48,41 @@ impl FreshSendAccount {
 /// the protected mnemonic. Secret bytes must not be retained in this value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PreparedTransfer {
+    /// The caller identity for this send attempt.
+    /// It links the prepared message to the immutable [`SendRequest`].
     pub operation_id: String,
+
+    /// The application record that owns the source wallet and journal slot.
+    /// This is not the TON V5 `wallet_id` contract parameter.
     pub record_id: String,
+
+    /// The configured source address after the mnemonic-derived wallet matches it.
     pub source: String,
+
+    /// The destination string from the request.
+    /// Transfer construction parses and validates it before this value exists.
     pub destination: String,
+
+    /// The exact transfer value as a canonical base-10 nanogram string.
     pub amount_nanograms: String,
+
+    /// The fresh wallet sequence number signed into the external message.
     pub seqno: u32,
+
+    /// Reports whether the external message contains the wallet `StateInit`.
+    /// Only an allowed nonactive account with sequence number zero uses it.
     pub needs_state_init: bool,
+
+    /// The unsigned Unix expiration time signed into the wallet message.
+    /// The engine derives it from provider time and the configured validity interval.
     pub valid_until: u32,
+
+    /// The exact signed external-message BOC submitted to Toncenter.
+    /// The journal stores this value before submission and preserves it after an ambiguous transport result.
     pub signed_boc: Vec<u8>,
+
     /// The normalized external-message hash in standard padded Base64.
+    /// Applications can use it to locate the submitted message without storing the recovery phrase.
     pub message_hash: String,
 }
 
@@ -68,17 +102,33 @@ impl PreparedTransfer {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SendStage {
+    /// The reducer validates the immutable request before it reads persistent state.
     Validating,
+    /// The reducer waits for the shared wallet send slot from the durable journal.
     LoadingJournal,
+    /// The engine fetches fresh status, synchronization time, and sequence number.
     FetchingFreshAccount,
+    /// The platform requests user authorization and reads the protected mnemonic.
     Authorizing,
+    /// Rust derives the source wallet and creates the signed external message.
     Preparing,
+    /// The platform commits the exact signed BOC before any network submission.
+    /// Cancellation becomes too late immediately before this stage starts.
     PersistingPrepared,
+    /// The durable commit succeeded, but the submit HTTP request has not started.
+    /// Cancellation remains too late because the BOC now survives a process failure.
     ReadyToSubmit,
+    /// Toncenter can have received the submitted BOC.
+    /// Cancellation is too late in this stage.
     Submitting,
+    /// The submit result is ambiguous.
+    /// This terminal stage blocks another signature until an external process resolves it.
     SubmissionUnknown,
+    /// Toncenter returned an explicit success and the journal stores the terminal result.
     Submitted,
+    /// A definite error stopped the operation or Toncenter explicitly rejected the BOC.
     Failed,
+    /// Cancellation completed before the durable send boundary.
     Cancelled,
 }
 
@@ -174,15 +224,41 @@ struct DurableSendRecord {
 /// calls. It invokes no callback while the reducer is borrowed.
 #[derive(Debug, Clone)]
 pub(crate) struct SendWorkflow {
+    /// The application record that owns the source wallet and shared send journal slot.
     record_id: String,
+
+    /// The expected wallet address from the client configuration.
+    /// Secret authorization succeeds only when mnemonic derivation produces this address.
     source: String,
+
+    /// The immutable caller intent for this operation.
     request: SendRequest,
+
+    /// The current reducer stage.
+    /// Each reducer method accepts only its documented predecessor stage.
     stage: SendStage,
+
+    /// Fresh provider state captured before secret authorization.
+    /// Preparation uses the same status and sequence number that passed reducer validation.
     fresh_account: Option<FreshSendAccount>,
+
+    /// The signed message produced after authorization.
+    /// If this value exists, cancellation must persist a terminal journal record.
     prepared: Option<PreparedTransfer>,
+
+    /// The journal version used by the next compare-and-swap operation.
+    /// A missing value means that the shared wallet slot did not exist.
     journal_version: Option<u64>,
+
+    /// The sequence number from the last safely submitted journal record.
+    /// The next send waits until fresh chain state contains a larger sequence number.
     prior_submitted_seqno: Option<u32>,
+
+    /// The optional provider receipt stored with a successful terminal record.
     provider_reference: Option<String>,
+
+    /// A bounded developer diagnostic for failed or ambiguous terminal states.
+    /// This value must not contain the mnemonic, signed BOC, or host credential.
     diagnostic: Option<String>,
 }
 

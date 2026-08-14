@@ -70,12 +70,32 @@ struct Message {
 /// prevents ordering and arithmetic from depending on decimal-string rules.
 #[derive(Debug, Clone)]
 pub(crate) struct ActivityRecord {
+    /// The stable row identifier.
+    /// It combines the transaction hash, direction, and deterministic message index.
     pub id: String,
+
+    /// The transaction hash in standard padded Base64 when the provider value is a valid 256-bit hash.
+    /// Otherwise, it preserves the nonempty provider value for diagnostics and pagination consistency.
     pub transaction_hash: String,
+
+    /// The transaction logical time as an arbitrary-precision integer.
+    /// Activity sorting uses this value before the timestamp and row identifier.
     pub logical_time: BigUint,
+
+    /// The transaction Unix timestamp from Toncenter.
+    /// This is the transaction time, not the creation time of one outgoing message.
     pub timestamp: u64,
+
+    /// The value direction relative to the configured wallet address.
     pub direction: ActivityDirection,
+
+    /// The exact message value in nanograms.
+    /// This amount excludes transaction fees. The parser removes zero-value messages before it creates a record.
     pub amount_nanograms: BigUint,
+
+    /// The source of a received transfer or the destination of a sent transfer.
+    /// The Toncenter parser rejects a nonzero transfer when this address is absent or invalid.
+    /// The optional form permits future providers that cannot supply a counterparty.
     pub counterparty: Option<String>,
 }
 
@@ -100,7 +120,12 @@ impl ActivityRecord {
 /// Internal pagination cursor with a numeric logical time.
 #[derive(Debug, Clone)]
 pub(crate) struct ActivityPageCursor {
+    /// The logical time of the oldest raw transaction in the provider page.
+    /// A transaction can produce no activity item, so this value does not come from the last visible row.
     pub logical_time: BigUint,
+
+    /// The matching transaction hash.
+    /// A valid 256-bit hash uses standard padded Base64. Other nonempty provider values remain unchanged.
     pub hash: String,
 }
 

@@ -3,7 +3,7 @@
 use futures::future::join;
 
 use crate::{
-    AccountSnapshot, DomainError, HttpRequestId, ResourcePhase, ResourceState, WalletClientError,
+    AccountSnapshot, DomainError, ResourcePhase, ResourceState, WalletClientError,
     WalletOperationOutcome, WalletUpdate,
 };
 
@@ -26,12 +26,8 @@ impl WalletClient {
             ensure_running(&state)?;
 
             let config = state.config.clone();
-            let account_id = HttpRequestId {
-                value: state.allocate_id()?,
-            };
-            let activity_id = HttpRequestId {
-                value: state.allocate_id()?,
-            };
+            let account_id = state.allocate_request_id()?;
+            let activity_id = state.allocate_request_id()?;
 
             let requests = build_refresh_requests(&config, account_id, activity_id)?;
 

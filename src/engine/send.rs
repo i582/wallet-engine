@@ -12,7 +12,7 @@ use super::validation::validate_send;
 use crate::domain::bounded_diagnostic;
 use crate::wallet::send::{FreshSendAccount, SendDirective, SendWorkflow};
 use crate::wallet::transfer::{derive_source, prepare_transfer};
-use crate::{AccountStatus, HttpRequestId, SendPhase, SendRequest, SendResult, WalletClientError};
+use crate::{AccountStatus, SendPhase, SendRequest, SendResult, WalletClientError};
 
 use super::provider::parse_account;
 
@@ -61,21 +61,12 @@ impl WalletClient {
 
             let account_request = build_toncenter_request(
                 &config,
-                HttpRequestId {
-                    value: state.allocate_id()?,
-                },
+                state.allocate_request_id()?,
                 "getAddressInformation",
                 &[("address", config.address.as_str())],
             )?;
-            let seqno_request = build_seqno_request(
-                &config,
-                HttpRequestId {
-                    value: state.allocate_id()?,
-                },
-            )?;
-            let submit_request_id = HttpRequestId {
-                value: state.allocate_id()?,
-            };
+            let seqno_request = build_seqno_request(&config, state.allocate_request_id()?)?;
+            let submit_request_id = state.allocate_request_id()?;
             let mut workflow = SendWorkflow::new(
                 config.record_id.clone(),
                 config.address.clone(),

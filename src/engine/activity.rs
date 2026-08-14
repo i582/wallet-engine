@@ -36,9 +36,7 @@ impl WalletClient {
                 return Ok(update(WalletOperationOutcome::Skipped, 0, &state));
             };
 
-            let id = HttpRequestId {
-                value: state.allocate_id()?,
-            };
+            let id = state.allocate_request_id()?;
             let request = build_activity_page_request(&state.config, &cursor, id)?;
 
             state.pagination_generation = state
