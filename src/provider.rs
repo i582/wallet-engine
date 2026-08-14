@@ -252,15 +252,17 @@ fn activity_from_message(
     direction: ActivityDirection,
     index: usize,
 ) -> Result<Option<ActivityRecord>, DomainError> {
-    let counterparty = match direction {
-        ActivityDirection::Received => message_address(&message.source, "message source")?,
-        ActivityDirection::Sent => message_address(&message.destination, "message destination")?,
-    };
-
     let amount_nanograms = parse_unsigned_decimal(&message.value, "message value")?;
     if amount_nanograms == BigUint::default() {
         return Ok(None);
     }
+
+    // A zero-value service message is not wallet activity and does not need a
+    // counterparty. Every value transfer must still provide a valid address.
+    let counterparty = match direction {
+        ActivityDirection::Received => message_address(&message.source, "message source")?,
+        ActivityDirection::Sent => message_address(&message.destination, "message destination")?,
+    };
 
     let logical_time = parse_unsigned_decimal(&transaction.transaction_id.lt, "logical time")?;
     let direction_name = match direction {

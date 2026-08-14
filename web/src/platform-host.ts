@@ -24,22 +24,15 @@ export interface JournalStoreHost {
 export interface BrowserPlatformHostOptions {
   readonly secrets: ProtectedSecretStoreHost
   readonly journal: JournalStoreHost
-  readonly now?: () => number | bigint
 }
 
 export class BrowserPlatformHost {
   private readonly secrets: ProtectedSecretStoreHost
   private readonly journal: JournalStoreHost
-  private readonly nowProvider: () => number | bigint
 
   constructor(options: BrowserPlatformHostOptions) {
     this.secrets = options.secrets
     this.journal = options.journal
-    this.nowProvider = options.now ?? (() => Math.floor(Date.now() / 1000))
-  }
-
-  now(): Promise<bigint> {
-    return Promise.resolve(BigInt(this.nowProvider()))
   }
 
   async readProtectedSecret(request: ProtectedSecretRead): Promise<number[]> {

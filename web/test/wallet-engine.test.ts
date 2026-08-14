@@ -83,7 +83,6 @@ describe("high-level WASM API", () => {
   const platform = new BrowserPlatformHost({
     secrets: new MemorySecrets(),
     journal: new MemoryJournal(),
-    now: () => 1_800_000_000,
   })
   const clients: WalletClient[] = []
   const lifecycles: WalletLifecycle[] = []
@@ -151,6 +150,7 @@ function walletConfig(recordId: string): WalletClientConfig {
     recordId,
     address: "0QAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACkT",
     network: "testnet",
+    sendValiditySeconds: 300,
     providers: {
       toncenterBaseUrl: "https://testnet.toncenter.com/api/v2",
     },

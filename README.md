@@ -76,7 +76,7 @@ asynchronous host interfaces.
 | Interface | Your application provides |
 | --- | --- |
 | `WalletHttpHost` | Bounded HTTP requests and cancellation by call ID |
-| `WalletPlatformHost` | Time, protected secrets, and durable journal storage |
+| `WalletPlatformHost` | Protected secrets and durable journal storage |
 
 The host callbacks let the same Rust engine run on Apple, Android, and browser
 platforms. The engine does not own platform networking or protected storage.
@@ -119,6 +119,12 @@ is available.
 
 Call `send` with a unique operation ID, destination address, amount in
 nanograms, and the wallet secret reference.
+
+Set `sendValiditySeconds` in `WalletClientConfig` according to your product's
+submission policy. The engine adds this duration to the synchronization time
+from the fresh Toncenter account response. It does not trust the device clock.
+A short duration can expire before inclusion. A long duration leaves the
+signed message valid for longer.
 
 Before submission, the engine:
 

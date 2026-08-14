@@ -14,6 +14,7 @@ export interface WalletClientConfig {
   readonly recordId: string
   readonly address: string
   readonly network: Network
+  readonly sendValiditySeconds: number
   readonly providers: ProviderConfig
 }
 

@@ -18,7 +18,6 @@ export interface WalletHttpHost {
 }
 
 export interface WalletPlatformHost {
-  now(): Promise<bigint>;
   readProtectedSecret(request: unknown): Promise<Uint8Array | number[]>;
   storeProtectedSecret(request: unknown): Promise<void>;
   deleteProtectedSecret(secretRef: unknown): Promise<void>;

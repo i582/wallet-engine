@@ -159,6 +159,9 @@ async function createClient(
       recordId: descriptor.recordId,
       address: descriptor.address,
       network: descriptor.network,
+      // This is application policy, not a hidden engine default. The engine
+      // adds it to Toncenter's fresh synchronization timestamp.
+      sendValiditySeconds: 300,
       providers: {
         toncenterBaseUrl: TESTNET_BASE_URL,
         toncenterCredential: apiKey ? {value: CREDENTIAL_NAME} : undefined,

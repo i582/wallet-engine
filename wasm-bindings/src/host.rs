@@ -108,14 +108,6 @@ impl Drop for PlatformHostAdapter {
 
 #[async_trait]
 impl wallet_engine::WalletPlatformHost for PlatformHostAdapter {
-    async fn now(&self) -> u64 {
-        platform_call(self.id, "now", &[])
-            .await
-            .ok()
-            .and_then(|value| from_value(value).ok())
-            .unwrap_or_default()
-    }
-
     async fn read_protected_secret(
         &self,
         request: ProtectedSecretRead,

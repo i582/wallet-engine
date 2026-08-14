@@ -55,16 +55,13 @@ pub trait WalletHttpHost: Send + Sync {
     async fn cancel_http(&self, call_id: HttpCallId);
 }
 
-/// Supplies time, protected storage, and durable journal storage.
+/// Supplies protected storage and durable journal storage.
 ///
 /// Callback implementations must not call the same client operation
 /// recursively. The engine does not hold its wallet-state lock during calls.
 #[uniffi::export(foreign)]
 #[async_trait]
 pub trait WalletPlatformHost: Send + Sync {
-    /// Returns the current Unix timestamp in seconds.
-    async fn now(&self) -> u64;
-
     /// Reads protected secret bytes after the required user authorization.
     ///
     /// The host must not log the bytes. Return a classified host error when
@@ -653,18 +650,25 @@ impl WalletClient {
 
         self.publish_send_workflow(generation, &workflow)?;
 
-        // Use host wall time only to create a bounded validity window. Rust still owns the exact
-        // signed payload so every platform produces the same V5R1 message.
-        let now = self.platform_host.now().await;
-        self.ensure_current_send(generation)?;
-
-        let Some(valid_until) = now
-            .checked_add(300)
-            .and_then(|timestamp| u32::try_from(timestamp).ok())
-        else {
-            self.fail_send(generation, "transfer expiry overflow".to_owned())?;
-            return Err(WalletClientError::IdentifierExhausted);
-        };
+        // Base the expiration on the provider's synchronized chain view. Device clocks can be
+        // wrong, while this timestamp belongs to the same fresh state used for status and seqno.
+        let provider_time = account.sync_utime.ok_or_else(|| {
+            self.send_failed_error(
+                generation,
+                "fresh account state did not include provider synchronization time",
+            )
+        })?;
+        let provider_time = u32::try_from(provider_time).map_err(|_| {
+            self.send_failed_error(
+                generation,
+                "provider synchronization time does not fit the wallet timestamp field",
+            )
+        })?;
+        let valid_until = provider_time
+            .checked_add(config.send_validity_seconds)
+            .ok_or_else(|| {
+                self.send_failed_error(generation, "transfer expiration timestamp overflow")
+            })?;
 
         let prepared = prepare_transfer(
             secret.as_slice(),
@@ -1468,7 +1472,7 @@ fn build_provider_url(
 }
 
 fn validate_config(config: &WalletClientConfig) -> Result<(), WalletClientError> {
-    if config.record_id.trim().is_empty() {
+    if config.record_id.trim().is_empty() || config.send_validity_seconds == 0 {
         return Err(WalletClientError::InvalidConfig);
     }
 

@@ -69,6 +69,13 @@ pub struct WalletClientConfig {
     pub address: String,
     /// The network for the address and all provider calls.
     pub network: Network,
+    /// Lifetime of a newly signed external message, in seconds.
+    ///
+    /// The engine adds this value to the synchronization timestamp returned by
+    /// the fresh account-state request. It does not use the host device clock.
+    /// A short value can expire before the network includes the message. A long
+    /// value extends the period in which the signed message can be submitted.
+    pub send_validity_seconds: u32,
     /// The provider endpoints and credential references.
     pub providers: ProviderConfig,
 }
