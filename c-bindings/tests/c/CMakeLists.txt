@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 project(wallet_engine_c_tests LANGUAGES C)
 
 include(CTest)
+find_package(Threads REQUIRED)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -16,26 +17,38 @@ find_library(
     REQUIRED
 )
 
-add_executable(wallet_engine_c_abi_test abi_test.c)
-target_include_directories(
-    wallet_engine_c_abi_test
-    PRIVATE "${WALLET_ENGINE_ROOT}/bindings/c"
-)
-target_link_libraries(wallet_engine_c_abi_test PRIVATE "${WALLET_ENGINE_LIBRARY}")
-
-if(MSVC)
-    target_compile_options(wallet_engine_c_abi_test PRIVATE /W4 /WX)
-else()
-    target_compile_options(
-        wallet_engine_c_abi_test
-        PRIVATE -Wall -Wextra -Wpedantic -Werror
+function(add_wallet_engine_c_test target source)
+    add_executable(${target} ${source})
+    target_include_directories(
+        ${target}
+        PRIVATE "${WALLET_ENGINE_ROOT}/bindings/c"
     )
-endif()
+    target_link_libraries(
+        ${target}
+        PRIVATE "${WALLET_ENGINE_LIBRARY}" Threads::Threads
+    )
 
-get_filename_component(WALLET_ENGINE_LIBRARY_DIR "${WALLET_ENGINE_LIBRARY}" DIRECTORY)
-set_target_properties(
-    wallet_engine_c_abi_test
-    PROPERTIES BUILD_RPATH "${WALLET_ENGINE_LIBRARY_DIR}"
-)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4 /WX)
+    else()
+        target_compile_options(
+            ${target}
+            PRIVATE -Wall -Wextra -Wpedantic -Werror
+        )
+    endif()
 
-add_test(NAME wallet_engine_c_abi COMMAND wallet_engine_c_abi_test)
+    get_filename_component(
+        WALLET_ENGINE_LIBRARY_DIR
+        "${WALLET_ENGINE_LIBRARY}"
+        DIRECTORY
+    )
+    set_target_properties(
+        ${target}
+        PROPERTIES BUILD_RPATH "${WALLET_ENGINE_LIBRARY_DIR}"
+    )
+
+    add_test(NAME ${target} COMMAND ${target})
+endfunction()
+
+add_wallet_engine_c_test(wallet_engine_c_abi_test abi_test.c)
+add_wallet_engine_c_test(wallet_engine_c_create_wallet_test create_wallet_test.c)

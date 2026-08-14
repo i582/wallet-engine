@@ -1,15 +1,66 @@
 //! Opaque C handle for the wallet lifecycle service.
 
 use std::{
+    ffi::c_void,
     panic::{AssertUnwindSafe, catch_unwind},
     sync::Arc,
 };
 
+use futures::executor::block_on;
 use wallet_engine::WalletLifecycle as CoreWalletLifecycle;
 
 use crate::{
-    WalletEngineAbiStatus, WalletEnginePlatformHostAdapter, WalletEnginePlatformHostCallbacks,
+    WalletEngineAbiStatus, WalletEngineCreateWalletRequest, WalletEngineCreatedWalletView,
+    WalletEnginePlatformHostAdapter, WalletEnginePlatformHostCallbacks,
+    WalletEngineWalletLifecycleErrorView, with_created_wallet_view,
 };
+
+/// Receives the result of an asynchronous wallet-creation operation.
+///
+/// `abi_status` is `OK` for both a successful wallet and a domain failure. On
+/// success, `wallet` is non-null and `error` is null. For a domain failure,
+/// `wallet` is null and `error` is non-null. A boundary panic is reported with
+/// `PANIC` and both result pointers null.
+///
+/// All result views and their nested pointers remain valid only until the
+/// callback returns. The callback can run on an arbitrary worker thread.
+pub type WalletEngineCreateWalletCompletionFn = Option<
+    unsafe extern "C" fn(
+        context: *mut c_void,
+        abi_status: WalletEngineAbiStatus,
+        wallet: *const WalletEngineCreatedWalletView,
+        error: *const WalletEngineWalletLifecycleErrorView,
+    ),
+>;
+
+#[derive(Clone, Copy)]
+struct CreateWalletCompletion {
+    context: *mut c_void,
+    callback: unsafe extern "C" fn(
+        *mut c_void,
+        WalletEngineAbiStatus,
+        *const WalletEngineCreatedWalletView,
+        *const WalletEngineWalletLifecycleErrorView,
+    ),
+}
+
+// SAFETY: The start-function contract requires the callback and its opaque
+// context to be safe to use from an arbitrary worker thread. Rust forwards the
+// pointer but never dereferences it.
+unsafe impl Send for CreateWalletCompletion {}
+
+impl CreateWalletCompletion {
+    unsafe fn call(
+        self,
+        abi_status: WalletEngineAbiStatus,
+        wallet: *const WalletEngineCreatedWalletView,
+        error: *const WalletEngineWalletLifecycleErrorView,
+    ) {
+        // SAFETY: The C caller guarantees the callback accepts its context and
+        // callback-scoped result views.
+        unsafe { (self.callback)(self.context, abi_status, wallet, error) };
+    }
+}
 
 /// Opaque wallet lifecycle handle owned by the C consumer.
 ///
@@ -86,4 +137,103 @@ pub unsafe extern "C" fn wallet_engine_lifecycle_free(lifecycle: *mut WalletEngi
         let WalletEngineLifecycle { inner } = *lifecycle;
         drop(inner);
     })));
+}
+
+/// Starts creation of a wallet on a worker thread.
+///
+/// Returns an ABI status describing argument validation and task startup. An
+/// `OK` return guarantees that `completion` will be called exactly once. Domain
+/// failures are delivered asynchronously with an `OK` ABI status and a
+/// non-null error view.
+///
+/// The request is copied before this function returns. The lifecycle service
+/// is retained for the operation, so the caller may immediately free its
+/// lifecycle handle after an `OK` return.
+///
+/// # Safety
+///
+/// `lifecycle` must point to a live lifecycle handle for this call. `request`
+/// and its record-ID view must be readable for this call. `completion` and
+/// `completion_context` must remain safe to invoke from an arbitrary worker
+/// thread until the callback returns. The context may be null if the callback
+/// accepts null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn wallet_engine_lifecycle_create_wallet(
+    lifecycle: *const WalletEngineLifecycle,
+    request: *const WalletEngineCreateWalletRequest,
+    completion_context: *mut c_void,
+    completion: WalletEngineCreateWalletCompletionFn,
+) -> WalletEngineAbiStatus {
+    catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: The caller upholds the handle, request, and callback
+        // contracts documented by this function.
+        unsafe { lifecycle_create_wallet(lifecycle, request, completion_context, completion) }
+    }))
+    .unwrap_or(WalletEngineAbiStatus::Panic)
+}
+
+unsafe fn lifecycle_create_wallet(
+    lifecycle: *const WalletEngineLifecycle,
+    request: *const WalletEngineCreateWalletRequest,
+    completion_context: *mut c_void,
+    completion: WalletEngineCreateWalletCompletionFn,
+) -> WalletEngineAbiStatus {
+    let Some(completion) = completion else {
+        return WalletEngineAbiStatus::InvalidArgument;
+    };
+    if lifecycle.is_null() || request.is_null() {
+        return WalletEngineAbiStatus::InvalidArgument;
+    }
+
+    // SAFETY: The caller guarantees a readable request and nested record-ID
+    // view for this call. Conversion copies all request data.
+    let request = match unsafe { request.read().try_to_core() } {
+        Ok(request) => request,
+        Err(status) => return status,
+    };
+    // SAFETY: The caller guarantees the handle remains live for this call.
+    let lifecycle = Arc::clone(&unsafe { &*lifecycle }.inner);
+    let completion = CreateWalletCompletion {
+        context: completion_context,
+        callback: completion,
+    };
+
+    drop(std::thread::spawn(move || {
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            run_create_wallet(lifecycle, request, completion);
+        }));
+        if outcome.is_err() {
+            // SAFETY: Null result pointers represent a caught boundary panic
+            // and are valid for this callback invocation.
+            unsafe {
+                completion.call(
+                    WalletEngineAbiStatus::Panic,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                )
+            };
+        }
+    }));
+
+    WalletEngineAbiStatus::Ok
+}
+
+fn run_create_wallet(
+    lifecycle: Arc<CoreWalletLifecycle>,
+    request: wallet_engine::CreateWalletRequest,
+    completion: CreateWalletCompletion,
+) {
+    match block_on(lifecycle.create_wallet(request)) {
+        Ok(wallet) => with_created_wallet_view(&wallet, |view| {
+            // SAFETY: `view` and all nested views remain live for this callback
+            // invocation.
+            unsafe { completion.call(WalletEngineAbiStatus::Ok, &view, std::ptr::null()) };
+        }),
+        Err(error) => {
+            let view = WalletEngineWalletLifecycleErrorView::from(&error);
+            // SAFETY: `view` and its diagnostic remain live for this callback
+            // invocation.
+            unsafe { completion.call(WalletEngineAbiStatus::Ok, std::ptr::null(), &view) };
+        }
+    }
 }

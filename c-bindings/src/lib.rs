@@ -25,7 +25,9 @@ pub use host::{
     wallet_engine_store_protected_secret_complete,
 };
 pub use lifecycle::{
-    WalletEngineLifecycle, wallet_engine_lifecycle_free, wallet_engine_lifecycle_new,
+    WalletEngineCreateWalletCompletionFn, WalletEngineLifecycle,
+    wallet_engine_lifecycle_create_wallet, wallet_engine_lifecycle_free,
+    wallet_engine_lifecycle_new,
 };
 pub use types::{
     WALLET_ENGINE_NETWORK_MAINNET, WALLET_ENGINE_NETWORK_TESTNET,
