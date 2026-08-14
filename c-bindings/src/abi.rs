@@ -53,6 +53,15 @@ pub struct WalletEngineBytesView {
 }
 
 impl WalletEngineStringView {
+    /// Returns an empty view that does not reference any allocation.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            data: std::ptr::null(),
+            len: 0,
+        }
+    }
+
     /// Validates this view and copies its UTF-8 contents into a Rust string.
     ///
     /// # Errors
@@ -75,7 +84,25 @@ impl WalletEngineStringView {
     }
 }
 
+impl From<&str> for WalletEngineStringView {
+    fn from(value: &str) -> Self {
+        Self {
+            data: value.as_ptr().cast(),
+            len: value.len(),
+        }
+    }
+}
+
 impl WalletEngineBytesView {
+    /// Returns an empty view that does not reference any allocation.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            data: std::ptr::null(),
+            len: 0,
+        }
+    }
+
     /// Validates this view and copies its contents into a Rust vector.
     ///
     /// # Errors
@@ -93,6 +120,15 @@ impl WalletEngineBytesView {
         // range is readable. `copy_bytes` validates the null and length cases
         // before it constructs a temporary slice.
         unsafe { copy_bytes(self.data, self.len) }
+    }
+}
+
+impl From<&[u8]> for WalletEngineBytesView {
+    fn from(value: &[u8]) -> Self {
+        Self {
+            data: value.as_ptr(),
+            len: value.len(),
+        }
     }
 }
 

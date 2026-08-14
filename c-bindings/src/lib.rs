@@ -15,6 +15,17 @@ pub use abi::{
     wallet_engine_abi_version,
 };
 pub use types::{
-    WALLET_ENGINE_NETWORK_MAINNET, WALLET_ENGINE_NETWORK_TESTNET, WalletEngineNetwork,
-    network_from_abi, network_to_abi,
+    WALLET_ENGINE_NETWORK_MAINNET, WALLET_ENGINE_NETWORK_TESTNET,
+    WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_AUTHENTICATION_FAILED,
+    WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_CANCELLED,
+    WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_NOT_FOUND,
+    WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_OTHER,
+    WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_POLICY_VIOLATION,
+    WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_UNAVAILABLE, WalletEngineCreateWalletRequest,
+    WalletEngineCreatedWalletView, WalletEngineNetwork, WalletEngineProtectedSecretHostErrorKind,
+    WalletEngineProtectedSecretRefView, WalletEngineProtectedSecretStoreView,
+    WalletEngineRecoveryPhraseView, WalletEngineStringViewSlice, WalletEngineWalletDescriptorView,
+    WalletEngineWalletLifecycleErrorCode, WalletEngineWalletLifecycleErrorView, network_from_abi,
+    network_to_abi, protected_secret_host_error_kind_from_abi,
+    protected_secret_host_error_kind_to_abi, with_created_wallet_view,
 };

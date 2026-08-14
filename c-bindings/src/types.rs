@@ -1,5 +1,9 @@
 //! C representations of Wallet Engine domain types.
 
+mod secret;
+#[allow(unsafe_code)]
+mod wallet;
+
 use wallet_engine::Network;
 
 use crate::abi::WalletEngineAbiStatus;
@@ -39,3 +43,21 @@ pub const fn network_to_abi(value: Network) -> WalletEngineNetwork {
         Network::Testnet => WALLET_ENGINE_NETWORK_TESTNET,
     }
 }
+
+pub use secret::{
+    WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_AUTHENTICATION_FAILED,
+    WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_CANCELLED,
+    WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_NOT_FOUND,
+    WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_OTHER,
+    WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_POLICY_VIOLATION,
+    WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_UNAVAILABLE,
+    WalletEngineProtectedSecretHostErrorKind, WalletEngineProtectedSecretRefView,
+    WalletEngineProtectedSecretStoreView, protected_secret_host_error_kind_from_abi,
+    protected_secret_host_error_kind_to_abi,
+};
+pub use wallet::{
+    WalletEngineCreateWalletRequest, WalletEngineCreatedWalletView, WalletEngineRecoveryPhraseView,
+    WalletEngineStringViewSlice, WalletEngineWalletDescriptorView,
+    WalletEngineWalletLifecycleErrorCode, WalletEngineWalletLifecycleErrorView,
+    with_created_wallet_view,
+};
