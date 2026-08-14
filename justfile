@@ -83,6 +83,27 @@ web-build: web-install bindings-wasm
 web-test: web-install bindings-wasm
     bun --cwd web test
 
+example-web-install:
+    bun install --cwd examples/web --frozen-lockfile
+
+example-web-dev: example-web-install bindings-wasm
+    bun --cwd examples/web dev
+
+example-web-fmt: example-web-install
+    bun --cwd examples/web fmt
+
+example-web-fmt-check: example-web-install
+    bun --cwd examples/web fmt:check
+
+example-web-lint: example-web-install
+    bun --cwd examples/web lint
+
+example-web-build: example-web-install bindings-wasm
+    bun --cwd examples/web build
+
+example-web-test: example-web-install bindings-wasm
+    bun --cwd examples/web test
+
 build-android abi="all":
     cargo xtask android --abi {{abi}}
 
@@ -92,7 +113,7 @@ check-deny:
 check-deps:
     cargo shear --deny-warnings
 
-ci: fmt-check check-build clippy test check-wasm check-ios-simulator bindings-swift-check bindings-kotlin-check bindings-wasm-check web-fmt-check web-lint web-build web-test
+ci: fmt-check check-build clippy test check-wasm check-ios-simulator bindings-swift-check bindings-kotlin-check bindings-wasm-check web-fmt-check web-lint web-build web-test example-web-fmt-check example-web-lint example-web-build example-web-test
 
 check: ci check-deny
 

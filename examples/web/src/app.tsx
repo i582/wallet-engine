@@ -1,0 +1,192 @@
+import type {SendResult, WalletSnapshot} from "@ton/wallet-engine"
+import {type ReactElement, useEffect, useState} from "react"
+
+import {RecoveryScreen} from "@/components/recovery-screen"
+import {WalletDashboard} from "@/components/wallet-dashboard"
+import {WelcomeScreen} from "@/components/welcome-screen"
+import {fetchGramUsdRate} from "@/lib/tonapi-rates"
+import {WalletSession} from "@/lib/wallet-session"
+
+export function App(): ReactElement {
+  const [session, setSession] = useState<WalletSession>()
+  const [recoveryWords, setRecoveryWords] = useState<string[]>()
+  const [snapshot, setSnapshot] = useState<WalletSnapshot>()
+  const [creating, setCreating] = useState<boolean>(false)
+  const [refreshing, setRefreshing] = useState<boolean>(false)
+  const [loadingMore, setLoadingMore] = useState<boolean>(false)
+  const [error, setError] = useState<string>()
+  const [restoring, setRestoring] = useState<boolean>(true)
+  const [gramUsdRate, setGramUsdRate] = useState<number>()
+
+  useEffect(() => {
+    let active: boolean = true
+    fetchGramUsdRate()
+      .then((rate: number) => {
+        if (active) {
+          setGramUsdRate(rate)
+        }
+      })
+      .catch(() => undefined)
+    return () => {
+      active = false
+    }
+  }, [])
+
+  useEffect(() => {
+    let active: boolean = true
+    WalletSession.restore()
+      .then(async (restored: WalletSession | undefined) => {
+        if (!active || !restored) {
+          return
+        }
+        setSession(restored)
+        setSnapshot(restored.snapshot())
+        try {
+          setSnapshot(await restored.refresh())
+        } catch (cause) {
+          setError(errorMessage(cause))
+        }
+      })
+      .catch((cause: unknown) => {
+        if (active) {
+          setError(errorMessage(cause))
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setRestoring(false)
+        }
+      })
+    return () => {
+      active = false
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (session) {
+        void session.close()
+      }
+    }
+  }, [session])
+
+  async function createWallet(): Promise<void> {
+    setCreating(true)
+    setError(undefined)
+    try {
+      const created = await WalletSession.create()
+      setSession(created.session)
+      setSnapshot(created.session.snapshot())
+      setRecoveryWords(created.recoveryPhrase.words)
+    } catch (cause) {
+      setError(errorMessage(cause))
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  async function openWallet(): Promise<void> {
+    if (!session) {
+      return
+    }
+    setRecoveryWords(undefined)
+    await refreshWallet()
+  }
+
+  async function refreshWallet(): Promise<void> {
+    if (!session || refreshing) {
+      return
+    }
+    setRefreshing(true)
+    setError(undefined)
+    const rateRequest: Promise<void> = fetchGramUsdRate()
+      .then((rate: number) => setGramUsdRate(rate))
+      .catch(() => undefined)
+    try {
+      setSnapshot(await session.refresh())
+    } catch (cause) {
+      setError(errorMessage(cause))
+    } finally {
+      await rateRequest
+      setRefreshing(false)
+    }
+  }
+
+  async function loadMoreActivity(): Promise<void> {
+    if (!session || loadingMore) {
+      return
+    }
+    setLoadingMore(true)
+    setError(undefined)
+    try {
+      setSnapshot(await session.loadMoreActivity())
+    } catch (cause) {
+      setError(errorMessage(cause))
+    } finally {
+      setLoadingMore(false)
+    }
+  }
+
+  async function forgetWallet(): Promise<void> {
+    if (!session) {
+      return
+    }
+    await session.forget()
+    setSession(undefined)
+    setSnapshot(undefined)
+    setRecoveryWords(undefined)
+    setError(undefined)
+  }
+
+  async function sendTransfer(destination: string, amountNanograms: string): Promise<SendResult> {
+    if (!session) {
+      throw new Error("The wallet is not open")
+    }
+    try {
+      return await session.send(destination, amountNanograms)
+    } finally {
+      setSnapshot(session.snapshot())
+    }
+  }
+
+  if (session && recoveryWords) {
+    return <RecoveryScreen words={recoveryWords} onContinue={openWallet} />
+  }
+
+  if (restoring) {
+    return <WalletLoading />
+  }
+
+  if (session && snapshot) {
+    return (
+      <WalletDashboard
+        error={error}
+        gramUsdRate={gramUsdRate}
+        loadingMore={loadingMore}
+        refreshing={refreshing}
+        snapshot={snapshot}
+        onForget={forgetWallet}
+        onLoadMore={loadMoreActivity}
+        onRefresh={refreshWallet}
+        onSend={sendTransfer}
+      />
+    )
+  }
+
+  return <WelcomeScreen busy={creating} error={error} onCreate={createWallet} />
+}
+
+function WalletLoading(): ReactElement {
+  return (
+    <main className="flex h-[100dvh] items-center justify-center bg-background">
+      <p className="text-sm text-muted-foreground">Opening wallet…</p>
+    </main>
+  )
+}
+
+function errorMessage(cause: unknown): string {
+  if (cause instanceof Error) {
+    return cause.message
+  }
+  return "The wallet operation failed"
+}

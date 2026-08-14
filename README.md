@@ -60,6 +60,11 @@ IndexedDB journal storage, wallet lifecycle methods, and wallet client methods.
 
 Read [WASM.md](WASM.md) for browser setup and security requirements.
 
+For a small React integration, see the
+[web wallet example](examples/web/README.md). It creates a V5R1 testnet wallet,
+shows the recovery phrase, refreshes the balance and activity, and loads more
+history. The engine integration is kept separate from the interface code.
+
 This repository does not track generated bindings. Generate them from the same
 revision that you use to build the Rust library.
 
