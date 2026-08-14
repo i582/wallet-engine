@@ -2,6 +2,7 @@
 target/
 apple-bindgen/target/
 kotlin-bindgen/target/
+xtask/target/
 
 # Generated foreign-language bindings
 /bindings/

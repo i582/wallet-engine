@@ -4,6 +4,7 @@ Generate the Kotlin UniFFI source:
 
 ```shell
 just bindings-kotlin
+# or: cargo xtask bindings kotlin
 ```
 
 The generated file is written to
@@ -15,6 +16,7 @@ Build Android native libraries for `arm64-v8a` and `x86_64`:
 
 ```shell
 just build-android
+# or: cargo xtask android --abi all
 ```
 
 The libraries are written to `target/android/jniLibs/<abi>/libwallet_engine.so`.
