@@ -8,6 +8,7 @@ mod activity;
 mod client;
 mod host;
 mod http;
+mod provider;
 mod refresh;
 mod send;
 mod send_http;

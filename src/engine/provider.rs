@@ -9,7 +9,7 @@ use num_bigint::BigUint;
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::Value;
 
-use crate::diagnostic::bounded_diagnostic;
+use crate::domain::bounded_diagnostic;
 use crate::{
     AccountSnapshot, AccountStatus, ActivityCursor, ActivityDirection, ActivityItem, DomainError,
     ErrorCategory, ErrorCode, HttpHeader, RetryAdvice,

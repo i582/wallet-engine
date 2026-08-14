@@ -7,10 +7,10 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
 
-use crate::diagnostic::bounded_diagnostic;
 use crate::domain::{
     AccountStatus, JournalCompareExchange, JournalCompareExchangeResult, JournalKey, JournalRecord,
     PreparedSend, ProtectedSecretRead, SecretAccessReason, SendPhase, SendRequest, SendSnapshot,
+    bounded_diagnostic,
 };
 
 const JOURNAL_SCHEMA_VERSION: u32 = 1;

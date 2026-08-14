@@ -17,10 +17,10 @@ use ton::ton_core::traits::tlb::TLB;
 use ton::ton_core::types::TonAddress;
 use ton::ton_core::types::tlb_core::TLBCoins;
 
-use crate::send::{FreshSendAccount, PreparedTransfer};
 use crate::{Network, SendRequest};
 
 use super::crypto::{WalletCryptoError, derive_v5r1_wallet};
+use super::send::{FreshSendAccount, PreparedTransfer};
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum TransferError {

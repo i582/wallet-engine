@@ -24,11 +24,8 @@
 //! Host callbacks can therefore call unrelated application code without a
 //! wallet-state lock cycle. Streaming updates remain outside this crate.
 
-mod diagnostic;
 mod domain;
 mod engine;
-mod provider;
-mod send;
 mod wallet;
 
 pub use domain::*;

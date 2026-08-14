@@ -2,13 +2,14 @@
 
 use url::Url;
 
-use crate::diagnostic::bounded_diagnostic;
-use crate::provider::response_error;
 use crate::{
     DomainError, ErrorCategory, ErrorCode, HttpHeader, HttpHostError, HttpHostErrorKind,
     HttpMethod, HttpRequest, HttpRequestId, HttpResponse, RetryAdvice, WalletClientConfig,
     WalletClientError,
 };
+
+use super::provider::response_error;
+use crate::domain::bounded_diagnostic;
 
 const MAX_RESPONSE_BODY_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_RESPONSE_HEADER_BYTES: u64 = 64 * 1024;

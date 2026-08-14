@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use crate::diagnostic::bounded_diagnostic;
+use crate::domain::bounded_diagnostic;
 use crate::{
     DomainError, ErrorCategory, ErrorCode, HttpHeader, HttpMethod, HttpRequest, HttpRequestId,
     RetryAdvice, WalletClientConfig, WalletClientError,

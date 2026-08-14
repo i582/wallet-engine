@@ -4,15 +4,15 @@
 //! words. Private submodules derive wallet keys and build signed transfers.
 
 mod crypto;
+pub(crate) mod send;
 pub(crate) mod transfer;
 
 use std::sync::Arc;
 
 use self::crypto::{SensitiveMnemonic, derive_v5r1_wallet, generate_mnemonic};
-use crate::diagnostic::bounded_diagnostic;
 use crate::domain::{
     Network, ProtectedSecretHostError, ProtectedSecretHostErrorKind, ProtectedSecretRead,
-    ProtectedSecretRef, ProtectedSecretStore, SecretAccessReason,
+    ProtectedSecretRef, ProtectedSecretStore, SecretAccessReason, bounded_diagnostic,
 };
 use crate::engine::WalletPlatformHost;
 

@@ -2,6 +2,29 @@
 
 use super::HttpHostErrorKind;
 
+/// Replaces control characters and bounds diagnostics stored in public errors.
+///
+/// This function does not remove secrets. Hosts and providers must never put
+/// credential or secret values in diagnostic text.
+pub(crate) fn bounded_diagnostic(message: impl AsRef<str>) -> String {
+    const DIAGNOSTIC_MAX_CHARS: usize = 512;
+
+    message
+        .as_ref()
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .take(DIAGNOSTIC_MAX_CHARS)
+        .collect::<String>()
+        .trim()
+        .to_owned()
+}
+
 /// The current state of one independently loaded resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Enum)]
 #[serde(rename_all = "camelCase")]

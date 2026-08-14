@@ -9,11 +9,12 @@ use super::send_state::SensitiveBytes;
 use super::state::{OperationFamily, ensure_running};
 use super::validation::validate_send;
 
-use crate::diagnostic::bounded_diagnostic;
-use crate::provider::parse_account;
-use crate::send::{FreshSendAccount, SendDirective, SendWorkflow};
+use crate::domain::bounded_diagnostic;
+use crate::wallet::send::{FreshSendAccount, SendDirective, SendWorkflow};
 use crate::wallet::transfer::{derive_source, prepare_transfer};
 use crate::{AccountStatus, HttpRequestId, SendPhase, SendRequest, SendResult, WalletClientError};
+
+use super::provider::parse_account;
 
 #[uniffi::export]
 impl WalletClient {

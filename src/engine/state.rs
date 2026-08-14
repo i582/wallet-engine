@@ -2,12 +2,13 @@
 
 use futures::channel::oneshot;
 
-use crate::provider::{ActivityPageCursor, ActivityRecord};
-use crate::send::SendWorkflow;
+use crate::wallet::send::SendWorkflow;
 use crate::{
     HttpRequestId, WalletClientConfig, WalletClientError, WalletOperationOutcome, WalletSnapshot,
     WalletUpdate,
 };
+
+use super::provider::{ActivityPageCursor, ActivityRecord};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum OperationFamily {

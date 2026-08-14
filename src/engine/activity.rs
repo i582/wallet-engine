@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 
-use crate::provider::{ActivityPage, ActivityPageCursor, activity_record_order};
 use crate::{
     ErrorCode, HttpRequest, HttpRequestId, ResourcePhase, ResourceState, WalletClientConfig,
     WalletClientError, WalletOperationOutcome, WalletUpdate,
@@ -11,6 +10,7 @@ use crate::{
 use super::WalletClient;
 use super::http::build_toncenter_request;
 use super::http::evaluate_response;
+use super::provider::{ActivityPage, ActivityPageCursor, activity_record_order, parse_activity};
 use super::state::{OperationFamily, State, ensure_running, update};
 
 #[uniffi::export]
@@ -56,7 +56,7 @@ impl WalletClient {
         let result = evaluate_response(
             &request,
             self.http_host.execute_http(request.clone()).await,
-            |body| crate::provider::parse_activity(body, PAGE_SIZE),
+            |body| parse_activity(body, PAGE_SIZE),
         );
 
         let mut state = self.lock()?;

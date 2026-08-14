@@ -1,7 +1,7 @@
 //! Send-operation tracking and protected-byte lifetime handling.
 
-use crate::diagnostic::bounded_diagnostic;
-use crate::send::SendWorkflow;
+use crate::domain::bounded_diagnostic;
+use crate::wallet::send::SendWorkflow;
 use crate::{
     HttpHostError, HttpRequest, HttpRequestId, HttpResponse, SendPhase, WalletClientError,
 };
