@@ -69,7 +69,7 @@ impl WalletClient {
             let submit_request_id = state.allocate_request_id()?;
             let mut workflow = SendWorkflow::new(
                 config.record_id.clone(),
-                config.address.clone(),
+                expected_source.clone(),
                 request.clone(),
             );
             let directive = workflow
@@ -199,7 +199,7 @@ impl WalletClient {
         let prepared = prepare_transfer(
             secret.as_slice(),
             &config.record_id,
-            &config.address,
+            &expected_source,
             config.network,
             &request,
             &fresh,
@@ -209,7 +209,7 @@ impl WalletClient {
             self.send_failed_error(generation, format!("failed to prepare transfer: {error}"))
         })?;
 
-        let summary = prepared.public_summary();
+        let summary = prepared.public_summary(config.network);
         let submit_request =
             build_send_boc_request(&config, submit_request_id, &prepared.signed_boc).map_err(
                 |_| self.send_failed_error(generation, "failed to construct submission"),

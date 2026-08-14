@@ -5,8 +5,13 @@
 //! ambiguous submission result.
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
+use ton::ton_core::types::TonAddress;
 
+use crate::address::TonAddressExt as _;
+use crate::bigint::parse_positive_decimal;
 use crate::domain::{
     AccountStatus, JournalCompareExchange, JournalCompareExchangeResult, JournalKey, JournalRecord,
     PreparedSend, ProtectedSecretRead, SecretAccessReason, SendPhase, SendRequest, SendSnapshot,
@@ -57,14 +62,15 @@ pub(crate) struct PreparedTransfer {
     pub record_id: String,
 
     /// The configured source address after the mnemonic-derived wallet matches it.
-    pub source: String,
+    pub source: TonAddress,
 
     /// The destination string from the request.
     /// Transfer construction parses and validates it before this value exists.
-    pub destination: String,
+    pub destination: TonAddress,
 
-    /// The exact transfer value as a canonical base-10 nanogram string.
-    pub amount_nanograms: String,
+    /// The exact transfer value in nanograms.
+    /// Conversion to a decimal string happens only at public and durable boundaries.
+    pub amount_nanograms: BigUint,
 
     /// The fresh wallet sequence number signed into the external message.
     pub seqno: u32,
@@ -87,12 +93,12 @@ pub(crate) struct PreparedTransfer {
 }
 
 impl PreparedTransfer {
-    pub(crate) fn public_summary(&self) -> PreparedSend {
+    pub(crate) fn public_summary(&self, network: crate::Network) -> PreparedSend {
         PreparedSend {
             operation_id: self.operation_id.clone(),
             valid_until: self.valid_until,
-            destination: self.destination.clone(),
-            amount_nanograms: self.amount_nanograms.clone(),
+            destination: self.destination.to_user_friendly(network),
+            amount_nanograms: self.amount_nanograms.to_string(),
         }
     }
 }
@@ -202,21 +208,39 @@ pub(crate) enum SendWorkflowError {
 /// No secret material is ever serialized into this record.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct DurableSendRecord {
+    /// The durable JSON schema version.
+    /// A reader rejects unknown versions before it uses any other field.
     schema_version: u32,
+    /// The caller identity of the send attempt.
     operation_id: String,
+    /// The application record that owns the wallet-wide send slot.
     record_id: String,
-    source: String,
-    destination: String,
+    /// The source TON address.
+    /// Serde stores it as raw `workchain:hex` and accepts older friendly values.
+    #[serde(with = "crate::address::raw_serde")]
+    source: TonAddress,
+    /// The destination TON address.
+    /// Serde stores it as raw `workchain:hex` and accepts older friendly values.
+    #[serde(with = "crate::address::raw_serde")]
+    destination: TonAddress,
+    /// The exact transfer value as a canonical base-10 nanogram string.
     amount_nanograms: String,
+    /// The wallet sequence number signed into the external message.
     seqno: u32,
+    /// Reports whether the signed message contains the wallet `StateInit`.
     needs_state_init: bool,
+    /// The unsigned Unix expiration time signed into the wallet message.
     valid_until: u32,
     /// The signed BOC encoded as standard padded Base64 for durable storage.
     signed_boc_base64: String,
     /// The normalized external-message hash in standard padded Base64.
     message_hash: String,
+    /// The reducer stage stored by the latest successful journal CAS.
     stage: SendStage,
+    /// The optional receipt returned by the provider after submission.
     provider_reference: Option<String>,
+    /// A bounded diagnostic for a failed or ambiguous terminal result.
+    /// This value contains no recovery phrase, signed BOC, or host credential.
     diagnostic: Option<String>,
 }
 
@@ -229,7 +253,7 @@ pub(crate) struct SendWorkflow {
 
     /// The expected wallet address from the client configuration.
     /// Secret authorization succeeds only when mnemonic derivation produces this address.
-    source: String,
+    source: TonAddress,
 
     /// The immutable caller intent for this operation.
     request: SendRequest,
@@ -263,7 +287,7 @@ pub(crate) struct SendWorkflow {
 }
 
 impl SendWorkflow {
-    pub(crate) const fn new(record_id: String, source: String, request: SendRequest) -> Self {
+    pub(crate) const fn new(record_id: String, source: TonAddress, request: SendRequest) -> Self {
         Self {
             record_id,
             source,
@@ -288,7 +312,7 @@ impl SendWorkflow {
 
     pub(crate) fn begin(&mut self) -> Result<SendDirective, SendWorkflowError> {
         self.expect(SendStage::Validating, "begin")?;
-        validate_request(&self.record_id, &self.source, &self.request)?;
+        validate_request(&self.record_id, &self.request)?;
 
         self.stage = SendStage::LoadingJournal;
 
@@ -522,7 +546,7 @@ impl SendWorkflow {
             record_id: prepared.record_id.clone(),
             source: prepared.source.clone(),
             destination: prepared.destination.clone(),
-            amount_nanograms: prepared.amount_nanograms.clone(),
+            amount_nanograms: prepared.amount_nanograms.to_string(),
             seqno: prepared.seqno,
             needs_state_init: prepared.needs_state_init,
             valid_until: prepared.valid_until,
@@ -555,12 +579,16 @@ impl SendWorkflow {
             .fresh_account
             .as_ref()
             .ok_or(SendWorkflowError::PreparedTransferMismatch)?;
+        let request_destination = TonAddress::from_str(&self.request.destination)
+            .map_err(|_| SendWorkflowError::PreparedTransferMismatch)?;
+        let request_amount = parse_amount_nanograms(&self.request.amount_nanograms)
+            .map_err(|_| SendWorkflowError::PreparedTransferMismatch)?;
 
         if prepared.operation_id != self.request.operation_id
             || prepared.record_id != self.record_id
             || prepared.source != self.source
-            || prepared.destination != self.request.destination
-            || prepared.amount_nanograms != self.request.amount_nanograms
+            || prepared.destination != request_destination
+            || prepared.amount_nanograms != request_amount
             || prepared.seqno != account.seqno
             || prepared.needs_state_init != account.needs_state_init()
             || prepared.signed_boc.is_empty()
@@ -589,12 +617,8 @@ impl SendWorkflow {
     }
 }
 
-fn validate_request(
-    record_id: &str,
-    source: &str,
-    request: &SendRequest,
-) -> Result<(), SendWorkflowError> {
-    if record_id.trim().is_empty() || source.trim().is_empty() {
+fn validate_request(record_id: &str, request: &SendRequest) -> Result<(), SendWorkflowError> {
+    if record_id.trim().is_empty() {
         return Err(SendWorkflowError::InvalidRequest(
             "wallet record identity is empty".to_owned(),
         ));
@@ -609,24 +633,14 @@ fn validate_request(
     if request.destination.trim().is_empty()
         || request.destination.len() > 128
         || request.destination.chars().any(char::is_whitespace)
+        || TonAddress::from_str(&request.destination).is_err()
     {
         return Err(SendWorkflowError::InvalidRequest(
             "destination is invalid".to_owned(),
         ));
     }
 
-    if request.amount_nanograms.is_empty()
-        || request.amount_nanograms == "0"
-        || request.amount_nanograms.starts_with('0')
-        || !request
-            .amount_nanograms
-            .bytes()
-            .all(|byte| byte.is_ascii_digit())
-    {
-        return Err(SendWorkflowError::InvalidRequest(
-            "amount must be positive canonical nanograms".to_owned(),
-        ));
-    }
+    parse_amount_nanograms(&request.amount_nanograms)?;
 
     if request.secret_ref.value.trim().is_empty() {
         return Err(SendWorkflowError::InvalidRequest(
@@ -657,18 +671,10 @@ fn decode_durable_record(record: &JournalRecord) -> Result<DurableSendRecord, Se
         Ok(boc) => boc.is_empty(),
         Err(_) => true,
     };
-
     if durable.operation_id.trim().is_empty()
         || durable.record_id.trim().is_empty()
-        || durable.source.trim().is_empty()
-        || durable.destination.trim().is_empty()
         || durable.message_hash.trim().is_empty()
-        || durable.amount_nanograms.is_empty()
-        || durable.amount_nanograms.bytes().all(|byte| byte == b'0')
-        || !durable
-            .amount_nanograms
-            .bytes()
-            .all(|byte| byte.is_ascii_digit())
+        || parse_positive_decimal(&durable.amount_nanograms).is_none()
         || durable.signed_boc_base64.is_empty()
         || boc_is_invalid
     {
@@ -678,6 +684,12 @@ fn decode_durable_record(record: &JournalRecord) -> Result<DurableSendRecord, Se
     }
 
     Ok(durable)
+}
+
+fn parse_amount_nanograms(value: &str) -> Result<BigUint, SendWorkflowError> {
+    parse_positive_decimal(value).ok_or_else(|| {
+        SendWorkflowError::InvalidRequest("amount must be positive canonical nanograms".to_owned())
+    })
 }
 
 fn next_journal_version(current: Option<u64>) -> Result<u64, SendWorkflowError> {

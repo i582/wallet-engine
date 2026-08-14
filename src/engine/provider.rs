@@ -8,11 +8,14 @@ use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_S
 use num_bigint::BigUint;
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::Value;
+use std::str::FromStr;
+use ton::ton_core::types::TonAddress;
 
+use crate::address::TonAddressExt as _;
 use crate::domain::bounded_diagnostic;
 use crate::{
     AccountSnapshot, AccountStatus, ActivityCursor, ActivityDirection, ActivityItem, DomainError,
-    ErrorCategory, ErrorCode, HttpHeader, RetryAdvice,
+    ErrorCategory, ErrorCode, HttpHeader, Network, RetryAdvice,
 };
 
 #[derive(Debug, Deserialize)]
@@ -96,7 +99,7 @@ pub(crate) struct ActivityRecord {
     /// The source of a received transfer or the destination of a sent transfer.
     /// The Toncenter parser rejects a nonzero transfer when this address is absent or invalid.
     /// The optional form permits future providers that cannot supply a counterparty.
-    pub counterparty: Option<String>,
+    pub counterparty: Option<TonAddress>,
 }
 
 impl ActivityRecord {
@@ -104,7 +107,7 @@ impl ActivityRecord {
     ///
     /// Swift and Kotlin have no shared arbitrary-precision integer ABI with
     /// Rust, so conversion to canonical decimal strings happens only here.
-    pub(crate) fn snapshot(&self) -> ActivityItem {
+    pub(crate) fn snapshot(&self, network: Network) -> ActivityItem {
         ActivityItem {
             id: self.id.clone(),
             transaction_hash: self.transaction_hash.clone(),
@@ -112,7 +115,10 @@ impl ActivityRecord {
             timestamp: self.timestamp,
             direction: self.direction,
             amount_nanograms: self.amount_nanograms.to_string(),
-            counterparty: self.counterparty.clone(),
+            counterparty: self
+                .counterparty
+                .as_ref()
+                .map(|address| address.to_user_friendly(network)),
         }
     }
 }
@@ -454,13 +460,15 @@ fn parse_unsigned_decimal(value: &Value, field: &str) -> Result<BigUint, DomainE
         .map_err(|_| invalid_response(format!("{field} is not an unsigned decimal")))
 }
 
-fn message_address(value: &Value, field: &str) -> Result<String, DomainError> {
-    value
+fn message_address(value: &Value, field: &str) -> Result<TonAddress, DomainError> {
+    let address = value
         .as_str()
         .or_else(|| value.get("account_address").and_then(Value::as_str))
         .filter(|address| !address.is_empty())
-        .map(str::to_owned)
-        .ok_or_else(|| invalid_response(format!("{field} is missing or invalid")))
+        .ok_or_else(|| invalid_response(format!("{field} is missing or invalid")))?;
+
+    TonAddress::from_str(address)
+        .map_err(|_| invalid_response(format!("{field} is missing or invalid")))
 }
 
 fn canonical_hash(value: &str) -> String {

@@ -5,7 +5,7 @@
 //! external-message hash in standard padded Base64.
 
 use std::str::FromStr;
-use std::{num::ParseIntError, str::Utf8Error};
+use std::str::Utf8Error;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -17,6 +17,7 @@ use ton::ton_core::traits::tlb::TLB;
 use ton::ton_core::types::TonAddress;
 use ton::ton_core::types::tlb_core::TLBCoins;
 
+use crate::bigint::parse_positive_decimal;
 use crate::{Network, SendRequest};
 
 use super::crypto::{WalletCryptoError, derive_v5r1_wallet};
@@ -31,7 +32,9 @@ pub(crate) enum TransferError {
     #[error("destination address is invalid")]
     InvalidDestination(#[source] TonCoreError),
     #[error("transfer amount is invalid")]
-    InvalidAmount(#[source] ParseIntError),
+    InvalidAmount,
+    #[error("transfer amount exceeds the TON coin representation")]
+    AmountOutOfRange,
     #[error("internal message construction failed")]
     InternalMessage(#[source] TonCoreError),
     #[error("external message signing failed")]
@@ -47,7 +50,7 @@ pub(crate) enum TransferError {
 pub(crate) fn prepare_transfer(
     mnemonic_bytes: &[u8],
     record_id: &str,
-    source: &str,
+    source: &TonAddress,
     network: Network,
     request: &SendRequest,
     account: &FreshSendAccount,
@@ -58,15 +61,12 @@ pub(crate) fn prepare_transfer(
     let destination =
         TonAddress::from_str(&request.destination).map_err(TransferError::InvalidDestination)?;
 
-    let amount_nanograms = request
-        .amount_nanograms
-        .parse::<u128>()
-        .map_err(TransferError::InvalidAmount)?;
+    let amount_nanograms =
+        parse_positive_decimal(&request.amount_nanograms).ok_or(TransferError::InvalidAmount)?;
+    let tlb_amount =
+        u128::try_from(amount_nanograms.clone()).map_err(|_| TransferError::AmountOutOfRange)?;
 
-    let mut info = CommonMsgInfoInt::new(
-        destination.to_msg_address(),
-        TLBCoins::new(amount_nanograms),
-    );
+    let mut info = CommonMsgInfoInt::new(destination.to_msg_address(), TLBCoins::new(tlb_amount));
     // Use one conservative policy until destination metadata is preserved by
     // the address type. This also lets uninitialized recipients accept funds.
     info.bounce = false;
@@ -96,9 +96,9 @@ pub(crate) fn prepare_transfer(
     Ok(PreparedTransfer {
         operation_id: request.operation_id.clone(),
         record_id: record_id.to_owned(),
-        source: source.to_owned(),
-        destination: request.destination.clone(),
-        amount_nanograms: request.amount_nanograms.clone(),
+        source: source.clone(),
+        destination,
+        amount_nanograms,
         seqno: account.seqno,
         needs_state_init: account.needs_state_init(),
         valid_until,

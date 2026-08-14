@@ -129,7 +129,12 @@ impl State {
 
     /// Publishes the internal numeric activity model through portable DTOs.
     pub(super) fn sync_activity_snapshot(&mut self) {
-        self.snapshot.activity = self.activity.iter().map(ActivityRecord::snapshot).collect();
+        let network = self.config.network;
+        self.snapshot.activity = self
+            .activity
+            .iter()
+            .map(|record| record.snapshot(network))
+            .collect();
         self.snapshot.activity_cursor = self
             .activity_cursor
             .as_ref()

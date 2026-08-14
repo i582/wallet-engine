@@ -7,9 +7,12 @@ mod crypto;
 pub(crate) mod send;
 pub(crate) mod transfer;
 
+use std::str::FromStr;
 use std::sync::Arc;
+use ton::ton_core::types::TonAddress;
 
 use self::crypto::{SensitiveMnemonic, derive_v5r1_wallet, generate_mnemonic};
+use crate::address::TonAddressExt as _;
 use crate::domain::{
     Network, ProtectedSecretHostError, ProtectedSecretHostErrorKind, ProtectedSecretRead,
     ProtectedSecretRef, ProtectedSecretStore, SecretAccessReason, bounded_diagnostic,
@@ -213,8 +216,10 @@ impl WalletLifecycle {
         let secret = SensitiveMnemonic::from_bytes(bytes)
             .map_err(|_| WalletLifecycleError::InvalidRecoveryPhrase)?;
         let actual = derive_address(descriptor.network, &secret)?;
+        let expected = TonAddress::from_str(&descriptor.address)
+            .map_err(|_| WalletLifecycleError::InvalidRecordId)?;
 
-        if actual != descriptor.address {
+        if actual != expected {
             return Err(WalletLifecycleError::SecretWalletMismatch);
         }
 
@@ -266,7 +271,7 @@ fn derive_descriptor(
 
     Ok(WalletDescriptor {
         record_id: record_id.to_owned(),
-        address: derive_address(network, secret)?,
+        address: derive_address(network, secret)?.to_user_friendly(network),
         network,
         secret_ref,
     })
@@ -275,7 +280,7 @@ fn derive_descriptor(
 fn derive_address(
     network: Network,
     secret: &SensitiveMnemonic,
-) -> Result<String, WalletLifecycleError> {
+) -> Result<TonAddress, WalletLifecycleError> {
     let phrase = secret
         .as_str()
         .map_err(|_| WalletLifecycleError::InvalidRecoveryPhrase)?;
@@ -283,9 +288,7 @@ fn derive_address(
     let wallet = derive_v5r1_wallet(phrase, network)
         .map_err(|_| WalletLifecycleError::AddressDerivationFailed)?;
 
-    Ok(wallet
-        .address
-        .to_base64(network == Network::Mainnet, false, true))
+    Ok(wallet.address)
 }
 
 fn recovery_phrase(secret: &SensitiveMnemonic) -> Result<RecoveryPhrase, WalletLifecycleError> {
@@ -306,7 +309,7 @@ fn validate_descriptor(descriptor: &WalletDescriptor) -> Result<(), WalletLifecy
     validate_record_id(&descriptor.record_id)?;
 
     if descriptor.secret_ref != secret_ref_for(&descriptor.record_id)
-        || descriptor.address.is_empty()
+        || TonAddress::from_str(&descriptor.address).is_err()
     {
         return Err(WalletLifecycleError::InvalidRecordId);
     }
