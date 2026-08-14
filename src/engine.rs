@@ -1,3 +1,9 @@
+//! Wallet client orchestration and callback interfaces for the host application.
+//!
+//! This module constructs provider calls, coordinates refresh and send work,
+//! and publishes immutable snapshots. It releases the state lock before every
+//! awaited host callback.
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -27,33 +33,69 @@ const PAGE_SIZE: u32 = 10;
 const MAX_RESPONSE_BODY_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_RESPONSE_HEADER_BYTES: u64 = 64 * 1024;
 
+/// Executes bounded HTTP work for the engine.
+///
+/// The host must enforce each response limit while it reads the response.
+/// It must reject redirects and return the observed URL in `final_url`.
 #[uniffi::export(foreign)]
 #[async_trait]
 pub trait WalletHttpHost: Send + Sync {
+    /// Executes one complete HTTP call and returns a bounded response.
+    ///
+    /// If `credential` is present, resolve it locally. Add it only when the
+    /// request origin exactly equals `credential_origin`.
     async fn execute_http(&self, call: HttpCall) -> Result<HttpResponse, HttpHostError>;
+
+    /// Requests cancellation of the call with `call_id`.
+    ///
+    /// This callback must be idempotent. It can run before `execute_http`
+    /// registers the call, so the host must remember an early cancellation.
     async fn cancel_http(&self, call_id: HttpCallId);
 }
 
+/// Supplies time, protected storage, and durable journal storage.
+///
+/// Callback implementations must not call the same client operation
+/// recursively. The engine does not hold its wallet-state lock during calls.
 #[uniffi::export(foreign)]
 #[async_trait]
 pub trait WalletPlatformHost: Send + Sync {
+    /// Returns the current Unix timestamp in seconds.
     async fn now(&self) -> u64;
+
+    /// Reads protected secret bytes after the required user authorization.
+    ///
+    /// The host must not log the bytes. Return a classified host error when
+    /// authorization fails or the user cancels the prompt.
     async fn read_protected_secret(
         &self,
         request: ProtectedSecretRead,
     ) -> Result<Vec<u8>, ProtectedSecretHostError>;
+
+    /// Stores secret bytes under the supplied reference.
+    ///
+    /// The host must apply the `require_user_presence` policy to later reads.
     async fn store_protected_secret(
         &self,
         request: ProtectedSecretStore,
     ) -> Result<(), ProtectedSecretHostError>;
+
+    /// Deletes the protected secret for `secret_ref`.
     async fn delete_protected_secret(
         &self,
         secret_ref: ProtectedSecretRef,
     ) -> Result<(), ProtectedSecretHostError>;
+
+    /// Loads the current opaque journal record for `key`.
     async fn load_journal(
         &self,
         key: JournalKey,
     ) -> Result<Option<JournalRecord>, JournalHostError>;
+
+    /// Atomically replaces a journal record when its version matches.
+    ///
+    /// The host must compare and replace in one durable transaction. It must
+    /// return the current record when the expected version does not match.
     async fn compare_exchange_journal(
         &self,
         mutation: JournalCompareExchange,
@@ -130,6 +172,10 @@ impl State {
 }
 
 #[derive(uniffi::Object)]
+/// Coordinates state and operations for one wallet record.
+///
+/// The client owns no transport or platform resources. Call [`Self::shutdown`]
+/// before the host releases callback objects or application services.
 pub struct WalletClient {
     http_host: Arc<dyn WalletHttpHost>,
     platform_host: Arc<dyn WalletPlatformHost>,
@@ -139,6 +185,9 @@ pub struct WalletClient {
 #[uniffi::export]
 impl WalletClient {
     #[uniffi::constructor]
+    /// Creates a client after validation of identifiers, URLs, and credential origin.
+    ///
+    /// The initial snapshot has revision zero and idle resource states.
     pub fn new(
         config: WalletClientConfig,
         http_host: Arc<dyn WalletHttpHost>,
@@ -167,10 +216,18 @@ impl WalletClient {
         }))
     }
 
+    /// Returns a clone of the current immutable snapshot.
+    ///
+    /// A returned snapshot never changes. Read a newer snapshot to observe a
+    /// higher revision.
     pub fn snapshot(&self) -> Result<WalletSnapshot, WalletClientError> {
         Ok(self.lock()?.snapshot.clone())
     }
 
+    /// Waits until the snapshot revision is greater than `after_revision`.
+    ///
+    /// This method returns immediately when a newer revision already exists.
+    /// Shutdown releases all waiters and returns [`WalletClientError::Shutdown`].
     pub async fn wait_for_change(
         &self,
         after_revision: u64,
@@ -195,6 +252,11 @@ impl WalletClient {
         Ok(state.snapshot.clone())
     }
 
+    /// Refreshes account and first-page activity data concurrently.
+    ///
+    /// Each resource publishes independently. One request can succeed while
+    /// the other fails, which produces [`WalletOperationOutcome::PartiallyCompleted`].
+    /// A newer refresh supersedes the older refresh and cancels its host calls.
     pub async fn refresh(&self) -> Result<WalletUpdate, WalletClientError> {
         let (generation, calls, previous_calls) = {
             let mut state = self.lock()?;
@@ -261,6 +323,9 @@ impl WalletClient {
         Ok(update(outcome, 0, &state))
     }
 
+    /// Cancels the active refresh and requests cancellation of its HTTP calls.
+    ///
+    /// This method has no effect when no refresh is active.
     pub async fn cancel_refresh(&self) -> Result<(), WalletClientError> {
         let calls = {
             let mut state = self.lock()?;
@@ -282,6 +347,11 @@ impl WalletClient {
         Ok(())
     }
 
+    /// Loads the next older activity page and merges unique items by item ID.
+    ///
+    /// The method returns `Skipped` during refresh, during another page load,
+    /// or when no advancing cursor exists. A page must move to an older logical
+    /// time. Otherwise pagination stops and adds no items.
     pub async fn load_more_activity(&self) -> Result<WalletUpdate, WalletClientError> {
         let (generation, call) = {
             let mut state = self.lock()?;
@@ -339,6 +409,9 @@ impl WalletClient {
         Ok(update(outcome, added, &state))
     }
 
+    /// Cancels the active activity page load.
+    ///
+    /// This method has no effect when no page load is active.
     pub async fn cancel_load_more_activity(&self) -> Result<(), WalletClientError> {
         let call = {
             let mut state = self.lock()?;
@@ -355,9 +428,18 @@ impl WalletClient {
         Ok(())
     }
 
-    /// Fetches fresh wallet state, authorizes protected-secret access, signs a
-    /// V5R1 transfer inside Rust, durably records the exact BOC, and submits
-    /// that BOC. Streaming confirmation is deliberately outside .
+    /// Signs, records, and submits one V5R1 transfer.
+    ///
+    /// The engine first loads fresh account state. It then authorizes mnemonic
+    /// access and signs inside Rust. Before submission, it stores the exact BOC
+    /// with compare-and-swap.
+    ///
+    /// A transport error after submission produces `SubmissionUnknown`. Do not
+    /// create a replacement transfer for the same funds. This crate does not
+    /// reconcile the result or stream chain confirmation.
+    ///
+    /// Some workflow failures return [`WalletClientError::StateUnavailable`].
+    /// Read `snapshot().send.error_message` for the sanitized workflow detail.
     pub async fn send(&self, request: SendRequest) -> Result<SendResult, WalletClientError> {
         validate_send(&request)?;
         let (
@@ -644,6 +726,11 @@ impl WalletClient {
         })
     }
 
+    /// Cancels the active send before its durable commit boundary.
+    ///
+    /// After journal persistence starts, this method returns
+    /// [`WalletClientError::SendCancellationTooLate`]. The caller must let the
+    /// send finish because the signed BOC can already be durable or submitted.
     pub async fn cancel_send(&self) -> Result<(), WalletClientError> {
         let calls = {
             let mut state = self.lock()?;
@@ -669,6 +756,11 @@ impl WalletClient {
         Ok(())
     }
 
+    /// Stops new work, cancels active host calls, and releases snapshot waiters.
+    ///
+    /// The operation is idempotent. It returns `SendCancellationTooLate` while
+    /// a send is past its durable commit boundary. Call it again after that
+    /// send reaches a terminal phase.
     pub async fn shutdown(&self) -> Result<(), WalletClientError> {
         let (calls, waiters) = {
             let mut state = self.lock()?;

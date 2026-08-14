@@ -1,3 +1,8 @@
+//! Toncenter response parsing and domain-error normalization.
+//!
+//! The wallet client uses this private module to convert provider JSON into
+//! stable account and activity records. It also sanitizes external diagnostics.
+
 use std::cmp::Ordering;
 
 use base64::Engine as _;

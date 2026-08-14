@@ -1,3 +1,8 @@
+//! TON mnemonic generation and V5R1 wallet derivation.
+//!
+//! Lifecycle and signing code share this private module so both paths derive
+//! the same key pair, contract wallet ID, and address for a selected network.
+
 use ton::ton_wallet::{Mnemonic, TonWallet, WORDLIST_EN_SET, WalletVersion};
 
 use crate::Network;
@@ -50,6 +55,9 @@ pub(crate) fn generate_mnemonic() -> Result<String, WalletCryptoError> {
 }
 
 /// Derives the V5R1 wallet contract used by lifecycle and transaction signing.
+///
+/// The contract `wallet_id` combines the TON `network_global_id` with the V5R1
+/// client context. Mainnet and testnet therefore derive different contracts.
 pub(crate) fn derive_v5r1_wallet(
     mnemonic: &str,
     network: Network,

@@ -1,3 +1,9 @@
+//! The private reducer for durable transfer submission.
+//!
+//! The reducer produces directives for the wallet client. It never performs
+//! callbacks itself. Its journal record prevents a second signature after an
+//! ambiguous submission result.
+
 #![allow(dead_code)]
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -58,7 +64,7 @@ impl PreparedTransfer {
 }
 
 /// Full internal state. Public `SendPhase` intentionally remains a compact
-/// UI projection while  is being integrated.
+/// UI projection while the engine coordinates host work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SendStage {
@@ -161,8 +167,8 @@ struct DurableSendRecord {
     diagnostic: Option<String>,
 }
 
-/// Pure send reducer. All callbacks are invoked by the owning coordinator
-/// between calls to this type; none are invoked while the reducer is borrowed.
+/// Pure send reducer. The owning coordinator invokes callbacks between reducer
+/// calls. It invokes no callback while the reducer is borrowed.
 #[derive(Debug, Clone)]
 pub(crate) struct SendWorkflow {
     record_id: String,
@@ -218,9 +224,9 @@ impl SendWorkflow {
 
     /// Seeds the compare-and-swap version of the wallet-level send slot.
     ///
-    /// Only an absent slot or a safely terminal prior operation may be
+    /// Only an absent slot or a safely terminal prior operation can be
     /// replaced. In particular, `SubmissionUnknown` blocks a new signature:
-    /// the persisted BOC may already have reached the network.
+    /// the persisted BOC can already be on the network.
     pub(crate) fn journal_loaded(
         &mut self,
         record: Option<JournalRecord>,
@@ -286,9 +292,10 @@ impl SendWorkflow {
         }))
     }
 
-    /// Marks successful host authorization. The secret itself is intentionally
-    /// not accepted or retained by the reducer; the coordinator passes it
-    /// directly to the Rust signer and zeroizes its temporary buffer.
+    /// Marks successful host authorization.
+    ///
+    /// The reducer does not accept or retain the secret. The coordinator passes
+    /// it directly to the Rust signer and zeroizes its temporary buffer.
     pub(crate) fn authorization_succeeded(&mut self) -> Result<SendDirective, SendWorkflowError> {
         self.expect(SendStage::Authorizing, "authorization_succeeded")?;
         let account = self
@@ -364,7 +371,7 @@ impl SendWorkflow {
     }
 
     /// A timeout or connection loss after submission is not a definite
-    /// failure: the provider may have accepted the exact persisted BOC.
+    /// failure. The provider can have accepted the exact persisted BOC.
     /// With reconciliation intentionally absent, this state is a terminal
     /// pending result and never signs a replacement.
     pub(crate) fn submission_unknown(
