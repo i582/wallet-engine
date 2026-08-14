@@ -21,6 +21,7 @@ pub struct ProviderConfigV3 {
 }
 
 impl ProviderConfigV3 {
+    #[must_use]
     pub fn standard(network: NetworkV3, credential: Option<CredentialRefV3>) -> Self {
         let toncenter_base_url = match network {
             NetworkV3::Mainnet => "https://toncenter.com/api/v2",
@@ -172,28 +173,28 @@ pub struct ResourceStateV3 {
 }
 
 impl ResourceStateV3 {
-    pub(crate) fn idle() -> Self {
+    pub(crate) const fn idle() -> Self {
         Self {
             phase: ResourcePhaseV3::Idle,
             error: None,
         }
     }
 
-    pub(crate) fn loading() -> Self {
+    pub(crate) const fn loading() -> Self {
         Self {
             phase: ResourcePhaseV3::Loading,
             error: None,
         }
     }
 
-    pub(crate) fn ready() -> Self {
+    pub(crate) const fn ready() -> Self {
         Self {
             phase: ResourcePhaseV3::Ready,
             error: None,
         }
     }
 
-    pub(crate) fn failed(error: DomainErrorV3) -> Self {
+    pub(crate) const fn failed(error: DomainErrorV3) -> Self {
         Self {
             phase: ResourcePhaseV3::Failed,
             error: Some(error),

@@ -1,0 +1,28 @@
+# Rust build artifacts
+target/
+apple-bindgen/target/
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.mnemonic
+
+# Code intelligence and local tooling
+.codegraph/
+.codebase-memory/
+.mcp.json
+
+# Coverage and reports
+coverage/
+lcov.info

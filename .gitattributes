@@ -1,1 +1,7 @@
+* text=auto eol=lf
+
 /vendor/ton/** linguist-vendored
+
+*.code linguist-generated text=auto eol=lf
+*.h linguist-generated text=auto eol=lf
+*.modulemap linguist-generated text=auto eol=lf

@@ -147,8 +147,8 @@ pub(crate) fn parse_activity(body: &[u8], page_size: u32) -> Result<ActivityPage
         {
             items.push(item);
         }
-        let mut outgoing = ordered_out_messages(&transaction)?;
-        for (index, (_, _, _, message)) in outgoing.drain(..).enumerate() {
+        let outgoing = ordered_out_messages(&transaction)?;
+        for (index, (_, _, _, message)) in outgoing.into_iter().enumerate() {
             if let Some(item) =
                 activity_from_message(&transaction, message, ActivityDirectionV3::Sent, index)?
             {

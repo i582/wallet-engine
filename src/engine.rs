@@ -13,7 +13,15 @@ use crate::provider::{
 };
 use crate::send::{FreshSendAccountV3, SendDirectiveV3, SendWorkflowV3};
 use crate::signer::{derive_source, prepare_transfer, same_address};
-use crate::*;
+use crate::{
+    AccountSnapshotV3, AccountStatusV3, ActivityCursorV3, DomainErrorV3, ErrorCategoryV3,
+    ErrorCodeV3, HttpCall, HttpCallIdV3, HttpHeaderV3, HttpHostError, HttpHostErrorKind,
+    HttpMethodV3, HttpResponse, JournalCompareExchangeResultV3, JournalCompareExchangeV3,
+    JournalHostErrorV3, JournalKeyV3, JournalRecordV3, ProtectedSecretHostErrorV3,
+    ProtectedSecretReadV3, ProtectedSecretRefV3, ProtectedSecretStoreV3, ResourcePhaseV3,
+    ResourceStateV3, RetryAdviceV3, SendPhaseV3, SendRequestV3, SendResultV3, WalletClientConfigV3,
+    WalletClientErrorV3, WalletOperationOutcomeV3, WalletSnapshotV3, WalletUpdateV3,
+};
 
 const PAGE_SIZE: u32 = 10;
 const MAX_RESPONSE_BODY_BYTES: u64 = 4 * 1024 * 1024;
@@ -859,7 +867,7 @@ enum RefreshValue {
     Rate(Result<f64, DomainErrorV3>),
 }
 
-fn ensure_running(state: &State) -> Result<(), WalletClientErrorV3> {
+const fn ensure_running(state: &State) -> Result<(), WalletClientErrorV3> {
     if state.shutdown {
         Err(WalletClientErrorV3::Shutdown)
     } else {
@@ -870,7 +878,7 @@ fn ensure_running(state: &State) -> Result<(), WalletClientErrorV3> {
 struct SensitiveBytesV3(Vec<u8>);
 
 impl SensitiveBytesV3 {
-    fn new(bytes: Vec<u8>) -> Self {
+    const fn new(bytes: Vec<u8>) -> Self {
         Self(bytes)
     }
 
@@ -1165,8 +1173,7 @@ fn json_error_message(value: &Value) -> String {
         .or_else(|| value.get("error").and_then(Value::as_str))
         .or_else(|| value.get("description").and_then(Value::as_str))
         .or_else(|| value.as_str())
-        .map(str::to_owned)
-        .unwrap_or_else(|| value.to_string());
+        .map_or_else(|| value.to_string(), str::to_owned);
     sanitize_diagnostic(&message)
 }
 
@@ -1195,8 +1202,10 @@ fn toncenter_call(
     query: &[(&str, &str)],
 ) -> Result<HttpCall, WalletClientErrorV3> {
     let mut call = public_call(id, &config.providers.toncenter_base_url, path, query)?;
-    call.credential = config.providers.toncenter_credential.clone();
-    call.credential_origin = config.providers.toncenter_credential_origin.clone();
+    call.credential
+        .clone_from(&config.providers.toncenter_credential);
+    call.credential_origin
+        .clone_from(&config.providers.toncenter_credential_origin);
     Ok(call)
 }
 

@@ -78,7 +78,7 @@ pub(crate) enum SendStageV3 {
 }
 
 impl SendStageV3 {
-    fn public_phase(self) -> SendPhaseV3 {
+    const fn public_phase(self) -> SendPhaseV3 {
         match self {
             Self::Validating | Self::LoadingJournal | Self::FetchingFreshAccount => {
                 SendPhaseV3::Validating
@@ -95,7 +95,7 @@ impl SendStageV3 {
         }
     }
 
-    fn is_terminal(self) -> bool {
+    const fn is_terminal(self) -> bool {
         matches!(
             self,
             Self::SubmissionUnknown | Self::Submitted | Self::Failed | Self::Cancelled
@@ -179,7 +179,7 @@ pub(crate) struct SendWorkflowV3 {
 }
 
 impl SendWorkflowV3 {
-    pub(crate) fn new(wallet_id: String, source: String, request: SendRequestV3) -> Self {
+    pub(crate) const fn new(wallet_id: String, source: String, request: SendRequestV3) -> Self {
         Self {
             wallet_id,
             source,
@@ -198,7 +198,7 @@ impl SendWorkflowV3 {
         &self.request.operation_id
     }
 
-    pub(crate) fn stage(&self) -> SendStageV3 {
+    pub(crate) const fn stage(&self) -> SendStageV3 {
         self.stage
     }
 
