@@ -81,6 +81,16 @@ Except for the checked-in C ABI header, this repository does not track generated
 bindings. Generate them from the same revision that you use to build the Rust
 library.
 
+## Rust
+
+For a native Rust integration, see the
+[Ratatui wallet example](examples/tui/README.md). It implements both host
+interfaces directly in Rust and provides create, import, refresh, history,
+send, persistence, and delete flows.
+
+This repository does not track generated bindings. Generate them from the same
+revision that you use to build the Rust library.
+
 ## Integration model
 
 Wallet Engine owns the wallet state machine. Your application implements two

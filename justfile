@@ -125,6 +125,24 @@ example-c-build: bindings-c build-c
 example-c-run: example-c-build
     ./target/c-example/wallet_engine_c_example
 
+example-tui-run:
+    cargo run --locked --manifest-path examples/tui/Cargo.toml
+
+example-tui-fmt:
+    cargo fmt --manifest-path examples/tui/Cargo.toml
+
+example-tui-fmt-check:
+    cargo fmt --manifest-path examples/tui/Cargo.toml -- --check
+
+example-tui-check:
+    cargo check --locked --manifest-path examples/tui/Cargo.toml --all-targets
+
+example-tui-clippy:
+    cargo clippy --locked --manifest-path examples/tui/Cargo.toml --all-targets -- -D warnings
+
+example-tui-test:
+    cargo test --locked --manifest-path examples/tui/Cargo.toml
+
 build-android abi="all":
     cargo xtask android --abi {{abi}}
 
@@ -134,7 +152,7 @@ check-deny:
 check-deps:
     cargo shear --deny-warnings
 
-ci: fmt-check check-build clippy test check-wasm check-ios-simulator bindings-swift-check bindings-kotlin-check bindings-wasm-check web-fmt-check web-lint web-build web-test example-web-fmt-check example-web-lint example-web-build example-web-test
+ci: fmt-check check-build clippy test check-wasm check-ios-simulator bindings-swift-check bindings-kotlin-check bindings-wasm-check web-fmt-check web-lint web-build web-test example-web-fmt-check example-web-lint example-web-build example-web-test example-tui-fmt-check example-tui-check example-tui-clippy example-tui-test
 
 check: ci check-deny
 
