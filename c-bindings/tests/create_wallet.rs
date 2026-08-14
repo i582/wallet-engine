@@ -13,6 +13,11 @@ use std::{
 use wallet_engine_c::{
     WALLET_ENGINE_NETWORK_MAINNET, WALLET_ENGINE_NETWORK_TESTNET,
     WALLET_ENGINE_PLATFORM_HOST_CALLBACKS_SIZE,
+    WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_AUTHENTICATION_FAILED,
+    WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_CANCELLED,
+    WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_NOT_FOUND,
+    WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_OTHER,
+    WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_POLICY_VIOLATION,
     WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_UNAVAILABLE, WalletEngineAbiStatus,
     WalletEngineCompletionId, WalletEngineCreateWalletRequest, WalletEngineCreatedWalletView,
     WalletEngineLifecycle, WalletEngineNetwork, WalletEnginePlatformHostCallbacks,
@@ -59,17 +64,29 @@ struct TestContext {
     releases: AtomicUsize,
     stores: AtomicUsize,
     completion_calls: AtomicUsize,
+    host_error_kind: u32,
     stored_secret: Mutex<Option<StoredSecret>>,
     completion_sender: Mutex<Option<Sender<CompletionResult>>>,
 }
 
 impl TestContext {
     const fn new(completion_sender: Sender<CompletionResult>) -> Self {
+        Self::with_host_error_kind(
+            completion_sender,
+            WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_UNAVAILABLE,
+        )
+    }
+
+    const fn with_host_error_kind(
+        completion_sender: Sender<CompletionResult>,
+        host_error_kind: u32,
+    ) -> Self {
         Self {
             retains: AtomicUsize::new(0),
             releases: AtomicUsize::new(0),
             stores: AtomicUsize::new(0),
             completion_calls: AtomicUsize::new(0),
+            host_error_kind,
             stored_secret: Mutex::new(None),
             completion_sender: Mutex::new(Some(completion_sender)),
         }
@@ -155,9 +172,11 @@ unsafe extern "C" fn store_error(
 ) {
     // SAFETY: The adapter supplies a callback-scoped request.
     unsafe { record_store_request(context, request) };
+    // SAFETY: The callback table supplies a live `TestContext` pointer.
+    let kind = unsafe { test_context(context) }.host_error_kind;
     let error = WalletEngineProtectedSecretHostErrorView {
-        kind: WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_UNAVAILABLE,
-        diagnostic: WalletEngineStringView::from("keychain unavailable"),
+        kind,
+        diagnostic: WalletEngineStringView::from("protected storage failure"),
     };
     // SAFETY: `error` and its diagnostic remain live for this call.
     let _ = unsafe { wallet_engine_store_protected_secret_complete(completion_id, &error) };
@@ -483,44 +502,51 @@ fn created_wallet_is_delivered_after_asynchronous_host_completion() {
 
 #[test]
 fn protected_storage_failure_is_reported_as_a_domain_error() {
-    let (sender, receiver) = channel();
-    let context = TestContext::new(sender);
-    let callbacks = callback_table(&context, Some(store_error));
-    // SAFETY: The callback table remains live through operation completion.
-    let lifecycle = unsafe { lifecycle(&callbacks) };
-    let request = WalletEngineCreateWalletRequest {
-        record_id: WalletEngineStringView::from("wallet-1"),
-        network: WALLET_ENGINE_NETWORK_TESTNET,
-    };
+    for host_error_kind in [
+        WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_NOT_FOUND,
+        WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_AUTHENTICATION_FAILED,
+        WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_CANCELLED,
+        WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_UNAVAILABLE,
+        WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_POLICY_VIOLATION,
+        WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_OTHER,
+    ] {
+        let (sender, receiver) = channel();
+        let context = TestContext::with_host_error_kind(sender, host_error_kind);
+        let callbacks = callback_table(&context, Some(store_error));
+        // SAFETY: The callback table remains live through operation completion.
+        let lifecycle = unsafe { lifecycle(&callbacks) };
+        let request = WalletEngineCreateWalletRequest {
+            record_id: WalletEngineStringView::from("wallet-1"),
+            network: WALLET_ENGINE_NETWORK_TESTNET,
+        };
 
-    // SAFETY: All pointers remain live for the start call and completion.
-    let status = unsafe {
-        wallet_engine_lifecycle_create_wallet(
-            lifecycle,
-            &request,
-            std::ptr::from_ref(&context).cast_mut().cast(),
-            Some(create_wallet_complete),
-        )
-    };
-    assert_eq!(status, WalletEngineAbiStatus::Ok);
-    // SAFETY: The operation owns an internal Arc after the successful start.
-    unsafe { wallet_engine_lifecycle_free(lifecycle) };
+        // SAFETY: All pointers remain live for the start call and completion.
+        let status = unsafe {
+            wallet_engine_lifecycle_create_wallet(
+                lifecycle,
+                &request,
+                std::ptr::from_ref(&context).cast_mut().cast(),
+                Some(create_wallet_complete),
+            )
+        };
+        assert_eq!(status, WalletEngineAbiStatus::Ok);
+        // SAFETY: The operation owns an internal Arc after the successful start.
+        unsafe { wallet_engine_lifecycle_free(lifecycle) };
 
-    assert_eq!(
-        receive(&receiver),
-        CompletionResult {
-            abi_status: WalletEngineAbiStatus::Ok,
-            wallet: None,
-            error: Some(LifecycleError {
-                code: WalletEngineWalletLifecycleErrorCode::ProtectedSecretHost,
-                protected_secret_host_error_kind: Some(
-                    WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_UNAVAILABLE,
-                ),
-                diagnostic: "keychain unavailable".to_owned(),
-            }),
-            valid_pointer_shape: true,
-        }
-    );
-    wait_for_release(&context);
-    assert_eq!(context.completion_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            receive(&receiver),
+            CompletionResult {
+                abi_status: WalletEngineAbiStatus::Ok,
+                wallet: None,
+                error: Some(LifecycleError {
+                    code: WalletEngineWalletLifecycleErrorCode::ProtectedSecretHost,
+                    protected_secret_host_error_kind: Some(host_error_kind),
+                    diagnostic: "protected storage failure".to_owned(),
+                }),
+                valid_pointer_shape: true,
+            }
+        );
+        wait_for_release(&context);
+        assert_eq!(context.completion_calls.load(Ordering::Relaxed), 1);
+    }
 }
