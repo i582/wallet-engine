@@ -35,7 +35,7 @@ impl FreshSendAccount {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PreparedTransfer {
     pub operation_id: String,
-    pub wallet_id: String,
+    pub record_id: String,
     pub source: String,
     pub destination: String,
     pub amount_nanograms: String,
@@ -147,7 +147,7 @@ pub(crate) enum SendWorkflowError {
 struct DurableSendRecord {
     schema_version: u32,
     operation_id: String,
-    wallet_id: String,
+    record_id: String,
     source: String,
     destination: String,
     amount_nanograms: String,
@@ -165,7 +165,7 @@ struct DurableSendRecord {
 /// between calls to this type; none are invoked while the reducer is borrowed.
 #[derive(Debug, Clone)]
 pub(crate) struct SendWorkflow {
-    wallet_id: String,
+    record_id: String,
     source: String,
     request: SendRequest,
     stage: SendStage,
@@ -178,9 +178,9 @@ pub(crate) struct SendWorkflow {
 }
 
 impl SendWorkflow {
-    pub(crate) const fn new(wallet_id: String, source: String, request: SendRequest) -> Self {
+    pub(crate) const fn new(record_id: String, source: String, request: SendRequest) -> Self {
         Self {
-            wallet_id,
+            record_id,
             source,
             request,
             stage: SendStage::Validating,
@@ -211,7 +211,7 @@ impl SendWorkflow {
 
     pub(crate) fn begin(&mut self) -> Result<SendDirective, SendWorkflowError> {
         self.expect(SendStage::Validating, "begin")?;
-        validate_request(&self.wallet_id, &self.source, &self.request)?;
+        validate_request(&self.record_id, &self.source, &self.request)?;
         self.stage = SendStage::LoadingJournal;
         Ok(SendDirective::LoadJournal(self.journal_key()))
     }
@@ -231,7 +231,7 @@ impl SendWorkflow {
             None => None,
             Some(record) => {
                 let durable = decode_durable_record(&record)?;
-                if durable.wallet_id != self.wallet_id || durable.source != self.source {
+                if durable.record_id != self.record_id || durable.source != self.source {
                     return Err(SendWorkflowError::InvalidJournal(
                         "record belongs to another wallet".to_owned(),
                     ));
@@ -416,7 +416,7 @@ impl SendWorkflow {
         Ok(DurableSendRecord {
             schema_version: JOURNAL_SCHEMA_VERSION,
             operation_id: prepared.operation_id.clone(),
-            wallet_id: prepared.wallet_id.clone(),
+            record_id: prepared.record_id.clone(),
             source: prepared.source.clone(),
             destination: prepared.destination.clone(),
             amount_nanograms: prepared.amount_nanograms.clone(),
@@ -433,7 +433,7 @@ impl SendWorkflow {
 
     fn journal_key(&self) -> JournalKey {
         JournalKey {
-            wallet_id: self.wallet_id.clone(),
+            record_id: self.record_id.clone(),
             slot: SEND_SLOT.to_owned(),
         }
     }
@@ -453,7 +453,7 @@ impl SendWorkflow {
             .as_ref()
             .ok_or(SendWorkflowError::PreparedTransferMismatch)?;
         if prepared.operation_id != self.request.operation_id
-            || prepared.wallet_id != self.wallet_id
+            || prepared.record_id != self.record_id
             || prepared.source != self.source
             || prepared.destination != self.request.destination
             || prepared.amount_nanograms != self.request.amount_nanograms
@@ -485,13 +485,13 @@ impl SendWorkflow {
 }
 
 fn validate_request(
-    wallet_id: &str,
+    record_id: &str,
     source: &str,
     request: &SendRequest,
 ) -> Result<(), SendWorkflowError> {
-    if wallet_id.trim().is_empty() || source.trim().is_empty() {
+    if record_id.trim().is_empty() || source.trim().is_empty() {
         return Err(SendWorkflowError::InvalidRequest(
-            "wallet identity is empty".to_owned(),
+            "wallet record identity is empty".to_owned(),
         ));
     }
     if request.operation_id.trim().is_empty() || request.operation_id.len() > 128 {
@@ -545,7 +545,7 @@ fn decode_durable_record(record: &JournalRecord) -> Result<DurableSendRecord, Se
         Err(_) => true,
     };
     if durable.operation_id.trim().is_empty()
-        || durable.wallet_id.trim().is_empty()
+        || durable.record_id.trim().is_empty()
         || durable.source.trim().is_empty()
         || durable.destination.trim().is_empty()
         || durable.message_hash.trim().is_empty()

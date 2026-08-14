@@ -59,7 +59,7 @@ export class IndexedDbJournalStore implements JournalStoreHost {
 }
 
 function storageKey(key: JournalKey): string {
-  return `${key.walletId}\u0000${key.slot}`
+  return `${key.recordId}\u0000${key.slot}`
 }
 
 function cloneRecord(record: JournalRecord): JournalRecord {

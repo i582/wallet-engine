@@ -398,7 +398,7 @@ impl WalletClient {
                 value: state.allocate_id()?,
             };
             let mut workflow = SendWorkflow::new(
-                config.wallet_id.clone(),
+                config.record_id.clone(),
                 config.address.clone(),
                 request.clone(),
             );
@@ -527,7 +527,7 @@ impl WalletClient {
         };
         let prepared = prepare_transfer(
             secret.as_slice(),
-            &config.wallet_id,
+            &config.record_id,
             &source,
             config.network,
             &request,
@@ -1216,7 +1216,7 @@ fn provider_url(
 }
 
 fn validate_config(config: &WalletClientConfig) -> Result<(), WalletClientError> {
-    if config.wallet_id.trim().is_empty() || config.address.trim().is_empty() {
+    if config.record_id.trim().is_empty() || config.address.trim().is_empty() {
         return Err(WalletClientError::InvalidConfig);
     }
     validate_https_url(&config.providers.toncenter_base_url)?;

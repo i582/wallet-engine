@@ -11,7 +11,7 @@ export interface ProviderConfig {
 }
 
 export interface WalletClientConfig {
-  readonly walletId: string
+  readonly recordId: string
   readonly address: string
   readonly network: Network
   readonly providers: ProviderConfig
@@ -106,7 +106,7 @@ export interface SendSnapshot {
 
 export interface WalletSnapshot {
   readonly revision: number
-  readonly walletId: string
+  readonly recordId: string
   readonly address: string
   readonly network: Network
   readonly account?: AccountSnapshot
@@ -148,7 +148,7 @@ export interface ProtectedSecretStore {
 }
 
 export interface JournalKey {
-  readonly walletId: string
+  readonly recordId: string
   readonly slot: string
 }
 
@@ -182,14 +182,14 @@ export interface SendResult {
 }
 
 export interface WalletDescriptor {
-  readonly walletId: string
+  readonly recordId: string
   readonly address: string
   readonly network: Network
   readonly secretRef: ProtectedSecretRef
 }
 
 export interface CreateWalletRequest {
-  readonly walletId: string
+  readonly recordId: string
   readonly network: Network
 }
 

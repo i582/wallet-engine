@@ -14,7 +14,7 @@ use crate::{Network, SendRequest};
 
 pub(crate) fn prepare_transfer(
     mnemonic_bytes: &[u8],
-    wallet_id: &str,
+    record_id: &str,
     source: &str,
     network: Network,
     request: &SendRequest,
@@ -51,7 +51,7 @@ pub(crate) fn prepare_transfer(
     let signed_boc = external.to_boc().map_err(sanitize)?;
     Ok(PreparedTransfer {
         operation_id: request.operation_id.clone(),
-        wallet_id: wallet_id.to_owned(),
+        record_id: record_id.to_owned(),
         source: source.to_owned(),
         destination: request.destination.clone(),
         amount_nanograms: request.amount_nanograms.clone(),

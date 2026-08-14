@@ -4,6 +4,7 @@ use crate::Network;
 
 const MAINNET_GLOBAL_ID: i32 = -239;
 const TESTNET_GLOBAL_ID: i32 = -3;
+const V5R1_CLIENT_CONTEXT_ID: i32 = i32::MIN;
 const MNEMONIC_ENTROPY_BYTES: usize = 48;
 const MNEMONIC_WORD_COUNT: usize = 24;
 
@@ -58,14 +59,18 @@ pub(crate) fn derive_v5r1_wallet(
     let key_pair = mnemonic
         .to_key_pair()
         .map_err(|_| WalletCryptoError::InvalidMnemonic)?;
+    let contract_wallet_id = v5r1_contract_wallet_id(network);
+
+    TonWallet::new_with_params(WalletVersion::V5R1, key_pair, 0, contract_wallet_id)
+        .map_err(|_| WalletCryptoError::WalletConstruction)
+}
+
+const fn v5r1_contract_wallet_id(network: Network) -> i32 {
     let network_global_id = match network {
         Network::Mainnet => MAINNET_GLOBAL_ID,
         Network::Testnet => TESTNET_GLOBAL_ID,
     };
-    let wallet_id = network_global_id ^ i32::MIN;
-
-    TonWallet::new_with_params(WalletVersion::V5R1, key_pair, 0, wallet_id)
-        .map_err(|_| WalletCryptoError::WalletConstruction)
+    network_global_id ^ V5R1_CLIENT_CONTEXT_ID
 }
 
 pub(crate) fn derive_v5r1_address(
@@ -102,6 +107,16 @@ mod tests {
         assert_ne!(mainnet, non_bounceable);
         assert!(testnet.starts_with("kQ"));
         assert!(non_bounceable.starts_with("UQ"));
+    }
+
+    #[test]
+    fn v5r1_wallet_id_depends_on_the_network_global_id() {
+        let mainnet = derive_v5r1_wallet(TEST_MNEMONIC, Network::Mainnet).unwrap();
+        let testnet = derive_v5r1_wallet(TEST_MNEMONIC, Network::Testnet).unwrap();
+
+        assert_eq!(mainnet.wallet_id, 0x7FFF_FF11);
+        assert_eq!(testnet.wallet_id, 0x7FFF_FFFD);
+        assert_ne!(mainnet.address, testnet.address);
     }
 
     #[test]

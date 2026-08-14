@@ -108,7 +108,7 @@ Create one HTTP host for each client. The high-level API does this for you.
 ```ts
 const client = await WalletClient.create(
   {
-    walletId: descriptor.walletId,
+    recordId: descriptor.recordId,
     address: descriptor.address,
     network: descriptor.network,
     providers: {
@@ -155,7 +155,7 @@ Use `WalletLifecycle` for recovery-phrase operations:
 const lifecycle = await WalletLifecycle.create(platformHost)
 
 const created = await lifecycle.createWallet({
-  walletId: crypto.randomUUID(),
+  recordId: crypto.randomUUID(),
   network: "testnet",
 })
 

@@ -89,7 +89,7 @@ platforms. The engine does not own platform networking or protected storage.
 9. Call `waitForChange` to receive later snapshot revisions.
 10. Call `shutdown()` before you discard the client.
 
-The wallet descriptor contains the stable wallet ID, address, network, and
+The wallet descriptor contains the stable application record ID, address, network, and
 protected-secret reference. Your application needs these values after a
 restart.
 

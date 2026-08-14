@@ -25,5 +25,5 @@ export class MemoryJournal implements JournalStoreHost {
 }
 
 function journalKey(key: JournalKey): string {
-  return `${key.walletId}:${key.slot}`
+  return `${key.recordId}:${key.slot}`
 }

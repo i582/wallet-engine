@@ -46,7 +46,7 @@ impl ProviderConfig {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct WalletClientConfig {
-    pub wallet_id: String,
+    pub record_id: String,
     pub address: String,
     pub network: Network,
     pub providers: ProviderConfig,
@@ -277,7 +277,7 @@ pub struct DomainError {
 #[serde(rename_all = "camelCase")]
 pub struct WalletSnapshot {
     pub revision: u64,
-    pub wallet_id: String,
+    pub record_id: String,
     pub address: String,
     pub network: Network,
     pub account: Option<AccountSnapshot>,
@@ -294,7 +294,7 @@ impl WalletSnapshot {
     pub(crate) fn empty(config: &WalletClientConfig) -> Self {
         Self {
             revision: 0,
-            wallet_id: config.wallet_id.clone(),
+            record_id: config.record_id.clone(),
             address: config.address.clone(),
             network: config.network,
             account: None,
@@ -419,7 +419,7 @@ pub enum ProtectedSecretHostError {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct JournalKey {
-    pub wallet_id: String,
+    pub record_id: String,
     pub slot: String,
 }
 

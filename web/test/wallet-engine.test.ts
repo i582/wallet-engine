@@ -119,7 +119,7 @@ describe("high-level WASM API", () => {
     lifecycles.push(lifecycle)
 
     const created = await lifecycle.createWallet({
-      walletId: "browser-lifecycle-wallet",
+      recordId: "browser-lifecycle-wallet",
       network: "testnet",
     })
     expect(created.recoveryPhrase.words).toHaveLength(24)
@@ -146,9 +146,9 @@ function httpCall(id: number, overrides: Partial<HttpCall> = {}): HttpCall {
   }
 }
 
-function walletConfig(walletId: string): WalletClientConfig {
+function walletConfig(recordId: string): WalletClientConfig {
   return {
-    walletId,
+    recordId,
     address: "0QAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACkT",
     network: "testnet",
     providers: {
