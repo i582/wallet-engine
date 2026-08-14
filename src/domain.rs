@@ -219,8 +219,6 @@ pub enum AccountStatus {
 pub struct AccountSnapshot {
     /// The exact unsigned balance in nanograms.
     pub balance_nanograms: String,
-    /// The same balance formatted in grams without insignificant zeroes.
-    pub balance_grams: String,
     /// The account lifecycle state.
     pub status: AccountStatus,
     /// The provider synchronization time as a Unix timestamp, if available.
@@ -243,7 +241,10 @@ pub enum ActivityDirection {
 pub struct ActivityItem {
     /// A stable item key derived from the transaction, direction, and message index.
     pub id: String,
-    /// The canonical base64 transaction hash when the provider supplies one.
+    /// The transaction hash.
+    ///
+    /// A valid 256-bit provider hash is normalized to standard padded Base64.
+    /// If the provider returns another representation, this field preserves it.
     pub transaction_hash: String,
     /// The transaction logical time as an unsigned decimal string.
     pub logical_time: String,
@@ -266,6 +267,8 @@ pub struct ActivityCursor {
     /// The oldest loaded transaction logical time as an unsigned decimal string.
     pub logical_time: String,
     /// The oldest loaded transaction hash.
+    ///
+    /// This uses the same encoding rules as [`ActivityItem::transaction_hash`].
     pub hash: String,
 }
 
@@ -745,7 +748,7 @@ pub struct PreparedSend {
 pub struct SendResult {
     /// The application operation identifier.
     pub operation_id: String,
-    /// The canonical base64 hash of the signed external message.
+    /// The normalized signed external-message hash in standard padded Base64.
     pub message_hash: String,
     /// The terminal phase. This can be [`SendPhase::SubmissionUnknown`].
     pub phase: SendPhase,

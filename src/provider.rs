@@ -45,11 +45,13 @@ struct Transaction {
 #[derive(Debug, Deserialize)]
 struct TransactionId {
     lt: Value,
+    /// The hash representation returned by Toncenter before normalization.
     hash: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct Message {
+    /// The optional hash representation returned by Toncenter before normalization.
     #[serde(default)]
     hash: Option<String>,
     #[serde(default)]
@@ -115,7 +117,6 @@ pub(crate) fn response_error(
 pub(crate) fn parse_account(body: &[u8]) -> Result<AccountSnapshot, DomainError> {
     let account: Account = decode_envelope(body)?;
     let balance_nanograms = decimal_string(&account.balance, "account balance")?;
-    let balance_grams = format_nanograms(&balance_nanograms)?;
 
     let status = match account.state.to_ascii_lowercase().as_str() {
         "nonexist" | "nonexistent" => AccountStatus::Nonexistent,
@@ -127,7 +128,6 @@ pub(crate) fn parse_account(body: &[u8]) -> Result<AccountSnapshot, DomainError>
 
     Ok(AccountSnapshot {
         balance_nanograms,
-        balance_grams,
         status,
         sync_utime: account.sync_utime,
     })
@@ -161,10 +161,13 @@ pub(crate) fn parse_activity(body: &[u8], page_size: u32) -> Result<ActivityPage
         }
 
         let outgoing = ordered_out_messages(&transaction)?;
-        for (index, (_, _, _, message)) in outgoing.into_iter().enumerate() {
-            if let Some(item) =
-                activity_from_message(&transaction, message, ActivityDirection::Sent, index)?
-            {
+        for (index, ordered_message) in outgoing.into_iter().enumerate() {
+            if let Some(item) = activity_from_message(
+                &transaction,
+                ordered_message.message,
+                ActivityDirection::Sent,
+                index,
+            )? {
                 items.push(item);
             }
         }
@@ -231,7 +234,13 @@ fn activity_from_message(
     }))
 }
 
-type OrderedMessage<'a> = (Option<String>, String, usize, &'a Message);
+struct OrderedMessage<'a> {
+    created_logical_time: Option<String>,
+    /// The provider message hash normalized to standard padded Base64 when valid.
+    hash: String,
+    original_index: usize,
+    message: &'a Message,
+}
 
 fn ordered_out_messages(transaction: &Transaction) -> Result<Vec<OrderedMessage<'_>>, DomainError> {
     let mut messages = transaction
@@ -252,14 +261,22 @@ fn ordered_out_messages(transaction: &Transaction) -> Result<Vec<OrderedMessage<
                 .map(canonical_hash)
                 .unwrap_or_default();
 
-            Ok((created_lt, message_hash, original_index, message))
+            Ok(OrderedMessage {
+                created_logical_time: created_lt,
+                hash: message_hash,
+                original_index,
+                message,
+            })
         })
         .collect::<Result<Vec<_>, DomainError>>()?;
 
     messages.sort_by(|left, right| {
-        optional_decimal_cmp(left.0.as_deref(), right.0.as_deref())
-            .then_with(|| left.1.cmp(&right.1))
-            .then_with(|| left.2.cmp(&right.2))
+        optional_decimal_cmp(
+            left.created_logical_time.as_deref(),
+            right.created_logical_time.as_deref(),
+        )
+        .then_with(|| left.hash.cmp(&right.hash))
+        .then_with(|| left.original_index.cmp(&right.original_index))
     });
 
     Ok(messages)

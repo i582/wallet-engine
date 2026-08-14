@@ -4,6 +4,7 @@ type ActivityDirection = ActivityItem["direction"]
 
 const TRAILING_ZEROES: RegExp = /0+$/
 const GRAM_AMOUNT: RegExp = /^(?:0|[1-9]\d*)(?:\.\d{1,9})?$/
+const NANOGRAMS_PER_GRAM: bigint = 1_000_000_000n
 
 export function compactAddress(address: string): string {
   if (address.length <= 18) {
@@ -21,23 +22,87 @@ export function formatBalance(value: string | undefined): string {
   return trimmedFraction ? `${integer}.${trimmedFraction}` : integer
 }
 
+export function formatNanogramBalance(value: string | undefined): string {
+  const parts: NanogramParts | undefined = splitNanograms(value)
+  if (!parts) {
+    return "—"
+  }
+
+  const fraction: string = parts.fraction.slice(0, 4).replace(TRAILING_ZEROES, "")
+
+  return fraction ? `${parts.whole}.${fraction}` : parts.whole.toString()
+}
+
 export function formatUsdBalance(
-  balanceGrams: string | undefined,
+  amountGrams: string | undefined,
   gramUsdRate: number | undefined,
 ): string {
-  if (!balanceGrams || gramUsdRate === undefined) {
+  if (!amountGrams || gramUsdRate === undefined) {
     return "$—"
   }
-  const value: number = Number(balanceGrams) * gramUsdRate
+
+  const value: number = Number(amountGrams) * gramUsdRate
   if (!Number.isFinite(value)) {
     return "$—"
   }
+
+  return formatUsd(value)
+}
+
+export function formatUsdNanograms(
+  balanceNanograms: string | undefined,
+  gramUsdRate: number | undefined,
+): string {
+  const parts: NanogramParts | undefined = splitNanograms(balanceNanograms)
+  if (!parts || gramUsdRate === undefined) {
+    return "$—"
+  }
+
+  const grams: number = Number(parts.whole) + Number(parts.remainder) / Number(NANOGRAMS_PER_GRAM)
+  const value: number = grams * gramUsdRate
+  if (!Number.isFinite(value)) {
+    return "$—"
+  }
+
+  return formatUsd(value)
+}
+
+function formatUsd(value: number): string {
   return new Intl.NumberFormat(undefined, {
     style: "currency",
     currency: "USD",
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(value)
+}
+
+interface NanogramParts {
+  readonly whole: bigint
+  readonly remainder: bigint
+  readonly fraction: string
+}
+
+function splitNanograms(value: string | undefined): NanogramParts | undefined {
+  if (value === undefined || value.length === 0 || value.trim() !== value) {
+    return undefined
+  }
+
+  try {
+    const nanograms: bigint = BigInt(value)
+    if (nanograms < 0n) {
+      return undefined
+    }
+
+    const remainder: bigint = nanograms % NANOGRAMS_PER_GRAM
+
+    return {
+      whole: nanograms / NANOGRAMS_PER_GRAM,
+      remainder,
+      fraction: remainder.toString().padStart(9, "0"),
+    }
+  } catch {
+    return undefined
+  }
 }
 
 export function formatActivityAmount(amount: string, direction: ActivityDirection): string {

@@ -4,7 +4,9 @@ import {
   compactAddress,
   formatActivityAmount,
   formatBalance,
+  formatNanogramBalance,
   formatUsdBalance,
+  formatUsdNanograms,
   gramsToNanograms,
 } from "@/lib/format"
 
@@ -22,6 +24,13 @@ describe("wallet display helpers", () => {
     expect(formatBalance(undefined)).toBe("—")
   })
 
+  test("formats nanogram balances with bigint precision", () => {
+    expect(formatNanogramBalance("124567890000")).toBe("124.5678")
+    expect(formatNanogramBalance("8000000000")).toBe("8")
+    expect(formatNanogramBalance("9007199254740993000000000")).toBe("9007199254740993")
+    expect(formatNanogramBalance(undefined)).toBe("—")
+  })
+
   test("uses the activity direction for the amount sign", () => {
     expect(formatActivityAmount("2.75", "received")).toBe("+2.75 GRAM")
     expect(formatActivityAmount("2.75", "sent")).toBe("−2.75 GRAM")
@@ -31,6 +40,11 @@ describe("wallet display helpers", () => {
     expect(formatUsdBalance("2", 1.25)).toBe("$2.50")
     expect(formatUsdBalance(undefined, 1.25)).toBe("$—")
     expect(formatUsdBalance("2", undefined)).toBe("$—")
+  })
+
+  test("formats a nanogram balance in US dollars", () => {
+    expect(formatUsdNanograms("2000000000", 1.25)).toBe("$2.50")
+    expect(formatUsdNanograms(undefined, 1.25)).toBe("$—")
   })
 
   test("converts GRAM to nanograms without floating point", () => {

@@ -48,14 +48,18 @@ export interface HttpResponse {
 export type AccountStatus = "nonexistent" | "uninitialized" | "active" | "frozen" | "unknown"
 
 export interface AccountSnapshot {
+  /** Exact unsigned balance in nanograms, encoded as a base-10 integer string. */
   readonly balanceNanograms: string
-  readonly balanceGrams: string
   readonly status: AccountStatus
   readonly syncUtime?: number
 }
 
 export interface ActivityItem {
   readonly id: string
+  /**
+   * Transaction hash normalized to standard padded Base64 when Toncenter
+   * supplies a valid 256-bit hash. Otherwise, the provider value is preserved.
+   */
   readonly transactionHash: string
   readonly logicalTime: string
   readonly timestamp: number
@@ -67,6 +71,7 @@ export interface ActivityItem {
 
 export interface ActivityCursor {
   readonly logicalTime: string
+  /** Uses the same encoding rules as ActivityItem.transactionHash. */
   readonly hash: string
 }
 
@@ -177,6 +182,7 @@ export interface SendRequest {
 
 export interface SendResult {
   readonly operationId: string
+  /** Normalized signed external-message hash in standard padded Base64. */
   readonly messageHash: string
   readonly phase: SendPhase
 }

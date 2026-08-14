@@ -22,9 +22,10 @@ import {Skeleton} from "@/components/ui/skeleton"
 import {
   compactAddress,
   formatActivityAmount,
-  formatBalance,
+  formatNanogramBalance,
   formatTimestamp,
   formatUsdBalance,
+  formatUsdNanograms,
 } from "@/lib/format"
 
 export interface WalletDashboardProps {
@@ -95,12 +96,12 @@ export function WalletDashboard({
             <Skeleton className="mt-5 h-14 w-56 bg-white/15" />
           ) : (
             <p className="mt-4 text-5xl font-semibold tracking-[-0.055em]">
-              {formatBalance(snapshot.account?.balanceGrams)}
+              {formatNanogramBalance(snapshot.account?.balanceNanograms)}
               <span className="ml-3 text-lg font-medium tracking-normal text-white/65">GRAM</span>
             </p>
           )}
           <p className="mt-2 text-lg font-medium text-white/70">
-            {formatUsdBalance(snapshot.account?.balanceGrams, gramUsdRate)}
+            {formatUsdNanograms(snapshot.account?.balanceNanograms, gramUsdRate)}
           </p>
         </CardContent>
       </Card>

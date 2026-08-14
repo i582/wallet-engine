@@ -1,7 +1,8 @@
 //! V5R1 transfer construction and signing.
 //!
 //! The wallet client passes mnemonic bytes to this private module only after
-//! host authorization. The module returns a signed BOC and its message hash.
+//! host authorization. The module returns a signed BOC and its normalized
+//! external-message hash in standard padded Base64.
 
 use std::str::FromStr;
 

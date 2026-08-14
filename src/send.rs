@@ -49,6 +49,7 @@ pub(crate) struct PreparedTransfer {
     pub needs_state_init: bool,
     pub valid_until: u64,
     pub signed_boc: Vec<u8>,
+    /// The normalized external-message hash in standard padded Base64.
     pub message_hash: String,
 }
 
@@ -122,6 +123,7 @@ pub(crate) enum SendDirective {
     PersistJournal(JournalCompareExchange),
     Submit {
         signed_boc: Vec<u8>,
+        /// The normalized external-message hash in standard padded Base64.
         message_hash: String,
     },
     Finished,
@@ -160,7 +162,9 @@ struct DurableSendRecord {
     seqno: u32,
     needs_state_init: bool,
     valid_until: u64,
+    /// The signed BOC encoded as standard padded Base64 for durable storage.
     signed_boc_base64: String,
+    /// The normalized external-message hash in standard padded Base64.
     message_hash: String,
     stage: SendStage,
     provider_reference: Option<String>,
