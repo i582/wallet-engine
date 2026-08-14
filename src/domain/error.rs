@@ -172,6 +172,17 @@ pub enum WalletClientError {
     /// Another transfer is already being prepared or submitted by this client.
     #[error("another send operation is already in progress")]
     SendAlreadyInProgress,
+    /// A durable prior submission has no definite provider outcome.
+    ///
+    /// The caller must not create a replacement transfer because the stored
+    /// signed message can already be on the network.
+    #[error("the previous submission outcome is unresolved")]
+    PreviousSubmissionUnresolved,
+    /// The provider still reports the sequence number used by the previous send.
+    ///
+    /// Refresh chain state and retry only after the wallet sequence number advances.
+    #[error("the wallet sequence number has not advanced since the previous submission")]
+    WalletSeqnoNotAdvanced,
     /// A send failed before submission became ambiguous.
     #[error("send failed: {diagnostic}")]
     SendFailed {

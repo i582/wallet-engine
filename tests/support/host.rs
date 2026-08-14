@@ -1,0 +1,347 @@
+use std::collections::{HashMap, HashSet};
+use std::sync::{Condvar, Mutex, MutexGuard};
+
+use async_trait::async_trait;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
+use serde_json::{Value, json};
+use ton::block_tlb::Msg;
+use ton::ton_core::cell::TonCell;
+use ton::ton_core::traits::tlb::TLB;
+use wallet_engine::{
+    HttpHostError, HttpHostErrorKind, HttpRequest, HttpRequestId, HttpResponse,
+    JournalCompareExchange, JournalCompareExchangeResult, JournalHostError, JournalKey,
+    JournalRecord, ProtectedSecretHostError, ProtectedSecretHostErrorKind, ProtectedSecretRead,
+    ProtectedSecretRef, ProtectedSecretStore, WalletHttpHost, WalletPlatformHost,
+};
+
+use super::scenario::{SubmissionOutcome, WalletFixture};
+
+pub(super) struct ScenarioHttpHost {
+    state: Mutex<HttpState>,
+    changed: Condvar,
+}
+
+struct HttpState {
+    wallet: WalletFixture,
+    submission_gate: Option<SubmissionGate>,
+    submitted_message: Option<SubmittedMessage>,
+    cancelled: HashSet<HttpRequestId>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct SubmittedMessage {
+    pub(super) contains_state_init: bool,
+}
+
+struct SubmissionGate {
+    name: String,
+    reached: bool,
+    outcome: Option<SubmissionOutcome>,
+}
+
+impl ScenarioHttpHost {
+    pub(super) fn new(wallet: WalletFixture, paused_submission: Option<String>) -> Self {
+        Self {
+            state: Mutex::new(HttpState {
+                wallet,
+                submission_gate: paused_submission.map(|name| SubmissionGate {
+                    name,
+                    reached: false,
+                    outcome: None,
+                }),
+                submitted_message: None,
+                cancelled: HashSet::new(),
+            }),
+            changed: Condvar::new(),
+        }
+    }
+
+    pub(super) fn set_wallet(&self, wallet: WalletFixture) {
+        lock(&self.state).wallet = wallet;
+    }
+
+    pub(super) fn pause_submission(&self, name: String) {
+        lock(&self.state).submission_gate = Some(SubmissionGate {
+            name,
+            reached: false,
+            outcome: None,
+        });
+    }
+
+    pub(super) fn submitted_message(&self) -> Option<SubmittedMessage> {
+        lock(&self.state).submitted_message
+    }
+
+    pub(super) fn resume_submission(
+        &self,
+        name: &str,
+        outcome: SubmissionOutcome,
+    ) -> Result<(), String> {
+        let mut state = lock(&self.state);
+        let gate = state
+            .submission_gate
+            .as_mut()
+            .ok_or_else(|| format!("submission checkpoint `{name}` does not exist"))?;
+
+        if gate.name != name {
+            return Err(format!(
+                "expected submission checkpoint `{}`, got `{name}`",
+                gate.name
+            ));
+        }
+        if !gate.reached {
+            return Err(format!("submission checkpoint `{name}` was not reached"));
+        }
+
+        gate.outcome = Some(outcome);
+        self.changed.notify_all();
+        Ok(())
+    }
+
+    fn account_response(&self, request: &HttpRequest) -> HttpResponse {
+        let state = lock(&self.state);
+        response(
+            request,
+            json!({
+                "ok": true,
+                "result": {
+                    "balance": state.wallet.balance_nanograms,
+                    "state": state.wallet.status,
+                    "sync_utime": state.wallet.sync_utime,
+                }
+            }),
+        )
+    }
+
+    fn seqno_response(&self, request: &HttpRequest) -> HttpResponse {
+        let state = lock(&self.state);
+        response(
+            request,
+            json!({
+                "jsonrpc": "2.0",
+                "id": request.id.value.to_string(),
+                "result": {
+                    "stack": [["num", format!("0x{:x}", state.wallet.seqno)]]
+                }
+            }),
+        )
+    }
+
+    fn submit_response(
+        &self,
+        request: &HttpRequest,
+        body: &Value,
+    ) -> Result<HttpResponse, HttpHostError> {
+        let encoded_boc = body
+            .pointer("/params/boc")
+            .and_then(Value::as_str)
+            .ok_or_else(|| host_error(HttpHostErrorKind::Other, "sendBoc has no BOC"))?;
+        let boc = STANDARD
+            .decode(encoded_boc)
+            .map_err(|error| host_error(HttpHostErrorKind::Other, error.to_string()))?;
+        let cell = TonCell::from_boc(boc)
+            .map_err(|error| host_error(HttpHostErrorKind::Other, error.to_string()))?;
+        let message = Msg::<TonCell>::from_cell(&cell)
+            .map_err(|error| host_error(HttpHostErrorKind::Other, error.to_string()))?;
+
+        let mut state = lock(&self.state);
+        state.submitted_message = Some(SubmittedMessage {
+            contains_state_init: message.state_init().is_some(),
+        });
+
+        let outcome = if state.submission_gate.is_some() {
+            {
+                let gate = state.submission_gate.as_mut().ok_or_else(|| {
+                    host_error(
+                        HttpHostErrorKind::Other,
+                        "submission checkpoint disappeared",
+                    )
+                })?;
+                gate.reached = true;
+            }
+            self.changed.notify_all();
+
+            loop {
+                if state.cancelled.contains(&request.id) {
+                    return Err(host_error(
+                        HttpHostErrorKind::Cancelled,
+                        "request cancelled",
+                    ));
+                }
+                if let Some(outcome) = state
+                    .submission_gate
+                    .as_ref()
+                    .and_then(|gate| gate.outcome.clone())
+                {
+                    break outcome;
+                }
+
+                state = wait(&self.changed, state);
+            }
+        } else {
+            SubmissionOutcome::Accepted
+        };
+
+        match outcome {
+            SubmissionOutcome::Accepted => Ok(response(
+                request,
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": request.id.value.to_string(),
+                    "result": { "@type": "ok" }
+                }),
+            )),
+            SubmissionOutcome::Rejected(diagnostic) => Ok(response(
+                request,
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": request.id.value.to_string(),
+                    "error": { "message": diagnostic }
+                }),
+            )),
+            SubmissionOutcome::Timeout => Err(host_error(
+                HttpHostErrorKind::Timeout,
+                "submission timed out",
+            )),
+        }
+    }
+}
+
+#[async_trait]
+impl WalletHttpHost for ScenarioHttpHost {
+    async fn execute_http(&self, request: HttpRequest) -> Result<HttpResponse, HttpHostError> {
+        if request.url.contains("getAddressInformation") {
+            return Ok(self.account_response(&request));
+        }
+
+        let body: Value = serde_json::from_slice(&request.body)
+            .map_err(|error| host_error(HttpHostErrorKind::Other, error.to_string()))?;
+        match body.get("method").and_then(Value::as_str) {
+            Some("runGetMethod") => Ok(self.seqno_response(&request)),
+            Some("sendBoc") => self.submit_response(&request, &body),
+            method => Err(host_error(
+                HttpHostErrorKind::Other,
+                format!("unexpected JSON-RPC method: {method:?}"),
+            )),
+        }
+    }
+
+    async fn cancel_http(&self, request_id: HttpRequestId) {
+        lock(&self.state).cancelled.insert(request_id);
+        self.changed.notify_all();
+    }
+}
+
+#[derive(Default)]
+pub(super) struct MemoryPlatformHost {
+    secrets: Mutex<HashMap<String, Vec<u8>>>,
+    journal: Mutex<HashMap<(String, String), JournalRecord>>,
+}
+
+impl MemoryPlatformHost {
+    pub(super) fn store_test_secret(&self, secret_ref: &ProtectedSecretRef, bytes: &[u8]) {
+        lock(&self.secrets).insert(secret_ref.value.clone(), bytes.to_vec());
+    }
+}
+
+#[async_trait]
+impl WalletPlatformHost for MemoryPlatformHost {
+    async fn read_protected_secret(
+        &self,
+        request: ProtectedSecretRead,
+    ) -> Result<Vec<u8>, ProtectedSecretHostError> {
+        lock(&self.secrets)
+            .get(&request.secret_ref.value)
+            .cloned()
+            .ok_or_else(|| secret_error("protected secret does not exist"))
+    }
+
+    async fn store_protected_secret(
+        &self,
+        request: ProtectedSecretStore,
+    ) -> Result<(), ProtectedSecretHostError> {
+        lock(&self.secrets).insert(request.secret_ref.value, request.bytes);
+        Ok(())
+    }
+
+    async fn delete_protected_secret(
+        &self,
+        secret_ref: ProtectedSecretRef,
+    ) -> Result<(), ProtectedSecretHostError> {
+        lock(&self.secrets).remove(&secret_ref.value);
+        Ok(())
+    }
+
+    async fn load_journal(
+        &self,
+        key: JournalKey,
+    ) -> Result<Option<JournalRecord>, JournalHostError> {
+        Ok(lock(&self.journal).get(&(key.record_id, key.slot)).cloned())
+    }
+
+    async fn compare_exchange_journal(
+        &self,
+        mutation: JournalCompareExchange,
+    ) -> Result<JournalCompareExchangeResult, JournalHostError> {
+        let key = (mutation.key.record_id, mutation.key.slot);
+        let mut journal = lock(&self.journal);
+        let current = journal.get(&key).cloned();
+        let current_version = current.as_ref().map(|record| record.version);
+
+        if current_version != mutation.expected_version {
+            return Ok(JournalCompareExchangeResult {
+                applied: false,
+                current,
+            });
+        }
+
+        journal.insert(key, mutation.replacement.clone());
+        Ok(JournalCompareExchangeResult {
+            applied: true,
+            current: Some(mutation.replacement),
+        })
+    }
+}
+
+fn response(request: &HttpRequest, body: Value) -> HttpResponse {
+    let body = match serde_json::to_vec(&body) {
+        Ok(body) => body,
+        Err(error) => panic!("test response serialization failed: {error}"),
+    };
+
+    HttpResponse {
+        status: 200,
+        headers: Vec::new(),
+        body,
+        final_url: request.url.clone(),
+    }
+}
+
+fn host_error(kind: HttpHostErrorKind, diagnostic: impl Into<String>) -> HttpHostError {
+    HttpHostError::Failed {
+        kind,
+        diagnostic: diagnostic.into(),
+    }
+}
+
+fn secret_error(diagnostic: impl Into<String>) -> ProtectedSecretHostError {
+    ProtectedSecretHostError::Failed {
+        kind: ProtectedSecretHostErrorKind::NotFound,
+        diagnostic: diagnostic.into(),
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn wait<'a, T>(condvar: &Condvar, guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {
+    match condvar.wait(guard) {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}

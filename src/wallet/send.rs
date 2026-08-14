@@ -194,8 +194,10 @@ pub(crate) enum SendWorkflowError {
     PreparedTransferMismatch,
     #[error("send journal was changed by another operation")]
     JournalConflict,
-    #[error("send journal slot is occupied by an unresolved operation")]
-    JournalBusy,
+    #[error("the previous submission outcome is unresolved")]
+    PreviousSubmissionUnresolved,
+    #[error("the wallet sequence number has not advanced since the previous submission")]
+    WalletSeqnoNotAdvanced,
     #[error("wallet account state does not permit sending")]
     AccountUnavailable,
     #[error("send journal record is invalid: {0}")]
@@ -349,9 +351,9 @@ impl SendWorkflow {
                         Some(record.version)
                     }
                     SendStage::SubmissionUnknown => {
-                        return Err(SendWorkflowError::JournalBusy);
+                        return Err(SendWorkflowError::PreviousSubmissionUnresolved);
                     }
-                    _ => return Err(SendWorkflowError::JournalBusy),
+                    _ => return Err(SendWorkflowError::PreviousSubmissionUnresolved),
                 }
             }
         };
@@ -370,7 +372,7 @@ impl SendWorkflow {
         if let Some(prior_seqno) = self.prior_submitted_seqno
             && (account.status != AccountStatus::Active || account.seqno <= prior_seqno)
         {
-            return Err(SendWorkflowError::JournalBusy);
+            return Err(SendWorkflowError::WalletSeqnoNotAdvanced);
         }
 
         match account.status {

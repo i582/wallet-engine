@@ -28,8 +28,8 @@ impl WalletClient {
     /// create a replacement transfer for the same funds. This crate does not
     /// reconcile the result or stream chain confirmation.
     ///
-    /// Workflow failures return [`WalletClientError::SendFailed`] with the same
-    /// bounded diagnostic published in `snapshot().send.error_message`.
+    /// Workflow failures return a typed send error. The same bounded diagnostic
+    /// is published in `snapshot().send.error_message`.
     pub async fn send(&self, request: SendRequest) -> Result<SendResult, WalletClientError> {
         // Reject malformed input before reserving IDs or changing observable state.
         validate_send(&request)?;
@@ -105,7 +105,7 @@ impl WalletClient {
         self.ensure_current_send(generation)?;
         let directive = workflow
             .journal_loaded(journal_record)
-            .map_err(|error| self.send_failed_error(generation, error.to_string()))?;
+            .map_err(|error| self.send_workflow_error(generation, error))?;
         let SendDirective::FetchFreshAccount = directive else {
             return Err(self.send_failed_error(generation, "invalid send journal transition"));
         };
@@ -138,7 +138,7 @@ impl WalletClient {
 
         let directive = workflow
             .fresh_account_loaded(fresh.clone())
-            .map_err(|error| self.send_failed_error(generation, error.to_string()))?;
+            .map_err(|error| self.send_workflow_error(generation, error))?;
         let SendDirective::ReadProtectedSecret(secret_request) = directive else {
             return Err(self.send_failed_error(generation, "invalid secret-read transition"));
         };
@@ -239,7 +239,7 @@ impl WalletClient {
             if journal_applied {
                 self.submission_unknown_error(generation, error.to_string())
             } else {
-                self.send_failed_error(generation, error.to_string())
+                self.send_workflow_error(generation, error)
             }
         })?;
 

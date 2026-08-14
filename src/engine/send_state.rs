@@ -1,7 +1,7 @@
 //! Send-operation tracking and protected-byte lifetime handling.
 
 use crate::domain::bounded_diagnostic;
-use crate::wallet::send::SendWorkflow;
+use crate::wallet::send::{SendWorkflow, SendWorkflowError};
 use crate::{
     HttpHostError, HttpRequest, HttpRequestId, HttpResponse, SendPhase, WalletClientError,
 };
@@ -54,6 +54,29 @@ impl WalletClient {
 
         match self.fail_send(generation, diagnostic.clone()) {
             Ok(()) => WalletClientError::SendFailed { diagnostic },
+            Err(error) => error,
+        }
+    }
+
+    pub(super) fn send_workflow_error(
+        &self,
+        generation: u64,
+        error: SendWorkflowError,
+    ) -> WalletClientError {
+        let diagnostic = bounded_diagnostic(error.to_string());
+        let public_error = match error {
+            SendWorkflowError::JournalConflict => WalletClientError::SendAlreadyInProgress,
+            SendWorkflowError::PreviousSubmissionUnresolved => {
+                WalletClientError::PreviousSubmissionUnresolved
+            }
+            SendWorkflowError::WalletSeqnoNotAdvanced => WalletClientError::WalletSeqnoNotAdvanced,
+            _ => WalletClientError::SendFailed {
+                diagnostic: diagnostic.clone(),
+            },
+        };
+
+        match self.fail_send(generation, diagnostic) {
+            Ok(()) => public_error,
             Err(error) => error,
         }
     }
