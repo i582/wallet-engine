@@ -17,18 +17,18 @@ use url::Url;
 
 use crate::diagnostic::bounded_diagnostic;
 use crate::provider::{
-    ActivityPage, activity_item_order, decimal_cmp, parse_account, parse_activity, response_error,
+    ActivityPage, ActivityPageCursor, ActivityRecord, activity_record_order, parse_account,
+    parse_activity, response_error,
 };
 use crate::send::{FreshSendAccount, SendDirective, SendWorkflow};
 use crate::signer::{derive_source, prepare_transfer};
 use crate::{
-    AccountSnapshot, AccountStatus, ActivityCursor, DomainError, ErrorCategory, ErrorCode,
-    HttpCall, HttpCallId, HttpHeader, HttpHostError, HttpHostErrorKind, HttpMethod, HttpResponse,
-    JournalCompareExchange, JournalCompareExchangeResult, JournalHostError, JournalKey,
-    JournalRecord, ProtectedSecretHostError, ProtectedSecretRead, ProtectedSecretRef,
-    ProtectedSecretStore, ResourcePhase, ResourceState, RetryAdvice, SendPhase, SendRequest,
-    SendResult, WalletClientConfig, WalletClientError, WalletOperationOutcome, WalletSnapshot,
-    WalletUpdate,
+    AccountSnapshot, AccountStatus, DomainError, ErrorCategory, ErrorCode, HttpCall, HttpCallId,
+    HttpHeader, HttpHostError, HttpHostErrorKind, HttpMethod, HttpResponse, JournalCompareExchange,
+    JournalCompareExchangeResult, JournalHostError, JournalKey, JournalRecord,
+    ProtectedSecretHostError, ProtectedSecretRead, ProtectedSecretRef, ProtectedSecretStore,
+    ResourcePhase, ResourceState, RetryAdvice, SendPhase, SendRequest, SendResult,
+    WalletClientConfig, WalletClientError, WalletOperationOutcome, WalletSnapshot, WalletUpdate,
 };
 
 const PAGE_SIZE: u32 = 10;
@@ -114,6 +114,12 @@ enum OperationFamily {
 struct State {
     config: WalletClientConfig,
     snapshot: WalletSnapshot,
+    // The public snapshot uses decimal strings for FFI portability. Keep the
+    // authoritative activity values numeric so merge and pagination logic do
+    // not need to parse those strings again.
+    activity: Vec<ActivityRecord>,
+    activity_cursor: Option<ActivityPageCursor>,
+    activity_has_more: bool,
     next_id: u64,
     refresh_generation: u64,
     pagination_generation: u64,
@@ -154,6 +160,16 @@ impl State {
         }
         self.waiters = pending;
         Ok(())
+    }
+
+    /// Publishes the internal numeric activity model through portable DTOs.
+    fn sync_activity_snapshot(&mut self) {
+        self.snapshot.activity = self.activity.iter().map(ActivityRecord::snapshot).collect();
+        self.snapshot.activity_cursor = self
+            .activity_cursor
+            .as_ref()
+            .map(ActivityPageCursor::snapshot);
+        self.snapshot.activity_has_more = self.activity_has_more;
     }
 
     fn is_current(&self, family: OperationFamily, generation: u64) -> bool {
@@ -205,6 +221,9 @@ impl WalletClient {
             state: Mutex::new(State {
                 config,
                 snapshot,
+                activity: Vec::new(),
+                activity_cursor: None,
+                activity_has_more: false,
                 next_id: 1,
                 refresh_generation: 0,
                 pagination_generation: 0,
@@ -385,12 +404,12 @@ impl WalletClient {
 
             if state.active_refresh.is_some()
                 || state.active_pagination.is_some()
-                || !state.snapshot.activity_has_more
+                || !state.activity_has_more
             {
                 return Ok(update(WalletOperationOutcome::Skipped, 0, &state));
             }
 
-            let Some(cursor) = state.snapshot.activity_cursor.clone() else {
+            let Some(cursor) = state.activity_cursor.clone() else {
                 return Ok(update(WalletOperationOutcome::Skipped, 0, &state));
             };
 
@@ -426,7 +445,7 @@ impl WalletClient {
 
         let (outcome, added) = match result {
             Ok(page) => {
-                let added = apply_activity_page(&mut state.snapshot, page);
+                let added = apply_activity_page(&mut state, page);
                 state.snapshot.activity_pagination_resource = ResourceState::ready();
                 (WalletOperationOutcome::Completed, added)
             }
@@ -915,9 +934,10 @@ impl WalletClient {
             },
             RefreshValue::Activity(result) => match result {
                 Ok(page) => {
-                    state.snapshot.activity = page.items;
-                    state.snapshot.activity_cursor = page.cursor;
-                    state.snapshot.activity_has_more = page.has_more;
+                    state.activity = page.items;
+                    state.activity_cursor = page.cursor;
+                    state.activity_has_more = page.has_more;
+                    state.sync_activity_snapshot();
                     state.snapshot.activity_resource = ResourceState::ready();
                 }
                 Err(error) => state.snapshot.activity_resource = ResourceState::failed(error),
@@ -1195,20 +1215,21 @@ fn mark_loading_cancelled(resource: &mut ResourceState) {
     }
 }
 
-fn apply_activity_page(snapshot: &mut WalletSnapshot, page: ActivityPage) -> u64 {
-    let advanced = match (snapshot.activity_cursor.as_ref(), page.cursor.as_ref()) {
-        (Some(previous), Some(next)) => {
-            decimal_cmp(&next.logical_time, &previous.logical_time).is_lt()
-        }
+fn apply_activity_page(state: &mut State, page: ActivityPage) -> u64 {
+    // Toncenter pages move from newer to older logical times. Comparing the
+    // retained BigUint values makes this check exact for every valid LT size.
+    let advanced = match (state.activity_cursor.as_ref(), page.cursor.as_ref()) {
+        (Some(previous), Some(next)) => next.logical_time < previous.logical_time,
         _ => false,
     };
     if !advanced {
-        snapshot.activity_has_more = false;
+        state.activity_has_more = false;
+        state.sync_activity_snapshot();
         return 0;
     }
 
-    let previous_len = snapshot.activity.len();
-    let mut by_id: HashMap<_, _> = snapshot
+    let previous_len = state.activity.len();
+    let mut by_id: HashMap<_, _> = state
         .activity
         .drain(..)
         .map(|item| (item.id.clone(), item))
@@ -1218,12 +1239,13 @@ fn apply_activity_page(snapshot: &mut WalletSnapshot, page: ActivityPage) -> u64
         by_id.insert(item.id.clone(), item);
     }
 
-    snapshot.activity = by_id.into_values().collect();
-    snapshot.activity.sort_by(activity_item_order);
-    snapshot.activity_cursor = page.cursor;
-    snapshot.activity_has_more = page.has_more;
+    state.activity = by_id.into_values().collect();
+    state.activity.sort_by(activity_record_order);
+    state.activity_cursor = page.cursor;
+    state.activity_has_more = page.has_more;
+    state.sync_activity_snapshot();
 
-    u64::try_from(snapshot.activity.len().saturating_sub(previous_len)).unwrap_or(u64::MAX)
+    u64::try_from(state.activity.len().saturating_sub(previous_len)).unwrap_or(u64::MAX)
 }
 
 fn build_refresh_calls(
@@ -1249,18 +1271,14 @@ fn build_refresh_calls(
 
 fn build_activity_page_call(
     config: &WalletClientConfig,
-    cursor: &ActivityCursor,
+    cursor: &ActivityPageCursor,
     id: HttpCallId,
 ) -> Result<HttpCall, WalletClientError> {
-    if cursor.logical_time.is_empty()
-        || !cursor
-            .logical_time
-            .bytes()
-            .all(|byte| byte.is_ascii_digit())
-        || cursor.hash.is_empty()
-    {
+    if cursor.hash.is_empty() {
         return Err(WalletClientError::InvalidConfig);
     }
+
+    let logical_time = cursor.logical_time.to_string();
 
     build_toncenter_call(
         config,
@@ -1269,7 +1287,7 @@ fn build_activity_page_call(
         &[
             ("address", config.address.as_str()),
             ("limit", "10"),
-            ("lt", cursor.logical_time.as_str()),
+            ("lt", logical_time.as_str()),
             ("hash", cursor.hash.as_str()),
         ],
     )

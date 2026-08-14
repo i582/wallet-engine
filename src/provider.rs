@@ -3,10 +3,9 @@
 //! The wallet client uses this private module to convert provider JSON into
 //! stable account and activity records. It also sanitizes external diagnostics.
 
-use std::cmp::Ordering;
-
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD};
+use num_bigint::BigUint;
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::Value;
 
@@ -65,10 +64,60 @@ struct Message {
     value: Value,
 }
 
+/// Parsed activity kept inside Rust before it crosses an FFI boundary.
+///
+/// Logical time and value remain arbitrary-precision integers here. This
+/// prevents ordering and arithmetic from depending on decimal-string rules.
+#[derive(Debug, Clone)]
+pub(crate) struct ActivityRecord {
+    pub id: String,
+    pub transaction_hash: String,
+    pub logical_time: BigUint,
+    pub timestamp: u64,
+    pub direction: ActivityDirection,
+    pub amount_nanograms: BigUint,
+    pub counterparty: Option<String>,
+}
+
+impl ActivityRecord {
+    /// Creates the portable public representation used by generated bindings.
+    ///
+    /// Swift and Kotlin have no shared arbitrary-precision integer ABI with
+    /// Rust, so conversion to canonical decimal strings happens only here.
+    pub(crate) fn snapshot(&self) -> ActivityItem {
+        ActivityItem {
+            id: self.id.clone(),
+            transaction_hash: self.transaction_hash.clone(),
+            logical_time: self.logical_time.to_string(),
+            timestamp: self.timestamp,
+            direction: self.direction,
+            amount_nanograms: self.amount_nanograms.to_string(),
+            counterparty: self.counterparty.clone(),
+        }
+    }
+}
+
+/// Internal pagination cursor with a numeric logical time.
+#[derive(Debug, Clone)]
+pub(crate) struct ActivityPageCursor {
+    pub logical_time: BigUint,
+    pub hash: String,
+}
+
+impl ActivityPageCursor {
+    /// Converts the internal cursor to its portable public representation.
+    pub(crate) fn snapshot(&self) -> ActivityCursor {
+        ActivityCursor {
+            logical_time: self.logical_time.to_string(),
+            hash: self.hash.clone(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct ActivityPage {
-    pub items: Vec<ActivityItem>,
-    pub cursor: Option<ActivityCursor>,
+    pub items: Vec<ActivityRecord>,
+    pub cursor: Option<ActivityPageCursor>,
     pub has_more: bool,
 }
 
@@ -117,7 +166,8 @@ pub(crate) fn response_error(
 
 pub(crate) fn parse_account(body: &[u8]) -> Result<AccountSnapshot, DomainError> {
     let account: Account = decode_envelope(body)?;
-    let balance_nanograms = decimal_string(&account.balance, "account balance")?;
+    let balance_nanograms =
+        parse_unsigned_decimal(&account.balance, "account balance")?.to_string();
 
     let status = match account.state.to_ascii_lowercase().as_str() {
         "nonexist" | "nonexistent" => AccountStatus::Nonexistent,
@@ -142,8 +192,11 @@ pub(crate) fn parse_activity(body: &[u8], page_size: u32) -> Result<ActivityPage
             if transaction.transaction_id.hash.is_empty() {
                 return Err(invalid_response("transaction hash must not be empty"));
             }
-            Ok(ActivityCursor {
-                logical_time: decimal_string(&transaction.transaction_id.lt, "logical time")?,
+            Ok(ActivityPageCursor {
+                logical_time: parse_unsigned_decimal(
+                    &transaction.transaction_id.lt,
+                    "logical time",
+                )?,
                 hash: canonical_hash(&transaction.transaction_id.hash),
             })
         })
@@ -154,7 +207,6 @@ pub(crate) fn parse_activity(body: &[u8], page_size: u32) -> Result<ActivityPage
 
     for transaction in transactions {
         if let Some(message) = &transaction.in_msg
-            && message_address(&message.source).is_some()
             && let Some(item) =
                 activity_from_message(&transaction, message, ActivityDirection::Received, 0)?
         {
@@ -174,8 +226,7 @@ pub(crate) fn parse_activity(body: &[u8], page_size: u32) -> Result<ActivityPage
         }
     }
 
-    items.sort_by(activity_item_order);
-    items.dedup_by(|left, right| left.id == right.id);
+    items.sort_by(activity_record_order);
 
     Ok(ActivityPage {
         items,
@@ -184,16 +235,15 @@ pub(crate) fn parse_activity(body: &[u8], page_size: u32) -> Result<ActivityPage
     })
 }
 
-pub(crate) fn activity_item_order(left: &ActivityItem, right: &ActivityItem) -> Ordering {
-    decimal_cmp(&right.logical_time, &left.logical_time)
+pub(crate) fn activity_record_order(
+    left: &ActivityRecord,
+    right: &ActivityRecord,
+) -> std::cmp::Ordering {
+    right
+        .logical_time
+        .cmp(&left.logical_time)
         .then_with(|| right.timestamp.cmp(&left.timestamp))
         .then_with(|| left.id.cmp(&right.id))
-}
-
-pub(crate) fn decimal_cmp(left: &str, right: &str) -> Ordering {
-    let left = left.trim_start_matches('0');
-    let right = right.trim_start_matches('0');
-    left.len().cmp(&right.len()).then_with(|| left.cmp(right))
 }
 
 fn activity_from_message(
@@ -201,18 +251,18 @@ fn activity_from_message(
     message: &Message,
     direction: ActivityDirection,
     index: usize,
-) -> Result<Option<ActivityItem>, DomainError> {
-    let amount_nanograms = decimal_string(&message.value, "message value")?;
-    if amount_nanograms.bytes().all(|byte| byte == b'0') {
+) -> Result<Option<ActivityRecord>, DomainError> {
+    let counterparty = match direction {
+        ActivityDirection::Received => message_address(&message.source, "message source")?,
+        ActivityDirection::Sent => message_address(&message.destination, "message destination")?,
+    };
+
+    let amount_nanograms = parse_unsigned_decimal(&message.value, "message value")?;
+    if amount_nanograms == BigUint::default() {
         return Ok(None);
     }
 
-    let counterparty = match direction {
-        ActivityDirection::Received => message_address(&message.source),
-        ActivityDirection::Sent => message_address(&message.destination),
-    };
-
-    let logical_time = decimal_string(&transaction.transaction_id.lt, "logical time")?;
+    let logical_time = parse_unsigned_decimal(&transaction.transaction_id.lt, "logical time")?;
     let direction_name = match direction {
         ActivityDirection::Received => "received",
         ActivityDirection::Sent => "sent",
@@ -223,20 +273,19 @@ fn activity_from_message(
         return Err(invalid_response("transaction hash must not be empty"));
     }
 
-    Ok(Some(ActivityItem {
+    Ok(Some(ActivityRecord {
         id: format!("{transaction_hash}:{direction_name}:{index}"),
         transaction_hash,
         logical_time,
         timestamp: transaction.utime,
         direction,
-        amount_grams: format_nanograms(&amount_nanograms)?,
         amount_nanograms,
-        counterparty,
+        counterparty: Some(counterparty),
     }))
 }
 
 struct OrderedMessage<'a> {
-    created_logical_time: Option<String>,
+    created_logical_time: Option<BigUint>,
     /// The provider message hash normalized to standard padded Base64 when valid.
     hash: String,
     original_index: usize,
@@ -252,7 +301,7 @@ fn ordered_out_messages(transaction: &Transaction) -> Result<Vec<OrderedMessage<
             let created_lt = message
                 .created_lt
                 .as_ref()
-                .map(|value| decimal_string(value, "message created logical time"))
+                .map(|value| parse_unsigned_decimal(value, "message created logical time"))
                 .transpose()?;
 
             let message_hash = message
@@ -272,23 +321,18 @@ fn ordered_out_messages(transaction: &Transaction) -> Result<Vec<OrderedMessage<
         .collect::<Result<Vec<_>, DomainError>>()?;
 
     messages.sort_by(|left, right| {
-        optional_decimal_cmp(
-            left.created_logical_time.as_deref(),
-            right.created_logical_time.as_deref(),
-        )
-        .then_with(|| left.hash.cmp(&right.hash))
-        .then_with(|| left.original_index.cmp(&right.original_index))
+        left.created_logical_time
+            .cmp(&right.created_logical_time)
+            .then_with(|| left.hash.cmp(&right.hash))
+            .then_with(|| left.original_index.cmp(&right.original_index))
     });
 
     Ok(messages)
 }
 
-fn decode<'a, T: Deserialize<'a>>(body: &'a [u8]) -> Result<T, DomainError> {
-    serde_json::from_slice(body).map_err(|error| invalid_response(error.to_string()))
-}
-
 fn decode_envelope<T: DeserializeOwned>(body: &[u8]) -> Result<T, DomainError> {
-    let envelope: RawEnvelope = decode(body)?;
+    let envelope: RawEnvelope =
+        serde_json::from_slice(body).map_err(|error| invalid_response(error.to_string()))?;
     if !envelope.ok {
         return Err(provider_envelope_error(envelope));
     }
@@ -362,54 +406,34 @@ fn invalid_response(message: impl Into<String>) -> DomainError {
     }
 }
 
-fn decimal_string(value: &Value, field: &str) -> Result<String, DomainError> {
+/// Parses Toncenter numbers without imposing a machine-integer size limit.
+///
+/// Toncenter can encode the same integer as a JSON string or number. Both
+/// forms become one canonical numeric representation before engine logic runs.
+fn parse_unsigned_decimal(value: &Value, field: &str) -> Result<BigUint, DomainError> {
     let value = match value {
-        Value::String(value) => value.clone(),
-        Value::Number(value) => value.to_string(),
+        Value::String(value) => value.as_str(),
+        Value::Number(value) => {
+            return value
+                .to_string()
+                .parse()
+                .map_err(|_| invalid_response(format!("{field} is not an unsigned decimal")));
+        }
         _ => return Err(invalid_response(format!("{field} is not a decimal value"))),
     };
 
-    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(invalid_response(format!(
-            "{field} is not an unsigned decimal"
-        )));
-    }
-
-    Ok(value)
+    value
+        .parse()
+        .map_err(|_| invalid_response(format!("{field} is not an unsigned decimal")))
 }
 
-fn format_nanograms(value: &str) -> Result<String, DomainError> {
-    let nanograms = value
-        .parse::<u128>()
-        .map_err(|error| invalid_response(error.to_string()))?;
-
-    let whole = nanograms / 1_000_000_000;
-    let fraction = nanograms % 1_000_000_000;
-
-    if fraction == 0 {
-        return Ok(whole.to_string());
-    }
-
-    let fraction = format!("{fraction:09}").trim_end_matches('0').to_owned();
-
-    Ok(format!("{whole}.{fraction}"))
-}
-
-fn message_address(value: &Value) -> Option<String> {
+fn message_address(value: &Value, field: &str) -> Result<String, DomainError> {
     value
         .as_str()
         .or_else(|| value.get("account_address").and_then(Value::as_str))
         .filter(|address| !address.is_empty())
         .map(str::to_owned)
-}
-
-fn optional_decimal_cmp(left: Option<&str>, right: Option<&str>) -> Ordering {
-    match (left, right) {
-        (Some(left), Some(right)) => decimal_cmp(left, right),
-        (None, Some(_)) => Ordering::Less,
-        (Some(_), None) => Ordering::Greater,
-        (None, None) => Ordering::Equal,
-    }
+        .ok_or_else(|| invalid_response(format!("{field} is missing or invalid")))
 }
 
 fn canonical_hash(value: &str) -> String {

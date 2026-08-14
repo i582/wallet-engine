@@ -24,7 +24,6 @@ import {
   formatActivityAmount,
   formatNanogramBalance,
   formatTimestamp,
-  formatUsdBalance,
   formatUsdNanograms,
 } from "@/lib/format"
 
@@ -339,10 +338,10 @@ function ActivityRow({
       </div>
       <div className="shrink-0 text-right">
         <p className="text-sm font-medium">
-          {formatActivityAmount(item.amountGrams, item.direction)}
+          {formatActivityAmount(item.amountNanograms, item.direction)}
         </p>
         <p className="mt-1 text-xs text-muted-foreground">
-          {formatUsdBalance(item.amountGrams, gramUsdRate)}
+          {formatUsdNanograms(item.amountNanograms, gramUsdRate)}
         </p>
       </div>
     </button>

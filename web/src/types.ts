@@ -65,7 +65,6 @@ export interface ActivityItem {
   readonly timestamp: number
   readonly direction: "sent" | "received"
   readonly amountNanograms: string
-  readonly amountGrams: string
   readonly counterparty?: string
 }
 

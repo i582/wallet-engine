@@ -4,7 +4,7 @@ import type {ActivityItem} from "@ton/wallet-engine"
 import {type ReactElement, useState} from "react"
 
 import {Button} from "@/components/ui/button"
-import {formatActivityAmount, formatUsdBalance} from "@/lib/format"
+import {formatActivityAmount, formatUsdNanograms} from "@/lib/format"
 
 export interface TransactionViewProps {
   readonly item: ActivityItem
@@ -39,10 +39,10 @@ export function TransactionView({item, gramUsdRate, onClose}: TransactionViewPro
           </span>
           <p className="mt-4 text-sm text-muted-foreground">{received ? "Received" : "Sent"}</p>
           <p className="mt-1 text-3xl font-semibold tracking-[-0.04em]">
-            {formatActivityAmount(item.amountGrams, item.direction)}
+            {formatActivityAmount(item.amountNanograms, item.direction)}
           </p>
           <p className="mt-2 text-sm text-muted-foreground">
-            {formatUsdBalance(item.amountGrams, gramUsdRate)}
+            {formatUsdNanograms(item.amountNanograms, gramUsdRate)}
           </p>
         </div>
 

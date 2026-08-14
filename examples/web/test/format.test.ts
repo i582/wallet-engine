@@ -5,7 +5,6 @@ import {
   formatActivityAmount,
   formatBalance,
   formatNanogramBalance,
-  formatUsdBalance,
   formatUsdNanograms,
   gramsToNanograms,
 } from "@/lib/format"
@@ -32,14 +31,8 @@ describe("wallet display helpers", () => {
   })
 
   test("uses the activity direction for the amount sign", () => {
-    expect(formatActivityAmount("2.75", "received")).toBe("+2.75 GRAM")
-    expect(formatActivityAmount("2.75", "sent")).toBe("−2.75 GRAM")
-  })
-
-  test("formats the current balance in US dollars", () => {
-    expect(formatUsdBalance("2", 1.25)).toBe("$2.50")
-    expect(formatUsdBalance(undefined, 1.25)).toBe("$—")
-    expect(formatUsdBalance("2", undefined)).toBe("$—")
+    expect(formatActivityAmount("2750000000", "received")).toBe("+2.75 GRAM")
+    expect(formatActivityAmount("2750000000", "sent")).toBe("−2.75 GRAM")
   })
 
   test("formats a nanogram balance in US dollars", () => {

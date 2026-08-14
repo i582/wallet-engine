@@ -33,22 +33,6 @@ export function formatNanogramBalance(value: string | undefined): string {
   return fraction ? `${parts.whole}.${fraction}` : parts.whole.toString()
 }
 
-export function formatUsdBalance(
-  amountGrams: string | undefined,
-  gramUsdRate: number | undefined,
-): string {
-  if (!amountGrams || gramUsdRate === undefined) {
-    return "$—"
-  }
-
-  const value: number = Number(amountGrams) * gramUsdRate
-  if (!Number.isFinite(value)) {
-    return "$—"
-  }
-
-  return formatUsd(value)
-}
-
 export function formatUsdNanograms(
   balanceNanograms: string | undefined,
   gramUsdRate: number | undefined,
@@ -107,7 +91,7 @@ function splitNanograms(value: string | undefined): NanogramParts | undefined {
 
 export function formatActivityAmount(amount: string, direction: ActivityDirection): string {
   const sign: string = direction === "received" ? "+" : "−"
-  return `${sign}${formatBalance(amount)} GRAM`
+  return `${sign}${formatNanogramBalance(amount)} GRAM`
 }
 
 export function formatTimestamp(timestamp: number): string {
