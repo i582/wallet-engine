@@ -734,8 +734,8 @@ pub struct SendSnapshot {
 pub struct PreparedSend {
     /// The application operation identifier.
     pub operation_id: String,
-    /// The Unix timestamp after which validators reject the transfer.
-    pub valid_until: u64,
+    /// The TON `uint32` Unix timestamp after which validators reject the transfer.
+    pub valid_until: u32,
     /// The destination TON address.
     pub destination: String,
     /// The exact transfer amount in nanograms.

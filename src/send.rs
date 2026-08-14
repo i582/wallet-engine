@@ -47,7 +47,7 @@ pub(crate) struct PreparedTransfer {
     pub amount_nanograms: String,
     pub seqno: u32,
     pub needs_state_init: bool,
-    pub valid_until: u64,
+    pub valid_until: u32,
     pub signed_boc: Vec<u8>,
     /// The normalized external-message hash in standard padded Base64.
     pub message_hash: String,
@@ -161,7 +161,7 @@ struct DurableSendRecord {
     amount_nanograms: String,
     seqno: u32,
     needs_state_init: bool,
-    valid_until: u64,
+    valid_until: u32,
     /// The signed BOC encoded as standard padded Base64 for durable storage.
     signed_boc_base64: String,
     /// The normalized external-message hash in standard padded Base64.

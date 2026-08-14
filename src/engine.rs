@@ -665,7 +665,10 @@ impl WalletClient {
         let now = self.platform_host.now().await;
         self.ensure_current_send(generation)?;
 
-        let Some(valid_until) = now.checked_add(300) else {
+        let Some(valid_until) = now
+            .checked_add(300)
+            .and_then(|timestamp| u32::try_from(timestamp).ok())
+        else {
             self.fail_send(generation, "transfer expiry overflow".to_owned())?;
             return Err(WalletClientError::IdentifierExhausted);
         };
@@ -679,8 +682,8 @@ impl WalletClient {
             &fresh,
             valid_until,
         )
-        .map_err(|_| {
-            let _ = self.fail_send(generation, "failed to prepare transfer".to_owned());
+        .map_err(|error| {
+            let _ = self.fail_send(generation, format!("failed to prepare transfer: {error}"));
             WalletClientError::StateUnavailable
         })?;
 
