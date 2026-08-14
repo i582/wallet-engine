@@ -1,0 +1,26 @@
+use crate::block_tlb::block_types::block_info::ExtBlockRef;
+use ton_core::TLB;
+use ton_core::types::tlb_core::TLBRef;
+
+#[derive(Debug, Clone, PartialEq, TLB)]
+pub enum PrevBlockInfo {
+    Regular(ExtBlockRef),
+    AfterMerge(BlockPrevInfoAfterMerge), // is not tested
+}
+
+#[derive(Debug, Clone, PartialEq, TLB)]
+pub struct BlockPrevInfoAfterMerge {
+    pub prev1: TLBRef<ExtBlockRef>,
+    pub prev2: TLBRef<ExtBlockRef>,
+}
+
+impl Default for PrevBlockInfo {
+    fn default() -> Self {
+        PrevBlockInfo::Regular(ExtBlockRef {
+            end_lt: 0,
+            seqno: 0,
+            root_hash: Default::default(),
+            file_hash: Default::default(),
+        })
+    }
+}
