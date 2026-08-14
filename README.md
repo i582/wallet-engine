@@ -1,7 +1,7 @@
 # Wallet Engine
 
-Wallet Engine is a Rust library for TON wallet applications. It gives Swift
-and Kotlin applications the same wallet behavior through UniFFI.
+Wallet Engine is a Rust library for TON wallet applications. It gives Swift,
+Kotlin, and TypeScript applications the same wallet behavior.
 
 Use Wallet Engine to:
 
@@ -47,6 +47,20 @@ just build-android
 Then read [KOTLIN.md](KOTLIN.md) for Android packaging and runtime
 dependencies.
 
+### TypeScript and WebAssembly
+
+Generate the browser WebAssembly package:
+
+```shell
+just bindings-wasm
+```
+
+The repository also contains the source of the high-level
+`@ton/wallet-engine` TypeScript package. It provides a browser HTTP host,
+IndexedDB journal storage, wallet lifecycle methods, and wallet client methods.
+
+Read [WASM.md](WASM.md) for browser setup and security requirements.
+
 This repository does not track generated bindings. Generate them from the same
 revision that you use to build the Rust library.
 
@@ -60,9 +74,8 @@ asynchronous host interfaces.
 | `WalletHttpHost` | Bounded HTTP requests and cancellation by call ID |
 | `WalletPlatformHost` | Time, protected secrets, and durable journal storage |
 
-The host callbacks let the same Rust engine run on Apple and Android platforms.
-The engine never owns `URLSession`, Android networking, Keychain, or Android
-Keystore.
+The host callbacks let the same Rust engine run on Apple, Android, and browser
+platforms. The engine does not own platform networking or protected storage.
 
 ## Basic wallet flow
 

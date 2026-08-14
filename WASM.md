@@ -1,0 +1,189 @@
+# TypeScript and WebAssembly
+
+Wallet Engine provides a WebAssembly package and a high-level TypeScript API.
+The local TypeScript package is named `@ton/wallet-engine`.
+
+This repository does not publish the package to npm. Link the `web` directory
+as a workspace package while you develop an application.
+
+The package contains no user interface. Your application owns its screens,
+routing, wallet metadata, and stream connections.
+
+## Generate the WebAssembly package
+
+Install the repository tools first:
+
+```shell
+just install-tools
+```
+
+Generate the package:
+
+```shell
+just bindings-wasm
+```
+
+The command writes generated files to `bindings/wasm`. Git ignores this
+directory. Generate the files from the same revision as the TypeScript source.
+
+The generated package uses the `web` target of `wasm-pack`. It contains the
+WebAssembly binary, JavaScript glue, and TypeScript declarations.
+
+## Check the TypeScript package
+
+Install the package dependencies:
+
+```shell
+just web-install
+```
+
+Run all TypeScript checks:
+
+```shell
+just web-fmt-check
+just web-lint
+just web-build
+just web-test
+```
+
+The package follows the Bun, Biome, and TypeScript rules from Acton. The tests
+load the real WebAssembly binary. They also run Rust callbacks through
+TypeScript host objects.
+
+## Initialize the engine
+
+Link the `web` directory as `@ton/wallet-engine` in your workspace. Then import
+the high-level API:
+
+```ts
+import {
+  BrowserPlatformHost,
+  IndexedDbJournalStore,
+  WalletClient,
+  WalletLifecycle,
+  initializeWalletEngine,
+  type ProtectedSecretStoreHost,
+} from "@ton/wallet-engine"
+
+await initializeWalletEngine()
+```
+
+A bundler can load the adjacent `wallet_engine_bg.wasm` file. You can also pass
+an explicit `InitInput` to `initializeWalletEngine`.
+
+## Implement protected storage
+
+The package does not include an insecure recovery-phrase store. Implement the
+`ProtectedSecretStoreHost` interface for your product.
+
+```ts
+const secrets: ProtectedSecretStoreHost = {
+  async read(request) {
+    return vault.read(request.secretRef.value, request.reason)
+  },
+  async store(request) {
+    await vault.store(request.secretRef.value, new Uint8Array(request.bytes))
+  },
+  async delete(secretRef) {
+    await vault.delete(secretRef.value)
+  },
+}
+
+const platformHost = new BrowserPlatformHost({
+  secrets,
+  journal: new IndexedDbJournalStore(),
+})
+```
+
+CAUTION: Do not store a recovery phrase as plain text in local storage or
+IndexedDB. Same-origin JavaScript can read unprotected browser data.
+
+The browser cannot provide the same security boundary as Keychain or Android
+Keystore. Use an external signer when your product requires that boundary.
+
+## Create a wallet client
+
+Create one HTTP host for each client. The high-level API does this for you.
+
+```ts
+const client = await WalletClient.create(
+  {
+    walletId: descriptor.walletId,
+    address: descriptor.address,
+    network: descriptor.network,
+    providers: {
+      toncenterBaseUrl: "https://testnet.toncenter.com/api/v2",
+      tonapiBaseUrl: "https://tonapi.io/v2",
+    },
+  },
+  {platformHost},
+)
+
+const update = await client.refresh()
+console.log(update.snapshot.account)
+```
+
+Call `close()` before you discard the client:
+
+```ts
+await client.close()
+```
+
+## Use a provider credential
+
+Do not put a private service credential in a browser bundle. Use a public user
+credential or a backend proxy.
+
+If the browser resolves a credential, bind it to one HTTPS origin:
+
+```ts
+const client = await WalletClient.create(config, {
+  platformHost,
+  credentialProvider(reference) {
+    return sessionCredentials.get(reference.value)
+  },
+})
+```
+
+The browser HTTP host rejects redirects. It also enforces the response limits
+from Rust. The host uses `AbortController` for cancellation.
+
+## Create and import wallets
+
+Use `WalletLifecycle` for recovery-phrase operations:
+
+```ts
+const lifecycle = await WalletLifecycle.create(platformHost)
+
+const created = await lifecycle.createWallet({
+  walletId: crypto.randomUUID(),
+  network: "testnet",
+})
+
+showRecoveryPhrase(created.recoveryPhrase.words)
+saveWalletDescriptor(created.descriptor)
+```
+
+Discard the recovery phrase after the required user flow. Persist only the
+wallet descriptor.
+
+## Store send records
+
+`IndexedDbJournalStore` uses one IndexedDB transaction for each compare-and-swap
+operation. This journal stores the exact signed BoC before submission.
+
+Browser storage can be cleared or evicted. Keep a recovery path for the user.
+Do not automatically create a new transfer after `submissionUnknown`.
+
+## Streaming
+
+The WebAssembly API does not contain streaming methods. The TypeScript
+application owns its stream connection and reconnect policy.
+
+## Browser lifecycle
+
+Browsers can freeze or discard pages. Cancel active work when the page stops.
+Create a new client and refresh wallet data when the page resumes.
+
+The WebAssembly wrapper uses a single-thread browser executor. Do not move one
+client between Web Workers. Create a separate client inside each worker.

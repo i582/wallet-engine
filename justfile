@@ -13,24 +13,28 @@ fmt:
     cargo fmt --all
     cargo fmt --manifest-path apple-bindgen/Cargo.toml
     cargo fmt --manifest-path kotlin-bindgen/Cargo.toml
+    cargo fmt --manifest-path wasm-bindings/Cargo.toml
     cargo fmt --manifest-path xtask/Cargo.toml
 
 fmt-check:
     cargo fmt --all --check
     cargo fmt --manifest-path apple-bindgen/Cargo.toml -- --check
     cargo fmt --manifest-path kotlin-bindgen/Cargo.toml -- --check
+    cargo fmt --manifest-path wasm-bindings/Cargo.toml -- --check
     cargo fmt --manifest-path xtask/Cargo.toml -- --check
 
 check-build:
     cargo check --locked --all-targets
     cargo check --locked --manifest-path apple-bindgen/Cargo.toml --all-targets
     cargo check --locked --manifest-path kotlin-bindgen/Cargo.toml --all-targets
+    cargo check --locked --manifest-path wasm-bindings/Cargo.toml --target wasm32-unknown-unknown
     cargo check --locked --manifest-path xtask/Cargo.toml --all-targets
 
 clippy:
     cargo clippy --locked --all-targets -- -D warnings
     cargo clippy --locked --manifest-path apple-bindgen/Cargo.toml --all-targets -- -D warnings
     cargo clippy --locked --manifest-path kotlin-bindgen/Cargo.toml --all-targets -- -D warnings
+    cargo clippy --locked --manifest-path wasm-bindings/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
     cargo clippy --locked --manifest-path xtask/Cargo.toml --all-targets -- -D warnings
 
 test:
@@ -55,6 +59,30 @@ bindings-kotlin:
 bindings-kotlin-check:
     cargo xtask bindings kotlin --check
 
+bindings-wasm:
+    cargo xtask bindings wasm
+
+bindings-wasm-check:
+    cargo xtask bindings wasm --check
+
+web-install:
+    bun install --cwd web --frozen-lockfile
+
+web-fmt: web-install
+    bun --cwd web fmt
+
+web-fmt-check: web-install
+    bun --cwd web fmt:check
+
+web-lint: web-install
+    bun --cwd web lint
+
+web-build: web-install bindings-wasm
+    bun --cwd web build
+
+web-test: web-install bindings-wasm
+    bun --cwd web test
+
 build-android abi="all":
     cargo xtask android --abi {{abi}}
 
@@ -64,16 +92,18 @@ check-deny:
 check-deps:
     cargo shear --deny-warnings
 
-ci: fmt-check check-build clippy test check-wasm check-ios-simulator bindings-swift-check bindings-kotlin-check
+ci: fmt-check check-build clippy test check-wasm check-ios-simulator bindings-swift-check bindings-kotlin-check bindings-wasm-check web-fmt-check web-lint web-build web-test
 
 check: ci check-deny
 
 install-tools:
     cargo install cargo-shear --version 1.13.1 --locked
     cargo install cargo-deny --version 0.19.8 --locked
+    cargo install wasm-pack --version 0.15.0 --locked
 
 clean:
     cargo clean
     cargo clean --manifest-path apple-bindgen/Cargo.toml
     cargo clean --manifest-path kotlin-bindgen/Cargo.toml
+    cargo clean --manifest-path wasm-bindings/Cargo.toml
     cargo clean --manifest-path xtask/Cargo.toml

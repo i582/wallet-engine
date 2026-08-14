@@ -8,7 +8,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 use crate::android::{AndroidAbi, build_android};
-use crate::bindings::{generate_kotlin, generate_swift};
+use crate::bindings::{generate_kotlin, generate_swift, generate_wasm};
 
 #[derive(Parser)]
 #[command(about = "Wallet Engine repository tasks")]
@@ -45,6 +45,12 @@ enum BindingLanguage {
         #[arg(long)]
         check: bool,
     },
+    /// Generate the browser WebAssembly package.
+    Wasm {
+        /// Verify generation without updating ignored outputs.
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -59,6 +65,9 @@ fn run() -> Result<()> {
         Command::Bindings {
             language: BindingLanguage::Kotlin { check },
         } => generate_kotlin(check),
+        Command::Bindings {
+            language: BindingLanguage::Wasm { check },
+        } => generate_wasm(check),
         Command::Android { abi } => build_android(abi),
     }
 }

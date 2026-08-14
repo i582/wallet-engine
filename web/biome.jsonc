@@ -1,0 +1,76 @@
+{
+  "$schema": "node_modules/@biomejs/biome/configuration_schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "includes": ["package.json", "src/**", "test/**"]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100,
+    "bracketSpacing": false
+  },
+  "javascript": {
+    "globals": ["Bun"],
+    "formatter": {
+      "arrowParentheses": "asNeeded",
+      "quoteStyle": "double",
+      "semicolons": "asNeeded",
+      "trailingCommas": "all"
+    }
+  },
+  "assist": {
+    "enabled": true,
+    "actions": {
+      "preset": "all",
+      "source": {
+        "preset": "all",
+        "organizeImports": "off",
+        "useSortedInterfaceMembers": "off",
+        "useSortedKeys": "off",
+        "useSortedProperties": "off"
+      }
+    }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "all",
+      "correctness": {
+        "noNodejsModules": "off",
+        "noUnresolvedImports": "off",
+        "useImportExtensions": "off"
+      },
+      "performance": {
+        "noAwaitInLoops": "off",
+        "noBarrelFile": "off",
+        "noReExportAll": "off"
+      },
+      "security": {
+        "noSecrets": "off"
+      },
+      "style": {
+        "noDefaultExport": "off",
+        "noContinue": "off",
+        "noInferrableTypes": "off",
+        "noMagicNumbers": "off",
+        "noParameterProperties": "off",
+        "noTernary": "off",
+        "useBlockStatements": "off",
+        "useConsistentTypeDefinitions": "off",
+        "useExportsLast": "off"
+      },
+      "suspicious": {
+        "noConsole": "off",
+        "noShadow": "off",
+        "noUnnecessaryConditions": "off",
+        "useAwait": "off"
+      }
+    }
+  }
+}

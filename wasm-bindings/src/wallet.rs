@@ -1,0 +1,107 @@
+use std::sync::Arc;
+
+use wasm_bindgen::prelude::*;
+
+use crate::error::engine_error;
+use crate::host::{HttpHostAdapter, PlatformHostAdapter, WalletHttpHost, WalletPlatformHost};
+use crate::serde::{from_value, to_value};
+
+#[wasm_bindgen(js_name = WalletClient)]
+pub struct WalletClient {
+    inner: Arc<wallet_engine::WalletClient>,
+}
+
+#[wasm_bindgen(js_class = WalletClient)]
+impl WalletClient {
+    #[wasm_bindgen(constructor)]
+    pub fn new(
+        config: JsValue,
+        http_host: WalletHttpHost,
+        platform_host: WalletPlatformHost,
+    ) -> Result<Self, JsValue> {
+        let config = from_value(config)?;
+        let http_host = Arc::new(HttpHostAdapter::register(http_host));
+        let platform_host = Arc::new(PlatformHostAdapter::register(platform_host));
+        let inner = wallet_engine::WalletClient::new(config, http_host, platform_host)
+            .map_err(|error| engine_error(&error))?;
+        Ok(Self { inner })
+    }
+
+    pub fn snapshot(&self) -> Result<JsValue, JsValue> {
+        let snapshot = self
+            .inner
+            .snapshot()
+            .map_err(|error| engine_error(&error))?;
+        to_value(&snapshot)
+    }
+
+    #[wasm_bindgen(js_name = waitForChange)]
+    pub async fn wait_for_change(&self, after_revision: u64) -> Result<JsValue, JsValue> {
+        let snapshot = self
+            .inner
+            .wait_for_change(after_revision)
+            .await
+            .map_err(|error| engine_error(&error))?;
+        to_value(&snapshot)
+    }
+
+    pub async fn refresh(&self) -> Result<JsValue, JsValue> {
+        let update = self
+            .inner
+            .refresh()
+            .await
+            .map_err(|error| engine_error(&error))?;
+        to_value(&update)
+    }
+
+    #[wasm_bindgen(js_name = cancelRefresh)]
+    pub async fn cancel_refresh(&self) -> Result<(), JsValue> {
+        self.inner
+            .cancel_refresh()
+            .await
+            .map_err(|error| engine_error(&error))
+    }
+
+    #[wasm_bindgen(js_name = loadMoreActivity)]
+    pub async fn load_more_activity(&self) -> Result<JsValue, JsValue> {
+        let update = self
+            .inner
+            .load_more_activity()
+            .await
+            .map_err(|error| engine_error(&error))?;
+        to_value(&update)
+    }
+
+    #[wasm_bindgen(js_name = cancelLoadMoreActivity)]
+    pub async fn cancel_load_more_activity(&self) -> Result<(), JsValue> {
+        self.inner
+            .cancel_load_more_activity()
+            .await
+            .map_err(|error| engine_error(&error))
+    }
+
+    pub async fn send(&self, request: JsValue) -> Result<JsValue, JsValue> {
+        let request = from_value(request)?;
+        let result = self
+            .inner
+            .send(request)
+            .await
+            .map_err(|error| engine_error(&error))?;
+        to_value(&result)
+    }
+
+    #[wasm_bindgen(js_name = cancelSend)]
+    pub async fn cancel_send(&self) -> Result<(), JsValue> {
+        self.inner
+            .cancel_send()
+            .await
+            .map_err(|error| engine_error(&error))
+    }
+
+    pub async fn shutdown(&self) -> Result<(), JsValue> {
+        self.inner
+            .shutdown()
+            .await
+            .map_err(|error| engine_error(&error))
+    }
+}
