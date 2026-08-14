@@ -4,8 +4,6 @@
 //! callbacks itself. Its journal record prevents a second signature after an
 //! ambiguous submission result.
 
-#![allow(dead_code)]
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
 
@@ -202,14 +200,6 @@ impl SendWorkflow {
             provider_reference: None,
             diagnostic: None,
         }
-    }
-
-    pub(crate) fn operation_id(&self) -> &str {
-        &self.request.operation_id
-    }
-
-    pub(crate) const fn stage(&self) -> SendStage {
-        self.stage
     }
 
     pub(crate) fn snapshot(&self) -> SendSnapshot {
