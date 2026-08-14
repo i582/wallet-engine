@@ -83,7 +83,7 @@ web-build: web-install bindings-wasm
 web-test: web-install bindings-wasm
     bun --cwd web test
 
-example-web-install:
+example-web-install: web-install
     bun install --cwd examples/web --frozen-lockfile
 
 example-web-dev: example-web-install bindings-wasm

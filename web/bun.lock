@@ -1,9 +1,9 @@
 {
-  "lockfileVersion": 2,
+  "lockfileVersion": 1,
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "@ton/wallet-engine-web",
+      "name": "@ton/wallet-engine",
       "dependencies": {
         "idb": "8.0.3",
       },
