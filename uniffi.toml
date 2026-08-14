@@ -3,3 +3,9 @@ module_name = "WalletEngineFFI"
 ffi_module_name = "wallet_engineFFI"
 ffi_module_filename = "wallet_engineFFI"
 generate_immutable_records = true
+
+[bindings.kotlin]
+package_name = "org.ton.wallet.engine"
+cdylib_name = "wallet_engine"
+android = true
+kotlin_target_version = "2.2.0"

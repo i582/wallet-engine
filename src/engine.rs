@@ -903,7 +903,9 @@ fn evaluate<T>(
 ) -> Result<T, DomainError> {
     let response = match result {
         Ok(response) => response,
-        Err(HttpHostError::Failed { kind, message }) => return Err(host_error(kind, &message)),
+        Err(HttpHostError::Failed { kind, diagnostic }) => {
+            return Err(host_error(kind, &diagnostic));
+        }
     };
     if let Some(error) = response_error(response.status, &response.headers, &response.body) {
         return Err(error);

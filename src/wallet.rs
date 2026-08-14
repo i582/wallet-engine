@@ -66,19 +66,19 @@ pub enum WalletLifecycleError {
     AddressDerivationFailed,
     #[error("protected recovery phrase does not belong to this wallet")]
     SecretWalletMismatch,
-    #[error("protected-secret host failure ({kind:?}): {message}")]
+    #[error("protected-secret host failure ({kind:?}): {diagnostic}")]
     ProtectedSecretHost {
         kind: ProtectedSecretHostErrorKind,
-        message: String,
+        diagnostic: String,
     },
 }
 
 impl From<ProtectedSecretHostError> for WalletLifecycleError {
     fn from(value: ProtectedSecretHostError) -> Self {
         match value {
-            ProtectedSecretHostError::Failed { kind, message } => Self::ProtectedSecretHost {
+            ProtectedSecretHostError::Failed { kind, diagnostic } => Self::ProtectedSecretHost {
                 kind,
-                message: sanitize_diagnostic(&message),
+                diagnostic: sanitize_diagnostic(&diagnostic),
             },
         }
     }

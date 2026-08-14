@@ -1,6 +1,10 @@
 # Rust build artifacts
 target/
 apple-bindgen/target/
+kotlin-bindgen/target/
+
+# Generated foreign-language bindings
+/bindings/
 
 # IDE files
 .idea/

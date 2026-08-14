@@ -110,10 +110,10 @@ pub enum HttpHostErrorKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, uniffi::Error)]
 pub enum HttpHostError {
-    #[error("HTTP host failure ({kind:?}): {message}")]
+    #[error("HTTP host failure ({kind:?}): {diagnostic}")]
     Failed {
         kind: HttpHostErrorKind,
-        message: String,
+        diagnostic: String,
     },
 }
 
@@ -352,10 +352,10 @@ pub enum ProtectedSecretHostErrorKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, uniffi::Error)]
 pub enum ProtectedSecretHostError {
-    #[error("protected-secret host failure ({kind:?}): {message}")]
+    #[error("protected-secret host failure ({kind:?}): {diagnostic}")]
     Failed {
         kind: ProtectedSecretHostErrorKind,
-        message: String,
+        diagnostic: String,
     },
 }
 
@@ -394,10 +394,10 @@ pub enum JournalHostErrorKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, uniffi::Error)]
 pub enum JournalHostError {
-    #[error("journal host failure ({kind:?}): {message}")]
+    #[error("journal host failure ({kind:?}): {diagnostic}")]
     Failed {
         kind: JournalHostErrorKind,
-        message: String,
+        diagnostic: String,
     },
 }
 
