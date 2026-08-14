@@ -1,17 +1,20 @@
-//! Wallet lifecycle operations and persistable wallet metadata.
+//! Wallet lifecycle, key derivation, and V5R1 transfer construction.
 //!
-//! This module creates and imports V5R1 wallets. Rust derives addresses while
-//! the host stores recovery words in protected storage.
+//! The public API creates and imports wallets while the host stores recovery
+//! words. Private submodules derive wallet keys and build signed transfers.
+
+mod crypto;
+pub(crate) mod transfer;
 
 use std::sync::Arc;
 
+use self::crypto::{SensitiveMnemonic, derive_v5r1_wallet, generate_mnemonic};
 use crate::diagnostic::bounded_diagnostic;
 use crate::domain::{
     Network, ProtectedSecretHostError, ProtectedSecretHostErrorKind, ProtectedSecretRead,
     ProtectedSecretRef, ProtectedSecretStore, SecretAccessReason,
 };
 use crate::engine::WalletPlatformHost;
-use crate::wallet_crypto::{SensitiveMnemonic, derive_v5r1_wallet, generate_mnemonic};
 
 const MAX_RECORD_ID_BYTES: usize = 128;
 

@@ -29,9 +29,7 @@ mod domain;
 mod engine;
 mod provider;
 mod send;
-mod signer;
 mod wallet;
-mod wallet_crypto;
 
 pub use domain::*;
 pub use engine::{WalletClient, WalletHttpHost, WalletPlatformHost};

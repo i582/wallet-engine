@@ -18,12 +18,12 @@ use ton::ton_core::types::TonAddress;
 use ton::ton_core::types::tlb_core::TLBCoins;
 
 use crate::send::{FreshSendAccount, PreparedTransfer};
-use crate::wallet_crypto::WalletCryptoError;
-use crate::wallet_crypto::derive_v5r1_wallet;
 use crate::{Network, SendRequest};
 
+use super::crypto::{WalletCryptoError, derive_v5r1_wallet};
+
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum SignerError {
+pub(crate) enum TransferError {
     #[error("mnemonic is not valid UTF-8")]
     MnemonicEncoding(#[source] Utf8Error),
     #[error("wallet derivation failed")]
@@ -52,16 +52,16 @@ pub(crate) fn prepare_transfer(
     request: &SendRequest,
     account: &FreshSendAccount,
     valid_until: u32,
-) -> Result<PreparedTransfer, SignerError> {
-    let mnemonic = std::str::from_utf8(mnemonic_bytes).map_err(SignerError::MnemonicEncoding)?;
-    let wallet = derive_v5r1_wallet(mnemonic, network).map_err(SignerError::WalletDerivation)?;
+) -> Result<PreparedTransfer, TransferError> {
+    let mnemonic = std::str::from_utf8(mnemonic_bytes).map_err(TransferError::MnemonicEncoding)?;
+    let wallet = derive_v5r1_wallet(mnemonic, network).map_err(TransferError::WalletDerivation)?;
     let destination =
-        TonAddress::from_str(&request.destination).map_err(SignerError::InvalidDestination)?;
+        TonAddress::from_str(&request.destination).map_err(TransferError::InvalidDestination)?;
 
     let amount_nanograms = request
         .amount_nanograms
         .parse::<u128>()
-        .map_err(SignerError::InvalidAmount)?;
+        .map_err(TransferError::InvalidAmount)?;
 
     let info = CommonMsgInfoInt::new(
         destination.to_msg_address(),
@@ -70,7 +70,7 @@ pub(crate) fn prepare_transfer(
 
     let internal = Msg::new(info, TonCell::empty().to_owned())
         .to_cell()
-        .map_err(SignerError::InternalMessage)?;
+        .map_err(TransferError::InternalMessage)?;
 
     let external = wallet
         .create_ext_in_msg(
@@ -79,16 +79,16 @@ pub(crate) fn prepare_transfer(
             valid_until,
             account.needs_state_init(),
         )
-        .map_err(SignerError::ExternalMessage)?;
+        .map_err(TransferError::ExternalMessage)?;
 
     let normalized =
-        Msg::<TonCell>::from_cell(&external).map_err(SignerError::MessageNormalization)?;
+        Msg::<TonCell>::from_cell(&external).map_err(TransferError::MessageNormalization)?;
     let message_hash = STANDARD.encode(
         normalized
             .cell_hash_normalized()
-            .map_err(SignerError::MessageHash)?,
+            .map_err(TransferError::MessageHash)?,
     );
-    let signed_boc = external.to_boc().map_err(SignerError::BocEncoding)?;
+    let signed_boc = external.to_boc().map_err(TransferError::BocEncoding)?;
 
     Ok(PreparedTransfer {
         operation_id: request.operation_id.clone(),
@@ -107,8 +107,8 @@ pub(crate) fn prepare_transfer(
 pub(crate) fn derive_source(
     mnemonic_bytes: &[u8],
     network: Network,
-) -> Result<TonAddress, SignerError> {
-    let mnemonic = std::str::from_utf8(mnemonic_bytes).map_err(SignerError::MnemonicEncoding)?;
-    let wallet = derive_v5r1_wallet(mnemonic, network).map_err(SignerError::WalletDerivation)?;
+) -> Result<TonAddress, TransferError> {
+    let mnemonic = std::str::from_utf8(mnemonic_bytes).map_err(TransferError::MnemonicEncoding)?;
+    let wallet = derive_v5r1_wallet(mnemonic, network).map_err(TransferError::WalletDerivation)?;
     Ok(wallet.address)
 }

@@ -12,7 +12,7 @@ use super::validation::validate_send;
 use crate::diagnostic::bounded_diagnostic;
 use crate::provider::parse_account;
 use crate::send::{FreshSendAccount, SendDirective, SendWorkflow};
-use crate::signer::{derive_source, prepare_transfer};
+use crate::wallet::transfer::{derive_source, prepare_transfer};
 use crate::{AccountStatus, HttpRequestId, SendPhase, SendRequest, SendResult, WalletClientError};
 
 #[uniffi::export]

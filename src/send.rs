@@ -298,7 +298,7 @@ impl SendWorkflow {
     /// Marks successful host authorization.
     ///
     /// The reducer does not accept or retain the secret. The coordinator passes
-    /// it directly to the Rust signer and zeroizes its temporary buffer.
+    /// it directly to the wallet transfer builder and zeroizes its temporary buffer.
     pub(crate) fn authorization_succeeded(&mut self) -> Result<SendDirective, SendWorkflowError> {
         self.expect(SendStage::Authorizing, "authorization_succeeded")?;
         let account = self
