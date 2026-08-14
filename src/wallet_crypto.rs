@@ -1,0 +1,115 @@
+use ton::ton_wallet::{Mnemonic, TonWallet, WORDLIST_EN_SET, WalletVersion};
+
+use crate::NetworkV3;
+
+const MAINNET_GLOBAL_ID: i32 = -239;
+const TESTNET_GLOBAL_ID: i32 = -3;
+const MNEMONIC_ENTROPY_BYTES: usize = 48;
+const MNEMONIC_WORD_COUNT: usize = 24;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum WalletCryptoError {
+    #[error("secure random generation failed")]
+    RandomGeneration,
+    #[error("invalid recovery phrase")]
+    InvalidMnemonic,
+    #[error("V5R1 wallet construction failed")]
+    WalletConstruction,
+}
+
+/// Generates a passwordless 24-word TON mnemonic using system randomness.
+///
+/// TON mnemonics are not BIP-39 checksummed phrases. Candidate words are
+/// sampled from the TON English word list until `Mnemonic::new` accepts the
+/// passwordless seed-version constraint.
+pub(crate) fn generate_mnemonic() -> Result<String, WalletCryptoError> {
+    let mut wordlist = WORDLIST_EN_SET.iter().copied().collect::<Vec<_>>();
+    wordlist.sort_unstable();
+    if wordlist.len() != 2048 {
+        return Err(WalletCryptoError::InvalidMnemonic);
+    }
+
+    loop {
+        let mut entropy = [0_u8; MNEMONIC_ENTROPY_BYTES];
+        getrandom::fill(&mut entropy).map_err(|_| WalletCryptoError::RandomGeneration)?;
+
+        let words = entropy
+            .chunks_exact(2)
+            .map(|bytes| {
+                let value = u16::from_be_bytes([bytes[0], bytes[1]]);
+                wordlist[usize::from(value & 0x07ff)]
+            })
+            .collect::<Vec<_>>();
+
+        debug_assert_eq!(words.len(), MNEMONIC_WORD_COUNT);
+        if Mnemonic::new(words.clone(), None).is_ok() {
+            return Ok(words.join(" "));
+        }
+    }
+}
+
+/// Derives the V5R1 wallet contract used by lifecycle and transaction signing.
+pub(crate) fn derive_v5r1_wallet(
+    mnemonic: &str,
+    network: NetworkV3,
+) -> Result<TonWallet, WalletCryptoError> {
+    let mnemonic =
+        Mnemonic::from_str(mnemonic, None).map_err(|_| WalletCryptoError::InvalidMnemonic)?;
+    let key_pair = mnemonic
+        .to_key_pair()
+        .map_err(|_| WalletCryptoError::InvalidMnemonic)?;
+    let network_global_id = match network {
+        NetworkV3::Mainnet => MAINNET_GLOBAL_ID,
+        NetworkV3::Testnet => TESTNET_GLOBAL_ID,
+    };
+    let wallet_id = network_global_id ^ i32::MIN;
+
+    TonWallet::new_with_params(WalletVersion::V5R1, key_pair, 0, wallet_id)
+        .map_err(|_| WalletCryptoError::WalletConstruction)
+}
+
+pub(crate) fn derive_v5r1_address(
+    mnemonic: &str,
+    network: NetworkV3,
+    bounceable: bool,
+) -> Result<String, WalletCryptoError> {
+    let wallet = derive_v5r1_wallet(mnemonic, network)?;
+    Ok(wallet
+        .address
+        .to_base64(network == NetworkV3::Mainnet, bounceable, true))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TEST_MNEMONIC: &str = "cupboard match uphold miracle fog balance unknown region share hand trophy million toy narrow ability exchange first toast fresh maid report cram strong later";
+
+    #[test]
+    fn derives_the_known_mainnet_v5r1_address() {
+        let address = derive_v5r1_address(TEST_MNEMONIC, NetworkV3::Mainnet, true).unwrap();
+
+        assert_eq!(address, "EQAz8sBz-Twy965gFWNHlwa2ArkRLaoVzAowtRaW542bDO5p");
+    }
+
+    #[test]
+    fn network_and_bounce_flags_change_the_friendly_address() {
+        let mainnet = derive_v5r1_address(TEST_MNEMONIC, NetworkV3::Mainnet, true).unwrap();
+        let testnet = derive_v5r1_address(TEST_MNEMONIC, NetworkV3::Testnet, true).unwrap();
+        let non_bounceable = derive_v5r1_address(TEST_MNEMONIC, NetworkV3::Mainnet, false).unwrap();
+
+        assert_ne!(mainnet, testnet);
+        assert_ne!(mainnet, non_bounceable);
+        assert!(testnet.starts_with("kQ"));
+        assert!(non_bounceable.starts_with("UQ"));
+    }
+
+    #[test]
+    fn generated_mnemonic_is_valid_for_a_v5r1_wallet() {
+        let mnemonic = generate_mnemonic().unwrap();
+
+        assert_eq!(mnemonic.split_whitespace().count(), MNEMONIC_WORD_COUNT);
+        assert!(Mnemonic::from_str(&mnemonic, None).is_ok());
+        assert!(derive_v5r1_wallet(&mnemonic, NetworkV3::Testnet).is_ok());
+    }
+}
