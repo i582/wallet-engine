@@ -50,6 +50,10 @@ just build-android
 Then read [KOTLIN.md](KOTLIN.md) for Android packaging and runtime
 dependencies.
 
+For a complete Jetpack Compose integration, read the
+[Android wallet example](examples/android/README.md). The example implements
+the HTTP, Android Keystore, and journal callbacks that the engine requires.
+
 ### TypeScript and WebAssembly
 
 Generate the browser WebAssembly package:

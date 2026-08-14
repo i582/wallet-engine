@@ -23,6 +23,8 @@ Thumbs.db
 .env.*
 !.env.example
 *.mnemonic
+wallet_engine_secrets.tsv
+wallet_engine_wallets.tsv
 
 # Code intelligence and local tooling
 .codegraph/

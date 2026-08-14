@@ -160,6 +160,15 @@ example-swift-open: bindings-swift
 build-android abi="all":
     cargo xtask android --abi {{abi}}
 
+example-android-build: bindings-kotlin build-android
+    examples/android/gradlew -p examples/android :app:assembleDebug --no-configuration-cache
+
+example-android-check: bindings-kotlin build-android
+    examples/android/gradlew -p examples/android :app:testInstrumentedTestUnitTest :app:lintDebug --no-configuration-cache
+
+example-android-install: example-android-build
+    examples/android/gradlew -p examples/android :app:installDebug --no-configuration-cache
+
 check-deny:
     cargo deny check
 
