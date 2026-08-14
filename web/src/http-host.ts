@@ -1,11 +1,4 @@
-import type {
-  CredentialRef,
-  HostFailure,
-  HttpRequest,
-  HttpRequestId,
-  HttpHeader,
-  HttpResponse,
-} from "./types"
+import type {HostFailure, HttpRequest, HttpRequestId, HttpHeader, HttpResponse} from "./types"
 
 const MAX_REQUEST_BODY_BYTES = 256 * 1024
 const MAX_RESPONSE_BODY_BYTES = 4 * 1024 * 1024
@@ -13,24 +6,26 @@ const MAX_RESPONSE_HEADER_BYTES = 64 * 1024
 const MAX_RESPONSE_HEADERS = 64
 const MAX_EARLY_CANCELLATIONS = 1024
 
-export type CredentialProvider = (
-  reference: CredentialRef,
-) => Promise<string | undefined> | string | undefined
-
 export interface BrowserHttpHostOptions {
-  readonly credentialProvider?: CredentialProvider
+  readonly toncenterApiKey?: string
   readonly fetch?: typeof globalThis.fetch
 }
 
 export class BrowserHttpHost {
-  private readonly credentialProvider: CredentialProvider
+  private readonly allowedOrigin: string
+  private readonly toncenterApiKey: string | undefined
   private readonly fetch: typeof globalThis.fetch
   private readonly tasks: Map<number, AbortController> = new Map()
   private readonly cancelledBeforeStart: Set<number> = new Set()
   private readonly cancelledOrder: number[] = []
 
-  constructor(options: BrowserHttpHostOptions = {}) {
-    this.credentialProvider = options.credentialProvider ?? (() => undefined)
+  constructor(toncenterBaseUrl: string, options: BrowserHttpHostOptions = {}) {
+    const providerUrl: URL = new URL(toncenterBaseUrl)
+    if (providerUrl.protocol !== "https:") {
+      throw hostFailure("policyViolation", "The Toncenter URL must use HTTPS")
+    }
+    this.allowedOrigin = providerUrl.origin
+    this.toncenterApiKey = options.toncenterApiKey?.trim() || undefined
     this.fetch = options.fetch ?? globalThis.fetch.bind(globalThis)
   }
 
@@ -43,7 +38,6 @@ export class BrowserHttpHost {
 
     const controller = new AbortController()
     this.tasks.set(requestId, controller)
-    let credential: string | undefined
     try {
       const url = new URL(request.url)
       const headers = new Headers()
@@ -54,15 +48,8 @@ export class BrowserHttpHost {
         headers.append(header.name, header.value)
       }
 
-      if (request.credential !== undefined) {
-        credential = await this.credentialProvider(request.credential)
-        if (!credential) {
-          throw hostFailure("policyViolation", "The requested credential is unavailable")
-        }
-        if (effectiveOrigin(url) !== request.credentialOrigin) {
-          throw hostFailure("policyViolation", "The credential origin does not match the request")
-        }
-        headers.set("X-API-Key", credential)
+      if (this.toncenterApiKey !== undefined) {
+        headers.set("X-API-Key", this.toncenterApiKey)
       }
 
       const response = await this.fetch(url, {
@@ -74,7 +61,7 @@ export class BrowserHttpHost {
         cache: "no-store",
         signal: controller.signal,
       })
-      const responseHeaders = collectHeaders(response.headers, credential)
+      const responseHeaders = collectHeaders(response.headers, this.toncenterApiKey)
       enforceHeaderLimit(responseHeaders, request.maxResponseHeaderBytes)
       const body = await collectBody(response, request.maxResponseBodyBytes, controller)
       return {
@@ -114,6 +101,9 @@ export class BrowserHttpHost {
     if (url.protocol !== "https:") {
       throw hostFailure("policyViolation", "Only HTTPS requests are permitted")
     }
+    if (url.origin !== this.allowedOrigin) {
+      throw hostFailure("policyViolation", "The request origin does not match Toncenter")
+    }
     if (request.body.length > MAX_REQUEST_BODY_BYTES) {
       throw hostFailure("policyViolation", "The request body is too large")
     }
@@ -125,15 +115,7 @@ export class BrowserHttpHost {
     ) {
       throw hostFailure("policyViolation", "The response limit is invalid")
     }
-    if ((request.credential === undefined) !== (request.credentialOrigin === undefined)) {
-      throw hostFailure("policyViolation", "The credential policy is incomplete")
-    }
   }
-}
-
-function effectiveOrigin(url: URL): string {
-  const port = url.port || (url.protocol === "https:" ? "443" : "80")
-  return `${url.protocol}//${url.hostname.toLowerCase()}:${port}`
 }
 
 function isReservedHeader(name: string): boolean {

@@ -14,7 +14,6 @@ use wallet_engine::{
     HttpResponse, WalletHttpHost,
 };
 
-const CREDENTIAL_NAME: &str = "toncenter-api-key";
 const MAX_REQUEST_BODY_BYTES: usize = 256 * 1024;
 const MAX_RESPONSE_HEADERS: usize = 64;
 
@@ -133,23 +132,9 @@ impl ReqwestHttpHost {
             builder = builder.header(name, value);
         }
 
-        if let Some(reference) = &request.credential {
-            let key = self
-                .api_key
-                .as_deref()
-                .filter(|_| reference.value == CREDENTIAL_NAME)
-                .ok_or_else(|| {
-                    host_error(
-                        HttpHostErrorKind::PolicyViolation,
-                        "requested credential is unavailable",
-                    )
-                })?;
-            if request.credential_origin.as_deref() != Some(effective_origin(&url).as_str()) {
-                return Err(host_error(
-                    HttpHostErrorKind::PolicyViolation,
-                    "credential origin does not match request",
-                ));
-            }
+        if let Some(key) = self.api_key.as_deref()
+            && is_standard_toncenter_origin(&url)
+        {
             builder = builder.header("X-API-Key", key);
         }
 
@@ -249,19 +234,12 @@ impl WalletHttpHost for ReqwestHttpHost {
     }
 }
 
-pub(crate) fn credential_ref(api_key_present: bool) -> Option<wallet_engine::CredentialRef> {
-    api_key_present.then(|| wallet_engine::CredentialRef {
-        value: CREDENTIAL_NAME.to_owned(),
-    })
-}
-
-fn effective_origin(url: &Url) -> String {
-    format!(
-        "{}://{}:{}",
-        url.scheme(),
-        url.host_str().unwrap_or_default(),
-        url.port_or_known_default().unwrap_or(443)
-    )
+fn is_standard_toncenter_origin(url: &Url) -> bool {
+    url.port_or_known_default() == Some(443)
+        && matches!(
+            url.host_str(),
+            Some("toncenter.com" | "testnet.toncenter.com")
+        )
 }
 
 fn map_reqwest_error(error: reqwest::Error) -> HttpHostError {

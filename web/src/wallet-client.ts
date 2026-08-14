@@ -28,7 +28,7 @@ export class WalletClient {
     options: CreateClientOptions,
   ): Promise<WalletClient> {
     await initializeWalletEngine()
-    const httpHost = new BrowserHttpHost(options)
+    const httpHost = new BrowserHttpHost(config.providers.toncenterBaseUrl, options)
     return new WalletClient(new RawWalletClient(config, httpHost, options.platformHost))
   }
 

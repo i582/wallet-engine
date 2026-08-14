@@ -63,10 +63,13 @@ pub(crate) fn prepare_transfer(
         .parse::<u128>()
         .map_err(TransferError::InvalidAmount)?;
 
-    let info = CommonMsgInfoInt::new(
+    let mut info = CommonMsgInfoInt::new(
         destination.to_msg_address(),
         TLBCoins::new(amount_nanograms),
     );
+    // Use one conservative policy until destination metadata is preserved by
+    // the address type. This also lets uninitialized recipients accept funds.
+    info.bounce = false;
 
     let internal = Msg::new(info, TonCell::empty().to_owned())
         .to_cell()

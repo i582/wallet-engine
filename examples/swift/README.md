@@ -32,11 +32,12 @@ Choose `WalletEngineApp` and run it on macOS or an iOS Simulator. Xcode builds
 the Rust static library for the selected Apple target before it compiles the
 application.
 
-For authenticated testnet requests, copy `.env.example` to `.env` in this
-directory and set `TONCENTER_TESTNET_API_KEY`. Debug builds copy the value into
-the local application bundle. Release builds never include it. Do not use an
-embedded service key in a distributed application; inject it from a backend or
-use a key owned by the user.
+For authenticated Toncenter requests, copy `.env.example` to `.env` in this
+directory and set `TONCENTER_API_KEY`. The same key is available to mainnet and
+testnet requests. Debug builds copy the value into the local application
+bundle. Release builds never include it. Do not use an embedded service key in
+a distributed application; inject it from a backend or use a key owned by the
+user.
 
 ## Build from the command line
 
@@ -61,7 +62,7 @@ action.
 ## Integration map
 
 - `Infrastructure/AppleWalletHTTPHost.swift` performs bounded HTTPS requests,
-  injects host-owned credentials, and rejects redirects.
+  injects the host-owned Toncenter key, and rejects redirects.
 - `Infrastructure/AppleWalletPlatformHost.swift` stores recovery phrases in
   Keychain and implements the durable send journal.
 - `Infrastructure/WalletSession.swift` owns one `WalletClient`, observes newer

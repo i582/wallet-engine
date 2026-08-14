@@ -197,7 +197,8 @@ refresh when its product behavior requires new wallet data.
 - Store recovery phrases with the platform protected-storage API.
 - Require user authentication according to your product policy.
 - Do not log recovery phrases, secret values, or signed BoCs.
-- Bind provider credentials to an exact HTTPS origin.
+- Add a Toncenter credential only when the request origin matches the configured
+  Toncenter base URL.
 - Enforce the request and response limits from each `HttpRequest`.
 - Honor `cancelHttp` for requests that have not completed.
 - Store wallet descriptors separately from protected recovery phrases.

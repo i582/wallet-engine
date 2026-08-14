@@ -4,35 +4,22 @@ import WalletEngineFFI
 
 /// Composition root for the Apple host callbacks.
 nonisolated struct AppleWalletEnvironment: Sendable {
-    static let toncenterCredentialReference = "toncenter-api-key"
-
     let platformHost: AppleWalletPlatformHost
     private let httpPolicy: AppleWalletHTTPPolicy
-    private let credentialReference: CredentialRef?
 
     @MainActor
     init(bundle: Bundle = .main) {
         let credential = Self.loadToncenterCredential(bundle: bundle)
-        let resolvedCredential = credential.map {
-            WalletCredential(
-                reference: Self.toncenterCredentialReference,
-                headerName: "X-API-Key",
-                secret: $0
-            )
-        }
         let policy = AppleWalletHTTPPolicy(
             allowedOrigins: [
                 "https://toncenter.com:443",
                 "https://testnet.toncenter.com:443",
             ],
-            credentials: resolvedCredential.map { [$0] } ?? []
+            toncenterAPIKey: credential
         )
 
         httpPolicy = policy
         platformHost = AppleWalletPlatformHost()
-        credentialReference = credential.map { _ in
-            CredentialRef(value: Self.toncenterCredentialReference)
-        }
     }
 
     @MainActor
@@ -61,9 +48,6 @@ nonisolated struct AppleWalletEnvironment: Sendable {
         network: Network
     ) -> WalletClientConfig {
         let isMainnet = network == .mainnet
-        let credentialOrigin = isMainnet
-            ? "https://toncenter.com:443"
-            : "https://testnet.toncenter.com:443"
         return WalletClientConfig(
             recordId: wallet.recordId,
             address: wallet.address,
@@ -72,11 +56,7 @@ nonisolated struct AppleWalletEnvironment: Sendable {
             providers: ProviderConfig(
                 toncenterBaseUrl: isMainnet
                     ? "https://toncenter.com/api/v2"
-                    : "https://testnet.toncenter.com/api/v2",
-                toncenterCredential: credentialReference,
-                toncenterCredentialOrigin: credentialReference.map { _ in
-                    credentialOrigin
-                }
+                    : "https://testnet.toncenter.com/api/v2"
             )
         )
     }
@@ -84,7 +64,7 @@ nonisolated struct AppleWalletEnvironment: Sendable {
     @MainActor
     private static func loadToncenterCredential(bundle: Bundle) -> String? {
         guard let url = bundle.url(
-            forResource: "toncenter-testnet-api-key",
+            forResource: "toncenter-api-key",
             withExtension: nil
         ),
         let value = try? String(contentsOf: url, encoding: .utf8)

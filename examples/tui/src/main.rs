@@ -27,7 +27,7 @@ async fn main() -> Result<()> {
     let api_key = std::env::var("TONCENTER_API_KEY").ok();
     let http_host = Arc::new(ReqwestHttpHost::new(api_key.clone())?);
     let lifecycle = WalletLifecycle::new(store.clone());
-    let mut app = App::new(store, http_host, lifecycle, api_key.is_some()).await;
+    let mut app = App::new(store, http_host, lifecycle).await;
     let mut terminal = TerminalSession::new()?;
 
     while !app.should_quit() {

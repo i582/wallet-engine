@@ -14,21 +14,7 @@ pub(super) fn validate_config(config: &WalletClientConfig) -> Result<(), WalletC
 
     config.parsed_address()?;
     validate_https_url(&config.providers.toncenter_base_url)?;
-
-    match (
-        &config.providers.toncenter_credential,
-        &config.providers.toncenter_credential_origin,
-    ) {
-        (Some(_), Some(origin)) => {
-            validate_https_origin(origin)?;
-            if effective_origin(&config.providers.toncenter_base_url)? != *origin {
-                return Err(WalletClientError::InvalidConfig);
-            }
-            Ok(())
-        }
-        (None, None) => Ok(()),
-        _ => Err(WalletClientError::InvalidConfig),
-    }
+    Ok(())
 }
 
 pub(super) fn validate_send(request: &SendRequest) -> Result<(), WalletClientError> {
@@ -54,34 +40,9 @@ impl WalletClientConfig {
     }
 }
 
-fn effective_origin(value: &str) -> Result<String, WalletClientError> {
-    let url = Url::parse(value).map_err(|_| WalletClientError::InvalidConfig)?;
-    let host = url.host_str().ok_or(WalletClientError::InvalidConfig)?;
-    let port = url
-        .port_or_known_default()
-        .ok_or(WalletClientError::InvalidConfig)?;
-
-    Ok(format!("{}://{host}:{port}", url.scheme()))
-}
-
 fn validate_https_url(value: &str) -> Result<(), WalletClientError> {
     let url = Url::parse(value).map_err(|_| WalletClientError::InvalidConfig)?;
     if url.scheme() != "https" || url.host_str().is_none() || url.fragment().is_some() {
-        return Err(WalletClientError::InvalidConfig);
-    }
-
-    Ok(())
-}
-
-fn validate_https_origin(value: &str) -> Result<(), WalletClientError> {
-    let url = Url::parse(value).map_err(|_| WalletClientError::InvalidConfig)?;
-    if url.scheme() != "https"
-        || url.host_str().is_none()
-        || url.port_or_known_default() != Some(443)
-        || url.path() != "/"
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
         return Err(WalletClientError::InvalidConfig);
     }
 

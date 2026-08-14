@@ -12,8 +12,6 @@ import {
 import {BrowserWalletStore} from "@/lib/browser-wallet-store"
 
 const TESTNET_BASE_URL: string = "https://testnet.toncenter.com/api/v2"
-const TESTNET_ORIGIN: string = "https://testnet.toncenter.com:443"
-const CREDENTIAL_NAME: string = "toncenter-example"
 const JOURNAL_DATABASE_NAME: string = "wallet-engine-example-journal"
 
 export interface CreatedWalletSession {
@@ -164,13 +162,11 @@ async function createClient(
       sendValiditySeconds: 300,
       providers: {
         toncenterBaseUrl: TESTNET_BASE_URL,
-        toncenterCredential: apiKey ? {value: CREDENTIAL_NAME} : undefined,
-        toncenterCredentialOrigin: apiKey ? TESTNET_ORIGIN : undefined,
       },
     },
     {
       platformHost,
-      credentialProvider: reference => (reference.value === CREDENTIAL_NAME ? apiKey : undefined),
+      toncenterApiKey: apiKey,
     },
   )
 }

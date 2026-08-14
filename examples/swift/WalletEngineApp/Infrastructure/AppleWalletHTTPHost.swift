@@ -1,13 +1,6 @@
 import Foundation
 import WalletEngineFFI
 
-/// A credential that is owned by the Apple host and is never copied into Rust.
-nonisolated struct WalletCredential: Sendable {
-    let reference: String
-    let headerName: String
-    let secret: String
-}
-
 /// Security policy for callback-driven  HTTP calls.
 ///
 /// Rust owns request construction and response parsing. The host owns transport,
@@ -38,19 +31,16 @@ nonisolated struct AppleWalletHTTPPolicy: Sendable {
     ]
 
     private let allowedOrigins: Set<String>
-    private let credentials: [String: WalletCredential]
+    private let toncenterAPIKey: String?
 
     init(
         allowedOrigins: [String],
-        credentials: [WalletCredential] = []
+        toncenterAPIKey: String? = nil
     ) {
         self.allowedOrigins = Set(
             allowedOrigins.compactMap(Self.normalizedHTTPSOrigin(forOrigin:))
         )
-        self.credentials = Dictionary(
-            credentials.map { ($0.reference, $0) },
-            uniquingKeysWith: { _, replacement in replacement }
-        )
+        self.toncenterAPIKey = toncenterAPIKey
     }
 
     func prepare(_ request: HttpRequest) throws -> URLRequest {
@@ -90,10 +80,7 @@ nonisolated struct AppleWalletHTTPPolicy: Sendable {
         for header in request.headers {
             try Self.validateHeader(name: header.name, value: header.value)
             let normalizedName = header.name.lowercased()
-            guard !Self.forbiddenRequestHeaderNames.contains(normalizedName),
-                  !credentials.values.contains(where: {
-                      $0.headerName.caseInsensitiveCompare(header.name) == .orderedSame
-                  }) else {
+            guard !Self.forbiddenRequestHeaderNames.contains(normalizedName) else {
                 throw Self.failure(
                     .policyViolation,
                     "Request contains a host-owned HTTP header"
@@ -105,37 +92,12 @@ nonisolated struct AppleWalletHTTPPolicy: Sendable {
             urlRequest.setValue(header.value, forHTTPHeaderField: header.name)
         }
 
-        switch (request.credential, request.credentialOrigin) {
-        case (nil, nil):
-            break
-        case let (.some(reference), .some(declaredOrigin)):
-            guard let credential = credentials[reference.value],
-                  !credential.secret.isEmpty,
-                  let rustOrigin = Self.normalizedHTTPSOrigin(
-                      forOrigin: declaredOrigin
-                  ),
-                  rustOrigin == origin else {
-                throw Self.failure(
-                    .policyViolation,
-                    "Credential is unavailable or forbidden for this origin"
-                )
-            }
-            try Self.validateHeader(
-                name: credential.headerName,
-                value: credential.secret
-            )
-            guard seenHeaders.insert(credential.headerName.lowercased()).inserted else {
-                throw Self.failure(
-                    .policyViolation,
-                    "Credential header must be owned by the host"
-                )
-            }
+        if let toncenterAPIKey, !toncenterAPIKey.isEmpty {
+            try Self.validateHeader(name: "X-API-Key", value: toncenterAPIKey)
             urlRequest.setValue(
-                credential.secret,
-                forHTTPHeaderField: credential.headerName
+                toncenterAPIKey,
+                forHTTPHeaderField: "X-API-Key"
             )
-        default:
-            throw Self.failure(.policyViolation, "Incomplete credential policy")
         }
 
         return urlRequest
@@ -190,10 +152,7 @@ nonisolated struct AppleWalletHTTPPolicy: Sendable {
         ]
         guard !sensitiveNames.contains(name.lowercased()) else { return false }
 
-        return !credentials.values.contains { credential in
-            credential.headerName.caseInsensitiveCompare(name) == .orderedSame
-                || (!credential.secret.isEmpty && value.contains(credential.secret))
-        }
+        return toncenterAPIKey.map { !value.contains($0) } ?? true
     }
 
     private static func validateHeader(name: String, value: String) throws {

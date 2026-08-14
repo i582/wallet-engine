@@ -28,10 +28,10 @@ beforeAll(async () => {
 })
 
 describe("BrowserHttpHost", () => {
-  test("injects a credential only into its exact origin", async () => {
+  test("injects the Toncenter API key only into its configured origin", async () => {
     let observedKey: string | null = null
-    const host = new BrowserHttpHost({
-      credentialProvider: ({value}) => (value === "test-key" ? "secret-value" : undefined),
+    const host = new BrowserHttpHost("https://testnet.toncenter.com/api/v2", {
+      toncenterApiKey: "secret-value",
       fetch: mockFetch(async (_input, init) => {
         observedKey = new Headers(init?.headers).get("X-API-Key")
         return new Response(new Uint8Array([1, 2, 3]), {
@@ -41,21 +41,23 @@ describe("BrowserHttpHost", () => {
       }),
     })
 
-    const response = await host.executeHttp(
-      httpRequest(1, {
-        credential: {value: "test-key"},
-        credentialOrigin: "https://testnet.toncenter.com:443",
-      }),
-    )
+    const response = await host.executeHttp(httpRequest(1))
 
     expect(observedKey as string | null).toBe("secret-value")
     expect(response.status).toBe(200)
     expect(response.body).toEqual([1, 2, 3])
+
+    await expect(
+      host.executeHttp({
+        ...httpRequest(2),
+        url: "https://toncenter.com/api/v2/getAddressInformation",
+      }),
+    ).rejects.toMatchObject({kind: "policyViolation"})
   })
 
   test("honors cancellation that arrives before fetch starts", async () => {
     let fetchCount = 0
-    const host = new BrowserHttpHost({
+    const host = new BrowserHttpHost("https://testnet.toncenter.com/api/v2", {
       fetch: mockFetch(async () => {
         fetchCount += 1
         return new Response()
@@ -68,7 +70,7 @@ describe("BrowserHttpHost", () => {
   })
 
   test("aborts a response that exceeds the Rust limit", async () => {
-    const host = new BrowserHttpHost({
+    const host = new BrowserHttpHost("https://testnet.toncenter.com/api/v2", {
       fetch: mockFetch(async () => new Response(new Uint8Array(32))),
     })
     const request: HttpRequest = {...httpRequest(9), maxResponseBodyBytes: 8}

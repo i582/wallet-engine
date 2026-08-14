@@ -1,13 +1,7 @@
 export type Network = "mainnet" | "testnet"
 
-export interface CredentialRef {
-  readonly value: string
-}
-
 export interface ProviderConfig {
   readonly toncenterBaseUrl: string
-  readonly toncenterCredential?: CredentialRef
-  readonly toncenterCredentialOrigin?: string
 }
 
 export interface WalletClientConfig {
@@ -33,8 +27,6 @@ export interface HttpRequest {
   readonly url: string
   readonly headers: HttpHeader[]
   readonly body: number[]
-  readonly credential?: CredentialRef
-  readonly credentialOrigin?: string
   readonly maxResponseHeaderBytes: number
   readonly maxResponseBodyBytes: number
 }

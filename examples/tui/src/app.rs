@@ -11,7 +11,7 @@ use wallet_engine::{
     WalletSnapshot,
 };
 
-use crate::http_host::{ReqwestHttpHost, credential_ref};
+use crate::http_host::ReqwestHttpHost;
 use crate::storage::DiskStore;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -42,7 +42,6 @@ pub(crate) struct App {
     lifecycle: Arc<WalletLifecycle>,
     client: Option<Arc<WalletClient>>,
     descriptor: Option<WalletDescriptor>,
-    api_key_present: bool,
     quit: bool,
 }
 
@@ -51,7 +50,6 @@ impl App {
         store: Arc<DiskStore>,
         http_host: Arc<ReqwestHttpHost>,
         lifecycle: Arc<WalletLifecycle>,
-        api_key_present: bool,
     ) -> Self {
         let mut app = Self {
             screen: Screen::Welcome,
@@ -66,7 +64,6 @@ impl App {
             lifecycle,
             client: None,
             descriptor: None,
-            api_key_present,
             quit: false,
         };
 
@@ -300,10 +297,7 @@ impl App {
             address: descriptor.address.clone(),
             network: descriptor.network,
             send_validity_seconds: 300,
-            providers: ProviderConfig::standard(
-                descriptor.network,
-                credential_ref(self.api_key_present),
-            ),
+            providers: ProviderConfig::standard(descriptor.network),
         };
         match WalletClient::new(config, self.http_host.clone(), self.store.clone()) {
             Ok(client) => {

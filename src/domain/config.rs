@@ -1,4 +1,4 @@
-//! Network, provider, credential, and wallet-client configuration.
+//! Network, provider, and wallet-client configuration.
 
 /// Selects the TON network used for addresses, providers, and wallet derivation.
 #[derive(
@@ -12,49 +12,25 @@ pub enum Network {
     Testnet,
 }
 
-/// An opaque reference to an HTTP credential stored by the host.
-///
-/// The value identifies a credential. It never contains the credential itself.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
-#[serde(rename_all = "camelCase")]
-pub struct CredentialRef {
-    /// The host-defined lookup key for the credential.
-    pub value: String,
-}
-
-/// Configures the Toncenter endpoint and its optional host-owned credential.
+/// Configures the Toncenter endpoint.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderConfig {
     /// The HTTPS base URL for Toncenter API v2 requests.
     pub toncenter_base_url: String,
-    /// The optional reference that the HTTP host resolves before a request.
-    pub toncenter_credential: Option<CredentialRef>,
-    /// Normalized HTTPS origin allowed to receive `toncenter_credential`.
-    /// It includes the effective port, for example
-    /// `https://testnet.toncenter.com:443`.
-    pub toncenter_credential_origin: Option<String>,
 }
 
 impl ProviderConfig {
     /// Returns the standard Toncenter configuration for `network`.
     ///
-    /// The credential origin includes the effective HTTPS port. The host must
-    /// compare this origin exactly before it adds the credential.
     #[must_use]
-    pub fn standard(network: Network, credential: Option<CredentialRef>) -> Self {
+    pub fn standard(network: Network) -> Self {
         let toncenter_base_url = match network {
             Network::Mainnet => "https://toncenter.com/api/v2",
             Network::Testnet => "https://testnet.toncenter.com/api/v2",
         };
-        let toncenter_credential_origin = credential.as_ref().map(|_| match network {
-            Network::Mainnet => "https://toncenter.com:443".to_owned(),
-            Network::Testnet => "https://testnet.toncenter.com:443".to_owned(),
-        });
         Self {
             toncenter_base_url: toncenter_base_url.to_owned(),
-            toncenter_credential: credential,
-            toncenter_credential_origin,
         }
     }
 }
@@ -76,6 +52,6 @@ pub struct WalletClientConfig {
     /// A short value can expire before the network includes the message. A long
     /// value extends the period in which the signed message can be submitted.
     pub send_validity_seconds: u32,
-    /// The provider endpoints and credential references.
+    /// The provider endpoint.
     pub providers: ProviderConfig,
 }

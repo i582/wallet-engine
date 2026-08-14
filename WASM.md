@@ -128,19 +128,18 @@ Call `close()` before you discard the client:
 await client.close()
 ```
 
-## Use a provider credential
+## Use a Toncenter API key
 
 Do not put a private service credential in a browser bundle. Use a public user
 credential or a backend proxy.
 
-If the browser resolves a credential, bind it to one HTTPS origin:
+Pass a user-owned key to the browser host. The host adds it only to requests
+whose origin matches `toncenterBaseUrl`:
 
 ```ts
 const client = await WalletClient.create(config, {
   platformHost,
-  credentialProvider(reference) {
-    return sessionCredentials.get(reference.value)
-  },
+  toncenterApiKey,
 })
 ```
 

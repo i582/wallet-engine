@@ -56,16 +56,18 @@ pub(super) fn build_toncenter_request(
     path: &str,
     query: &[(&str, &str)],
 ) -> Result<HttpRequest, WalletClientError> {
-    let mut request = build_public_request(id, &config.providers.toncenter_base_url, path, query)?;
-
-    request
-        .credential
-        .clone_from(&config.providers.toncenter_credential);
-    request
-        .credential_origin
-        .clone_from(&config.providers.toncenter_credential_origin);
-
-    Ok(request)
+    Ok(HttpRequest {
+        id,
+        method: HttpMethod::Get,
+        url: build_provider_url(&config.providers.toncenter_base_url, path, query)?,
+        headers: vec![HttpHeader {
+            name: "Accept".to_owned(),
+            value: "application/json".to_owned(),
+        }],
+        body: Vec::new(),
+        max_response_header_bytes: MAX_RESPONSE_HEADER_BYTES,
+        max_response_body_bytes: MAX_RESPONSE_BODY_BYTES,
+    })
 }
 
 fn evaluate<T>(
@@ -118,28 +120,6 @@ fn host_error(kind: HttpHostErrorKind, message: &str) -> DomainError {
         retry_after_ms: None,
         host_kind: Some(kind),
     }
-}
-
-fn build_public_request(
-    id: HttpRequestId,
-    base: &str,
-    path: &str,
-    query: &[(&str, &str)],
-) -> Result<HttpRequest, WalletClientError> {
-    Ok(HttpRequest {
-        id,
-        method: HttpMethod::Get,
-        url: build_provider_url(base, path, query)?,
-        headers: vec![HttpHeader {
-            name: "Accept".to_owned(),
-            value: "application/json".to_owned(),
-        }],
-        body: Vec::new(),
-        credential: None,
-        credential_origin: None,
-        max_response_header_bytes: MAX_RESPONSE_HEADER_BYTES,
-        max_response_body_bytes: MAX_RESPONSE_BODY_BYTES,
-    })
 }
 
 fn build_provider_url(

@@ -1,7 +1,5 @@
 //! Bounded HTTP requests and host transport errors.
 
-use super::CredentialRef;
-
 /// An HTTP method that the host must execute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Enum)]
 #[serde(rename_all = "camelCase")]
@@ -36,8 +34,8 @@ pub struct HttpHeader {
 
 /// A complete, bounded HTTP request for the embedding language.
 ///
-/// The host resolves `credential` locally and must inject it only when the
-/// request origin exactly equals `credential_origin`. Redirects are forbidden.
+/// The host can add its Toncenter credential according to the actual request
+/// URL and its local security policy. Redirects are forbidden.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct HttpRequest {
@@ -51,10 +49,6 @@ pub struct HttpRequest {
     pub headers: Vec<HttpHeader>,
     /// The request body. GET requests use an empty body.
     pub body: Vec<u8>,
-    /// The optional host-owned credential reference.
-    pub credential: Option<CredentialRef>,
-    /// The exact HTTPS origin that can receive the credential.
-    pub credential_origin: Option<String>,
     /// The maximum total response-header size accepted by Rust.
     pub max_response_header_bytes: u64,
     /// The maximum response-body size accepted by Rust.

@@ -17,8 +17,8 @@ use crate::{
 pub trait WalletHttpHost: Send + Sync {
     /// Executes one complete HTTP request and returns a bounded response.
     ///
-    /// If `credential` is present, resolve it locally. Add it only when the
-    /// request origin exactly equals `credential_origin`.
+    /// The host can add its Toncenter credential according to the actual URL
+    /// and its local security policy.
     async fn execute_http(&self, request: HttpRequest) -> Result<HttpResponse, HttpHostError>;
 
     /// Requests cancellation of the request with `request_id`.
