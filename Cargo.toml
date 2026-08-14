@@ -1,5 +1,5 @@
 [package]
-name = "wallet-engine-v3"
+name = "wallet-engine"
 version = "0.1.0"
 authors = ["TON Core"]
 edition = "2024"

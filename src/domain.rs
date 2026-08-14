@@ -1,35 +1,35 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, uniffi::Enum)]
-pub enum NetworkV3 {
+pub enum Network {
     Mainnet,
     Testnet,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
-pub struct CredentialRefV3 {
+pub struct CredentialRef {
     pub value: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
-pub struct ProviderConfigV3 {
+pub struct ProviderConfig {
     pub toncenter_base_url: String,
     pub tonapi_base_url: String,
-    pub toncenter_credential: Option<CredentialRefV3>,
+    pub toncenter_credential: Option<CredentialRef>,
     /// Normalized HTTPS origin allowed to receive `toncenter_credential`.
     /// It includes the effective port, for example
     /// `https://testnet.toncenter.com:443`.
     pub toncenter_credential_origin: Option<String>,
 }
 
-impl ProviderConfigV3 {
+impl ProviderConfig {
     #[must_use]
-    pub fn standard(network: NetworkV3, credential: Option<CredentialRefV3>) -> Self {
+    pub fn standard(network: Network, credential: Option<CredentialRef>) -> Self {
         let toncenter_base_url = match network {
-            NetworkV3::Mainnet => "https://toncenter.com/api/v2",
-            NetworkV3::Testnet => "https://testnet.toncenter.com/api/v2",
+            Network::Mainnet => "https://toncenter.com/api/v2",
+            Network::Testnet => "https://testnet.toncenter.com/api/v2",
         };
         let toncenter_credential_origin = credential.as_ref().map(|_| match network {
-            NetworkV3::Mainnet => "https://toncenter.com:443".to_owned(),
-            NetworkV3::Testnet => "https://testnet.toncenter.com:443".to_owned(),
+            Network::Mainnet => "https://toncenter.com:443".to_owned(),
+            Network::Testnet => "https://testnet.toncenter.com:443".to_owned(),
         });
         Self {
             toncenter_base_url: toncenter_base_url.to_owned(),
@@ -41,15 +41,15 @@ impl ProviderConfigV3 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
-pub struct WalletClientConfigV3 {
+pub struct WalletClientConfig {
     pub wallet_id: String,
     pub address: String,
-    pub network: NetworkV3,
-    pub providers: ProviderConfigV3,
+    pub network: Network,
+    pub providers: ProviderConfig,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
-pub enum HttpMethodV3 {
+pub enum HttpMethod {
     Get,
     Post,
 }
@@ -58,12 +58,12 @@ pub enum HttpMethodV3 {
 /// native cancellation bookkeeping, but must not assign semantic meaning to
 /// the numeric value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, uniffi::Record)]
-pub struct HttpCallIdV3 {
+pub struct HttpCallId {
     pub value: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
-pub struct HttpHeaderV3 {
+pub struct HttpHeader {
     pub name: String,
     pub value: String,
 }
@@ -74,12 +74,12 @@ pub struct HttpHeaderV3 {
 /// request origin exactly equals `credential_origin`. Redirects are forbidden.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct HttpCall {
-    pub id: HttpCallIdV3,
-    pub method: HttpMethodV3,
+    pub id: HttpCallId,
+    pub method: HttpMethod,
     pub url: String,
-    pub headers: Vec<HttpHeaderV3>,
+    pub headers: Vec<HttpHeader>,
     pub body: Vec<u8>,
-    pub credential: Option<CredentialRefV3>,
+    pub credential: Option<CredentialRef>,
     pub credential_origin: Option<String>,
     pub max_response_header_bytes: u64,
     pub max_response_body_bytes: u64,
@@ -88,10 +88,10 @@ pub struct HttpCall {
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct HttpResponse {
     pub status: u16,
-    pub headers: Vec<HttpHeaderV3>,
+    pub headers: Vec<HttpHeader>,
     pub body: Vec<u8>,
     /// The final response URL reported by the host. It must equal the call URL
-    /// because V3 does not permit redirects.
+    /// because  does not permit redirects.
     pub final_url: String,
 }
 
@@ -118,7 +118,7 @@ pub enum HttpHostError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
-pub enum AccountStatusV3 {
+pub enum AccountStatus {
     Nonexistent,
     Uninitialized,
     Active,
@@ -127,39 +127,39 @@ pub enum AccountStatusV3 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
-pub struct AccountSnapshotV3 {
+pub struct AccountSnapshot {
     pub balance_nanograms: String,
     pub balance_grams: String,
-    pub status: AccountStatusV3,
+    pub status: AccountStatus,
     pub sync_utime: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
-pub enum ActivityDirectionV3 {
+pub enum ActivityDirection {
     Sent,
     Received,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
-pub struct ActivityItemV3 {
+pub struct ActivityItem {
     pub id: String,
     pub transaction_hash: String,
     pub logical_time: String,
     pub timestamp: u64,
-    pub direction: ActivityDirectionV3,
+    pub direction: ActivityDirection,
     pub amount_nanograms: String,
     pub amount_grams: String,
     pub counterparty: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
-pub struct ActivityCursorV3 {
+pub struct ActivityCursor {
     pub logical_time: String,
     pub hash: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
-pub enum ResourcePhaseV3 {
+pub enum ResourcePhase {
     Idle,
     Loading,
     Ready,
@@ -167,43 +167,43 @@ pub enum ResourcePhaseV3 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
-pub struct ResourceStateV3 {
-    pub phase: ResourcePhaseV3,
-    pub error: Option<DomainErrorV3>,
+pub struct ResourceState {
+    pub phase: ResourcePhase,
+    pub error: Option<DomainError>,
 }
 
-impl ResourceStateV3 {
+impl ResourceState {
     pub(crate) const fn idle() -> Self {
         Self {
-            phase: ResourcePhaseV3::Idle,
+            phase: ResourcePhase::Idle,
             error: None,
         }
     }
 
     pub(crate) const fn loading() -> Self {
         Self {
-            phase: ResourcePhaseV3::Loading,
+            phase: ResourcePhase::Loading,
             error: None,
         }
     }
 
     pub(crate) const fn ready() -> Self {
         Self {
-            phase: ResourcePhaseV3::Ready,
+            phase: ResourcePhase::Ready,
             error: None,
         }
     }
 
-    pub(crate) const fn failed(error: DomainErrorV3) -> Self {
+    pub(crate) const fn failed(error: DomainError) -> Self {
         Self {
-            phase: ResourcePhaseV3::Failed,
+            phase: ResourcePhase::Failed,
             error: Some(error),
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
-pub enum ErrorCategoryV3 {
+pub enum ErrorCategory {
     Transport,
     ProviderProtocol,
     RateLimit,
@@ -212,7 +212,7 @@ pub enum ErrorCategoryV3 {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
-pub enum ErrorCodeV3 {
+pub enum ErrorCode {
     InvalidProviderResponse,
     HttpRejected,
     RateLimited,
@@ -223,17 +223,17 @@ pub enum ErrorCodeV3 {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
-pub enum RetryAdviceV3 {
+pub enum RetryAdvice {
     None,
     Safe,
     AfterDelay,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
-pub struct DomainErrorV3 {
-    pub code: ErrorCodeV3,
-    pub category: ErrorCategoryV3,
-    pub retry: RetryAdviceV3,
+pub struct DomainError {
+    pub code: ErrorCode,
+    pub category: ErrorCategory,
+    pub retry: RetryAdvice,
     pub developer_message: String,
     pub provider_status: Option<u16>,
     pub retry_after_ms: Option<u64>,
@@ -241,42 +241,42 @@ pub struct DomainErrorV3 {
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
-pub struct WalletSnapshotV3 {
+pub struct WalletSnapshot {
     pub revision: u64,
     pub wallet_id: String,
     pub address: String,
-    pub network: NetworkV3,
-    pub account: Option<AccountSnapshotV3>,
-    pub account_resource: ResourceStateV3,
-    pub activity: Vec<ActivityItemV3>,
-    pub activity_resource: ResourceStateV3,
-    pub activity_pagination_resource: ResourceStateV3,
-    pub activity_cursor: Option<ActivityCursorV3>,
+    pub network: Network,
+    pub account: Option<AccountSnapshot>,
+    pub account_resource: ResourceState,
+    pub activity: Vec<ActivityItem>,
+    pub activity_resource: ResourceState,
+    pub activity_pagination_resource: ResourceState,
+    pub activity_cursor: Option<ActivityCursor>,
     pub activity_has_more: bool,
     pub usd_per_gram: Option<f64>,
-    pub rate_resource: ResourceStateV3,
-    pub send: SendSnapshotV3,
+    pub rate_resource: ResourceState,
+    pub send: SendSnapshot,
 }
 
-impl WalletSnapshotV3 {
-    pub(crate) fn empty(config: &WalletClientConfigV3) -> Self {
+impl WalletSnapshot {
+    pub(crate) fn empty(config: &WalletClientConfig) -> Self {
         Self {
             revision: 0,
             wallet_id: config.wallet_id.clone(),
             address: config.address.clone(),
             network: config.network,
             account: None,
-            account_resource: ResourceStateV3::idle(),
+            account_resource: ResourceState::idle(),
             activity: Vec::new(),
-            activity_resource: ResourceStateV3::idle(),
-            activity_pagination_resource: ResourceStateV3::idle(),
+            activity_resource: ResourceState::idle(),
+            activity_pagination_resource: ResourceState::idle(),
             activity_cursor: None,
             activity_has_more: false,
             usd_per_gram: None,
-            rate_resource: ResourceStateV3::idle(),
-            send: SendSnapshotV3 {
+            rate_resource: ResourceState::idle(),
+            send: SendSnapshot {
                 operation_id: None,
-                phase: SendPhaseV3::Idle,
+                phase: SendPhase::Idle,
                 error_message: None,
             },
         }
@@ -284,7 +284,7 @@ impl WalletSnapshotV3 {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
-pub enum WalletOperationOutcomeV3 {
+pub enum WalletOperationOutcome {
     Completed,
     PartiallyCompleted,
     Failed,
@@ -294,54 +294,54 @@ pub enum WalletOperationOutcomeV3 {
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
-pub struct WalletUpdateV3 {
-    pub outcome: WalletOperationOutcomeV3,
+pub struct WalletUpdate {
+    pub outcome: WalletOperationOutcome,
     pub activity_items_added: u64,
-    pub snapshot: WalletSnapshotV3,
+    pub snapshot: WalletSnapshot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, uniffi::Error)]
-pub enum WalletClientErrorV3 {
-    #[error("invalid V3 wallet client configuration")]
+pub enum WalletClientError {
+    #[error("invalid  wallet client configuration")]
     InvalidConfig,
-    #[error("V3 wallet client identifier space is exhausted")]
+    #[error(" wallet client identifier space is exhausted")]
     IdentifierExhausted,
-    #[error("V3 wallet client state is unavailable")]
+    #[error(" wallet client state is unavailable")]
     StateUnavailable,
     #[error("the send has crossed its durable commit boundary and can no longer be cancelled")]
     SendCancellationTooLate,
-    #[error("V3 wallet client is shut down")]
+    #[error(" wallet client is shut down")]
     Shutdown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
-pub struct ProtectedSecretRefV3 {
+pub struct ProtectedSecretRef {
     pub value: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
-pub enum SecretAccessReasonV3 {
+pub enum SecretAccessReason {
     CreateWallet,
     SignTransfer,
     RevealRecoveryPhrase,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
-pub struct ProtectedSecretReadV3 {
-    pub secret_ref: ProtectedSecretRefV3,
-    pub reason: SecretAccessReasonV3,
+pub struct ProtectedSecretRead {
+    pub secret_ref: ProtectedSecretRef,
+    pub reason: SecretAccessReason,
     pub prompt: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
-pub struct ProtectedSecretStoreV3 {
-    pub secret_ref: ProtectedSecretRefV3,
+pub struct ProtectedSecretStore {
+    pub secret_ref: ProtectedSecretRef,
     pub bytes: Vec<u8>,
     pub require_user_presence: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
-pub enum ProtectedSecretHostErrorKindV3 {
+pub enum ProtectedSecretHostErrorKind {
     NotFound,
     AuthenticationFailed,
     Cancelled,
@@ -351,41 +351,41 @@ pub enum ProtectedSecretHostErrorKindV3 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, uniffi::Error)]
-pub enum ProtectedSecretHostErrorV3 {
+pub enum ProtectedSecretHostError {
     #[error("protected-secret host failure ({kind:?}): {message}")]
     Failed {
-        kind: ProtectedSecretHostErrorKindV3,
+        kind: ProtectedSecretHostErrorKind,
         message: String,
     },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
-pub struct JournalKeyV3 {
+pub struct JournalKey {
     pub wallet_id: String,
     pub slot: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
-pub struct JournalRecordV3 {
+pub struct JournalRecord {
     pub version: u64,
     pub payload: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
-pub struct JournalCompareExchangeV3 {
-    pub key: JournalKeyV3,
+pub struct JournalCompareExchange {
+    pub key: JournalKey,
     pub expected_version: Option<u64>,
-    pub replacement: JournalRecordV3,
+    pub replacement: JournalRecord,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
-pub struct JournalCompareExchangeResultV3 {
+pub struct JournalCompareExchangeResult {
     pub applied: bool,
-    pub current: Option<JournalRecordV3>,
+    pub current: Option<JournalRecord>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
-pub enum JournalHostErrorKindV3 {
+pub enum JournalHostErrorKind {
     Unavailable,
     CorruptData,
     Cancelled,
@@ -393,24 +393,24 @@ pub enum JournalHostErrorKindV3 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, uniffi::Error)]
-pub enum JournalHostErrorV3 {
+pub enum JournalHostError {
     #[error("journal host failure ({kind:?}): {message}")]
     Failed {
-        kind: JournalHostErrorKindV3,
+        kind: JournalHostErrorKind,
         message: String,
     },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
-pub struct SendRequestV3 {
+pub struct SendRequest {
     pub operation_id: String,
     pub destination: String,
     pub amount_nanograms: String,
-    pub secret_ref: ProtectedSecretRefV3,
+    pub secret_ref: ProtectedSecretRef,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
-pub enum SendPhaseV3 {
+pub enum SendPhase {
     Idle,
     Validating,
     Authorizing,
@@ -425,14 +425,14 @@ pub enum SendPhaseV3 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
-pub struct SendSnapshotV3 {
+pub struct SendSnapshot {
     pub operation_id: Option<String>,
-    pub phase: SendPhaseV3,
+    pub phase: SendPhase,
     pub error_message: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
-pub struct PreparedSendV3 {
+pub struct PreparedSend {
     pub operation_id: String,
     pub valid_until: u64,
     pub destination: String,
@@ -440,8 +440,8 @@ pub struct PreparedSendV3 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
-pub struct SendResultV3 {
+pub struct SendResult {
     pub operation_id: String,
     pub message_hash: String,
-    pub phase: SendPhaseV3,
+    pub phase: SendPhase,
 }

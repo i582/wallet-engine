@@ -10,10 +10,10 @@ esac
 
 engine_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_dir=$(CDPATH= cd -- "$engine_dir/.." && pwd)
-output_dir="$repo_dir/WalletEngineV3FFI"
-swift_output_dir="$output_dir/Sources/WalletEngineV3FFI"
-c_output_dir="$output_dir/Sources/wallet_engine_v3FFI"
-temporary_dir=$(mktemp -d "${TMPDIR:-/tmp}/wallet-engine-v3-bindings.XXXXXX")
+output_dir="$repo_dir/WalletEngineFFI"
+swift_output_dir="$output_dir/Sources/WalletEngineFFI"
+c_output_dir="$output_dir/Sources/wallet_engineFFI"
+temporary_dir=$(mktemp -d "${TMPDIR:-/tmp}/wallet-engine-bindings.XXXXXX")
 trap 'rm -rf "$temporary_dir"' EXIT HUP INT TERM
 engine_target_dir="$engine_dir/target/apple-bindings"
 bindgen_target_dir="$engine_dir/apple-bindgen/target"
@@ -45,14 +45,14 @@ mkdir -p "$temporary_dir/generated"
         --swift-sources \
         --headers \
         --modulemap \
-        --module-name wallet_engine_v3FFI \
+        --module-name wallet_engineFFI \
         --modulemap-filename module.modulemap \
-        "$engine_target_dir/release/libwallet_engine_v3.dylib" \
+        "$engine_target_dir/release/libwallet_engine.dylib" \
         "$temporary_dir/generated"
 )
 
-generated_swift="$temporary_dir/generated/WalletEngineV3FFI.swift"
-generated_header="$temporary_dir/generated/wallet_engine_v3FFI.h"
+generated_swift="$temporary_dir/generated/WalletEngineFFI.swift"
+generated_header="$temporary_dir/generated/wallet_engineFFI.h"
 generated_modulemap="$temporary_dir/generated/module.modulemap"
 
 for generated_file in "$generated_swift" "$generated_header" "$generated_modulemap"; do
@@ -82,25 +82,25 @@ if [ "$mode" = "--check" ]; then
             exit 1
         fi
         if ! cmp -s "$generated_path" "$committed_path"; then
-            echo "error: generated Apple V3 binding is stale: $committed_path" >&2
+            echo "error: generated Apple binding is stale: $committed_path" >&2
             diff -u "$committed_path" "$generated_path" || true
             exit 1
         fi
     }
 
-    check_file "$generated_swift" "$swift_output_dir/WalletEngineV3FFI.swift"
-    check_file "$generated_header" "$c_output_dir/wallet_engine_v3FFI.h"
+    check_file "$generated_swift" "$swift_output_dir/WalletEngineFFI.swift"
+    check_file "$generated_header" "$c_output_dir/wallet_engineFFI.h"
     check_file "$generated_modulemap" "$c_output_dir/module.modulemap"
-    if ! grep -q '^@preconcurrency import wallet_engine_v3FFI$' "$generated_swift" || \
+    if ! grep -q '^@preconcurrency import wallet_engineFFI$' "$generated_swift" || \
        ! grep -q '@Sendable () async throws ->' "$generated_swift" || \
        ! grep -q 'private func uniffiTraitInterfaceCallAsync<T: Sendable>(' "$generated_swift"; then
-        echo "error: generated Apple V3 binding is missing Swift 6 callback annotations" >&2
+        echo "error: generated Apple binding is missing Swift 6 callback annotations" >&2
         exit 1
     fi
     exit 0
 fi
 
 mkdir -p "$swift_output_dir" "$c_output_dir"
-cp "$generated_swift" "$swift_output_dir/WalletEngineV3FFI.swift"
-cp "$generated_header" "$c_output_dir/wallet_engine_v3FFI.h"
+cp "$generated_swift" "$swift_output_dir/WalletEngineFFI.swift"
+cp "$generated_header" "$c_output_dir/wallet_engineFFI.h"
 cp "$generated_modulemap" "$c_output_dir/module.modulemap"

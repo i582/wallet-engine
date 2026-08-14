@@ -11,16 +11,16 @@ use crate::provider::{
     ActivityPage, activity_item_order, decimal_cmp, parse_account, parse_activity, parse_rate,
     response_error, sanitize_diagnostic,
 };
-use crate::send::{FreshSendAccountV3, SendDirectiveV3, SendWorkflowV3};
+use crate::send::{FreshSendAccount, SendDirective, SendWorkflow};
 use crate::signer::{derive_source, prepare_transfer, same_address};
 use crate::{
-    AccountSnapshotV3, AccountStatusV3, ActivityCursorV3, DomainErrorV3, ErrorCategoryV3,
-    ErrorCodeV3, HttpCall, HttpCallIdV3, HttpHeaderV3, HttpHostError, HttpHostErrorKind,
-    HttpMethodV3, HttpResponse, JournalCompareExchangeResultV3, JournalCompareExchangeV3,
-    JournalHostErrorV3, JournalKeyV3, JournalRecordV3, ProtectedSecretHostErrorV3,
-    ProtectedSecretReadV3, ProtectedSecretRefV3, ProtectedSecretStoreV3, ResourcePhaseV3,
-    ResourceStateV3, RetryAdviceV3, SendPhaseV3, SendRequestV3, SendResultV3, WalletClientConfigV3,
-    WalletClientErrorV3, WalletOperationOutcomeV3, WalletSnapshotV3, WalletUpdateV3,
+    AccountSnapshot, AccountStatus, ActivityCursor, DomainError, ErrorCategory, ErrorCode,
+    HttpCall, HttpCallId, HttpHeader, HttpHostError, HttpHostErrorKind, HttpMethod, HttpResponse,
+    JournalCompareExchange, JournalCompareExchangeResult, JournalHostError, JournalKey,
+    JournalRecord, ProtectedSecretHostError, ProtectedSecretRead, ProtectedSecretRef,
+    ProtectedSecretStore, ResourcePhase, ResourceState, RetryAdvice, SendPhase, SendRequest,
+    SendResult, WalletClientConfig, WalletClientError, WalletOperationOutcome, WalletSnapshot,
+    WalletUpdate,
 };
 
 const PAGE_SIZE: u32 = 10;
@@ -29,35 +29,35 @@ const MAX_RESPONSE_HEADER_BYTES: u64 = 64 * 1024;
 
 #[uniffi::export(foreign)]
 #[async_trait]
-pub trait WalletHttpHostV3: Send + Sync {
+pub trait WalletHttpHost: Send + Sync {
     async fn execute_http(&self, call: HttpCall) -> Result<HttpResponse, HttpHostError>;
-    async fn cancel_http(&self, call_id: HttpCallIdV3);
+    async fn cancel_http(&self, call_id: HttpCallId);
 }
 
 #[uniffi::export(foreign)]
 #[async_trait]
-pub trait WalletPlatformHostV3: Send + Sync {
+pub trait WalletPlatformHost: Send + Sync {
     async fn now(&self) -> u64;
     async fn read_protected_secret(
         &self,
-        request: ProtectedSecretReadV3,
-    ) -> Result<Vec<u8>, ProtectedSecretHostErrorV3>;
+        request: ProtectedSecretRead,
+    ) -> Result<Vec<u8>, ProtectedSecretHostError>;
     async fn store_protected_secret(
         &self,
-        request: ProtectedSecretStoreV3,
-    ) -> Result<(), ProtectedSecretHostErrorV3>;
+        request: ProtectedSecretStore,
+    ) -> Result<(), ProtectedSecretHostError>;
     async fn delete_protected_secret(
         &self,
-        secret_ref: ProtectedSecretRefV3,
-    ) -> Result<(), ProtectedSecretHostErrorV3>;
+        secret_ref: ProtectedSecretRef,
+    ) -> Result<(), ProtectedSecretHostError>;
     async fn load_journal(
         &self,
-        key: JournalKeyV3,
-    ) -> Result<Option<JournalRecordV3>, JournalHostErrorV3>;
+        key: JournalKey,
+    ) -> Result<Option<JournalRecord>, JournalHostError>;
     async fn compare_exchange_journal(
         &self,
-        mutation: JournalCompareExchangeV3,
-    ) -> Result<JournalCompareExchangeResultV3, JournalHostErrorV3>;
+        mutation: JournalCompareExchange,
+    ) -> Result<JournalCompareExchangeResult, JournalHostError>;
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -68,37 +68,37 @@ enum OperationFamily {
 }
 
 struct State {
-    config: WalletClientConfigV3,
-    snapshot: WalletSnapshotV3,
+    config: WalletClientConfig,
+    snapshot: WalletSnapshot,
     next_id: u64,
     refresh_generation: u64,
     pagination_generation: u64,
     send_generation: u64,
-    active_refresh: Option<(u64, Vec<HttpCallIdV3>)>,
-    active_pagination: Option<(u64, HttpCallIdV3)>,
-    active_send: Option<(u64, Vec<HttpCallIdV3>)>,
+    active_refresh: Option<(u64, Vec<HttpCallId>)>,
+    active_pagination: Option<(u64, HttpCallId)>,
+    active_send: Option<(u64, Vec<HttpCallId>)>,
     send_commit_started: bool,
-    send_workflow: Option<SendWorkflowV3>,
+    send_workflow: Option<SendWorkflow>,
     waiters: Vec<(u64, oneshot::Sender<()>)>,
     shutdown: bool,
 }
 
 impl State {
-    fn allocate_id(&mut self) -> Result<u64, WalletClientErrorV3> {
+    fn allocate_id(&mut self) -> Result<u64, WalletClientError> {
         let id = self.next_id;
         self.next_id = self
             .next_id
             .checked_add(1)
-            .ok_or(WalletClientErrorV3::IdentifierExhausted)?;
+            .ok_or(WalletClientError::IdentifierExhausted)?;
         Ok(id)
     }
 
-    fn next_revision(&mut self) -> Result<(), WalletClientErrorV3> {
+    fn next_revision(&mut self) -> Result<(), WalletClientError> {
         self.snapshot.revision = self
             .snapshot
             .revision
             .checked_add(1)
-            .ok_or(WalletClientErrorV3::IdentifierExhausted)?;
+            .ok_or(WalletClientError::IdentifierExhausted)?;
         let revision = self.snapshot.revision;
         let mut pending = Vec::new();
         for (after, waiter) in self.waiters.drain(..) {
@@ -130,22 +130,22 @@ impl State {
 }
 
 #[derive(uniffi::Object)]
-pub struct WalletClientV3 {
-    http_host: Arc<dyn WalletHttpHostV3>,
-    platform_host: Arc<dyn WalletPlatformHostV3>,
+pub struct WalletClient {
+    http_host: Arc<dyn WalletHttpHost>,
+    platform_host: Arc<dyn WalletPlatformHost>,
     state: Mutex<State>,
 }
 
 #[uniffi::export]
-impl WalletClientV3 {
+impl WalletClient {
     #[uniffi::constructor]
     pub fn new(
-        config: WalletClientConfigV3,
-        http_host: Arc<dyn WalletHttpHostV3>,
-        platform_host: Arc<dyn WalletPlatformHostV3>,
-    ) -> Result<Arc<Self>, WalletClientErrorV3> {
+        config: WalletClientConfig,
+        http_host: Arc<dyn WalletHttpHost>,
+        platform_host: Arc<dyn WalletPlatformHost>,
+    ) -> Result<Arc<Self>, WalletClientError> {
         validate_config(&config)?;
-        let snapshot = WalletSnapshotV3::empty(&config);
+        let snapshot = WalletSnapshot::empty(&config);
         Ok(Arc::new(Self {
             http_host,
             platform_host,
@@ -167,18 +167,18 @@ impl WalletClientV3 {
         }))
     }
 
-    pub fn snapshot(&self) -> Result<WalletSnapshotV3, WalletClientErrorV3> {
+    pub fn snapshot(&self) -> Result<WalletSnapshot, WalletClientError> {
         Ok(self.lock()?.snapshot.clone())
     }
 
     pub async fn wait_for_change(
         &self,
         after_revision: u64,
-    ) -> Result<WalletSnapshotV3, WalletClientErrorV3> {
+    ) -> Result<WalletSnapshot, WalletClientError> {
         let receiver = {
             let mut state = self.lock()?;
             if state.shutdown {
-                return Err(WalletClientErrorV3::Shutdown);
+                return Err(WalletClientError::Shutdown);
             }
             if state.snapshot.revision > after_revision {
                 return Ok(state.snapshot.clone());
@@ -187,33 +187,33 @@ impl WalletClientV3 {
             state.waiters.push((after_revision, sender));
             receiver
         };
-        receiver.await.map_err(|_| WalletClientErrorV3::Shutdown)?;
+        receiver.await.map_err(|_| WalletClientError::Shutdown)?;
         let state = self.lock()?;
         if state.shutdown {
-            return Err(WalletClientErrorV3::Shutdown);
+            return Err(WalletClientError::Shutdown);
         }
         Ok(state.snapshot.clone())
     }
 
-    pub async fn refresh(&self) -> Result<WalletUpdateV3, WalletClientErrorV3> {
+    pub async fn refresh(&self) -> Result<WalletUpdate, WalletClientError> {
         let (generation, calls, previous_calls) = {
             let mut state = self.lock()?;
             ensure_running(&state)?;
             let config = state.config.clone();
-            let account_id = HttpCallIdV3 {
+            let account_id = HttpCallId {
                 value: state.allocate_id()?,
             };
-            let activity_id = HttpCallIdV3 {
+            let activity_id = HttpCallId {
                 value: state.allocate_id()?,
             };
-            let rate_id = HttpCallIdV3 {
+            let rate_id = HttpCallId {
                 value: state.allocate_id()?,
             };
             let calls = refresh_calls(&config, account_id, activity_id, rate_id)?;
             state.refresh_generation = state
                 .refresh_generation
                 .checked_add(1)
-                .ok_or(WalletClientErrorV3::IdentifierExhausted)?;
+                .ok_or(WalletClientError::IdentifierExhausted)?;
             let generation = state.refresh_generation;
             let mut previous_calls = state
                 .active_refresh
@@ -223,10 +223,10 @@ impl WalletClientV3 {
             if let Some((_, page_call)) = state.active_pagination.take() {
                 previous_calls.push(page_call);
             }
-            state.snapshot.account_resource = ResourceStateV3::loading();
-            state.snapshot.activity_resource = ResourceStateV3::loading();
-            state.snapshot.activity_pagination_resource = ResourceStateV3::idle();
-            state.snapshot.rate_resource = ResourceStateV3::loading();
+            state.snapshot.account_resource = ResourceState::loading();
+            state.snapshot.activity_resource = ResourceState::loading();
+            state.snapshot.activity_pagination_resource = ResourceState::idle();
+            state.snapshot.rate_resource = ResourceState::loading();
             state.next_revision()?;
             (generation, calls, previous_calls)
         };
@@ -251,7 +251,7 @@ impl WalletClientV3 {
 
         let mut state = self.lock()?;
         if !state.is_current(OperationFamily::Refresh, generation) {
-            return Ok(update(WalletOperationOutcomeV3::Superseded, 0, &state));
+            return Ok(update(WalletOperationOutcome::Superseded, 0, &state));
         }
         state.active_refresh = None;
         let failed = [
@@ -260,17 +260,17 @@ impl WalletClientV3 {
             &state.snapshot.rate_resource,
         ]
         .into_iter()
-        .filter(|resource| resource.phase == ResourcePhaseV3::Failed)
+        .filter(|resource| resource.phase == ResourcePhase::Failed)
         .count();
         let outcome = match failed {
-            0 => WalletOperationOutcomeV3::Completed,
-            3 => WalletOperationOutcomeV3::Failed,
-            _ => WalletOperationOutcomeV3::PartiallyCompleted,
+            0 => WalletOperationOutcome::Completed,
+            3 => WalletOperationOutcome::Failed,
+            _ => WalletOperationOutcome::PartiallyCompleted,
         };
         Ok(update(outcome, 0, &state))
     }
 
-    pub async fn cancel_refresh(&self) -> Result<(), WalletClientErrorV3> {
+    pub async fn cancel_refresh(&self) -> Result<(), WalletClientError> {
         let calls = {
             let mut state = self.lock()?;
             let calls = state
@@ -292,7 +292,7 @@ impl WalletClientV3 {
         Ok(())
     }
 
-    pub async fn load_more_activity(&self) -> Result<WalletUpdateV3, WalletClientErrorV3> {
+    pub async fn load_more_activity(&self) -> Result<WalletUpdate, WalletClientError> {
         let (generation, call) = {
             let mut state = self.lock()?;
             ensure_running(&state)?;
@@ -300,22 +300,22 @@ impl WalletClientV3 {
                 || state.active_pagination.is_some()
                 || !state.snapshot.activity_has_more
             {
-                return Ok(update(WalletOperationOutcomeV3::Skipped, 0, &state));
+                return Ok(update(WalletOperationOutcome::Skipped, 0, &state));
             }
             let Some(cursor) = state.snapshot.activity_cursor.clone() else {
-                return Ok(update(WalletOperationOutcomeV3::Skipped, 0, &state));
+                return Ok(update(WalletOperationOutcome::Skipped, 0, &state));
             };
-            let id = HttpCallIdV3 {
+            let id = HttpCallId {
                 value: state.allocate_id()?,
             };
             let call = activity_page_call(&state.config, &cursor, id)?;
             state.pagination_generation = state
                 .pagination_generation
                 .checked_add(1)
-                .ok_or(WalletClientErrorV3::IdentifierExhausted)?;
+                .ok_or(WalletClientError::IdentifierExhausted)?;
             let generation = state.pagination_generation;
             state.active_pagination = Some((generation, id));
-            state.snapshot.activity_pagination_resource = ResourceStateV3::loading();
+            state.snapshot.activity_pagination_resource = ResourceState::loading();
             state.next_revision()?;
             (generation, call)
         };
@@ -327,34 +327,34 @@ impl WalletClientV3 {
         );
         let mut state = self.lock()?;
         if !state.is_current(OperationFamily::Pagination, generation) {
-            return Ok(update(WalletOperationOutcomeV3::Superseded, 0, &state));
+            return Ok(update(WalletOperationOutcome::Superseded, 0, &state));
         }
         state.active_pagination = None;
         let (outcome, added) = match result {
             Ok(page) => {
                 let added = apply_activity_page(&mut state.snapshot, page);
-                state.snapshot.activity_pagination_resource = ResourceStateV3::ready();
-                (WalletOperationOutcomeV3::Completed, added)
+                state.snapshot.activity_pagination_resource = ResourceState::ready();
+                (WalletOperationOutcome::Completed, added)
             }
-            Err(error) if error.code == ErrorCodeV3::HostCancelled => {
-                state.snapshot.activity_pagination_resource = ResourceStateV3::idle();
-                (WalletOperationOutcomeV3::Cancelled, 0)
+            Err(error) if error.code == ErrorCode::HostCancelled => {
+                state.snapshot.activity_pagination_resource = ResourceState::idle();
+                (WalletOperationOutcome::Cancelled, 0)
             }
             Err(error) => {
-                state.snapshot.activity_pagination_resource = ResourceStateV3::failed(error);
-                (WalletOperationOutcomeV3::Failed, 0)
+                state.snapshot.activity_pagination_resource = ResourceState::failed(error);
+                (WalletOperationOutcome::Failed, 0)
             }
         };
         state.next_revision()?;
         Ok(update(outcome, added, &state))
     }
 
-    pub async fn cancel_load_more_activity(&self) -> Result<(), WalletClientErrorV3> {
+    pub async fn cancel_load_more_activity(&self) -> Result<(), WalletClientError> {
         let call = {
             let mut state = self.lock()?;
             let call = state.active_pagination.take().map(|active| active.1);
             if call.is_some() {
-                state.snapshot.activity_pagination_resource = ResourceStateV3::idle();
+                state.snapshot.activity_pagination_resource = ResourceState::idle();
                 state.next_revision()?;
             }
             call
@@ -367,8 +367,8 @@ impl WalletClientV3 {
 
     /// Fetches fresh wallet state, authorizes protected-secret access, signs a
     /// V5R1 transfer inside Rust, durably records the exact BOC, and submits
-    /// that BOC. Streaming confirmation is deliberately outside V3.
-    pub async fn send(&self, request: SendRequestV3) -> Result<SendResultV3, WalletClientErrorV3> {
+    /// that BOC. Streaming confirmation is deliberately outside .
+    pub async fn send(&self, request: SendRequest) -> Result<SendResult, WalletClientError> {
         validate_send(&request)?;
         let (
             generation,
@@ -382,17 +382,17 @@ impl WalletClientV3 {
             let mut state = self.lock()?;
             ensure_running(&state)?;
             if state.active_send.is_some() {
-                return Err(WalletClientErrorV3::StateUnavailable);
+                return Err(WalletClientError::StateUnavailable);
             }
             state.send_generation = state
                 .send_generation
                 .checked_add(1)
-                .ok_or(WalletClientErrorV3::IdentifierExhausted)?;
+                .ok_or(WalletClientError::IdentifierExhausted)?;
             let generation = state.send_generation;
             let config = state.config.clone();
             let account_call = toncenter_call(
                 &config,
-                HttpCallIdV3 {
+                HttpCallId {
                     value: state.allocate_id()?,
                 },
                 "getAddressInformation",
@@ -400,23 +400,23 @@ impl WalletClientV3 {
             )?;
             let seqno_call = seqno_call(
                 &config,
-                HttpCallIdV3 {
+                HttpCallId {
                     value: state.allocate_id()?,
                 },
             )?;
-            let submit_call_id = HttpCallIdV3 {
+            let submit_call_id = HttpCallId {
                 value: state.allocate_id()?,
             };
-            let mut workflow = SendWorkflowV3::new(
+            let mut workflow = SendWorkflow::new(
                 config.wallet_id.clone(),
                 config.address.clone(),
                 request.clone(),
             );
             let directive = workflow
                 .begin()
-                .map_err(|_| WalletClientErrorV3::InvalidConfig)?;
-            let SendDirectiveV3::LoadJournal(journal_key) = directive else {
-                return Err(WalletClientErrorV3::StateUnavailable);
+                .map_err(|_| WalletClientError::InvalidConfig)?;
+            let SendDirective::LoadJournal(journal_key) = directive else {
+                return Err(WalletClientError::StateUnavailable);
             };
             state.active_send = Some((generation, Vec::new()));
             state.send_commit_started = false;
@@ -440,16 +440,16 @@ impl WalletClientV3 {
                 .await
                 .map_err(|error| {
                     let _ = self.fail_send(generation, error.to_string());
-                    WalletClientErrorV3::StateUnavailable
+                    WalletClientError::StateUnavailable
                 })?;
         self.ensure_current_send(generation)?;
         let directive = workflow.journal_loaded(journal_record).map_err(|error| {
             let _ = self.fail_send(generation, error.to_string());
-            WalletClientErrorV3::StateUnavailable
+            WalletClientError::StateUnavailable
         })?;
-        let SendDirectiveV3::FetchFreshAccount = directive else {
+        let SendDirective::FetchFreshAccount = directive else {
             self.fail_send(generation, "invalid send journal transition".to_owned())?;
-            return Err(WalletClientErrorV3::StateUnavailable);
+            return Err(WalletClientError::StateUnavailable);
         };
         self.publish_send_workflow(generation, &workflow)?;
 
@@ -459,20 +459,20 @@ impl WalletClientV3 {
         let account =
             evaluate_for_call(&account_call, account_response, parse_account).map_err(|error| {
                 let _ = self.fail_send(generation, error.developer_message);
-                WalletClientErrorV3::StateUnavailable
+                WalletClientError::StateUnavailable
             })?;
-        let seqno = if account.status == AccountStatusV3::Active {
+        let seqno = if account.status == AccountStatus::Active {
             self.start_send_http_call(generation, seqno_call.id)?;
             let seqno_response = self.http_host.execute_http(seqno_call.clone()).await;
             self.finish_send_http_call(generation, seqno_call.id)?;
             evaluate_for_call(&seqno_call, seqno_response, parse_seqno).map_err(|error| {
                 let _ = self.fail_send(generation, error.developer_message);
-                WalletClientErrorV3::StateUnavailable
+                WalletClientError::StateUnavailable
             })?
         } else {
             0
         };
-        let fresh = FreshSendAccountV3 {
+        let fresh = FreshSendAccount {
             status: account.status,
             seqno,
             observed_at: account.sync_utime.unwrap_or_default(),
@@ -481,32 +481,32 @@ impl WalletClientV3 {
             .fresh_account_loaded(fresh.clone())
             .map_err(|error| {
                 let _ = self.fail_send(generation, error.to_string());
-                WalletClientErrorV3::StateUnavailable
+                WalletClientError::StateUnavailable
             })?;
-        let SendDirectiveV3::ReadProtectedSecret(secret_request) = directive else {
+        let SendDirective::ReadProtectedSecret(secret_request) = directive else {
             self.fail_send(generation, "invalid secret-read transition".to_owned())?;
-            return Err(WalletClientErrorV3::StateUnavailable);
+            return Err(WalletClientError::StateUnavailable);
         };
         self.publish_send_workflow(generation, &workflow)?;
-        let secret = SensitiveBytesV3::new(
+        let secret = SensitiveBytes::new(
             self.platform_host
                 .read_protected_secret(secret_request)
                 .await
                 .map_err(|error| {
                     let _ = self.fail_send(generation, error.to_string());
-                    WalletClientErrorV3::StateUnavailable
+                    WalletClientError::StateUnavailable
                 })?,
         );
         self.ensure_current_send(generation)?;
         let source = derive_source(secret.as_slice(), config.network).map_err(|_| {
             let _ = self.fail_send(generation, "protected mnemonic is invalid".to_owned());
-            WalletClientErrorV3::InvalidConfig
+            WalletClientError::InvalidConfig
         })?;
         let source_matches = match same_address(&source, &config.address) {
             Ok(matches) => matches,
             Err(error) => {
                 self.fail_send(generation, error)?;
-                return Err(WalletClientErrorV3::InvalidConfig);
+                return Err(WalletClientError::InvalidConfig);
             }
         };
         if !source_matches {
@@ -514,26 +514,26 @@ impl WalletClientV3 {
                 generation,
                 "protected mnemonic does not belong to this wallet".to_owned(),
             )?;
-            return Err(WalletClientErrorV3::InvalidConfig);
+            return Err(WalletClientError::InvalidConfig);
         }
-        let SendDirectiveV3::PrepareTransfer { .. } =
+        let SendDirective::PrepareTransfer { .. } =
             workflow.authorization_succeeded().map_err(|error| {
                 let _ = self.fail_send(generation, error.to_string());
-                WalletClientErrorV3::StateUnavailable
+                WalletClientError::StateUnavailable
             })?
         else {
             self.fail_send(
                 generation,
                 "invalid send authorization transition".to_owned(),
             )?;
-            return Err(WalletClientErrorV3::StateUnavailable);
+            return Err(WalletClientError::StateUnavailable);
         };
         self.publish_send_workflow(generation, &workflow)?;
         let now = self.platform_host.now().await;
         self.ensure_current_send(generation)?;
         let Some(valid_until) = now.checked_add(300) else {
             self.fail_send(generation, "transfer expiry overflow".to_owned())?;
-            return Err(WalletClientErrorV3::IdentifierExhausted);
+            return Err(WalletClientError::IdentifierExhausted);
         };
         let prepared = prepare_transfer(
             secret.as_slice(),
@@ -546,21 +546,21 @@ impl WalletClientV3 {
         )
         .map_err(|_| {
             let _ = self.fail_send(generation, "failed to prepare transfer".to_owned());
-            WalletClientErrorV3::StateUnavailable
+            WalletClientError::StateUnavailable
         })?;
         let summary = prepared.public_summary();
         let submit_call =
             send_boc_call(&config, submit_call_id, &prepared.signed_boc).map_err(|_| {
                 let _ = self.fail_send(generation, "failed to construct submission".to_owned());
-                WalletClientErrorV3::StateUnavailable
+                WalletClientError::StateUnavailable
             })?;
         let directive = workflow.transfer_prepared(prepared).map_err(|error| {
             let _ = self.fail_send(generation, error.to_string());
-            WalletClientErrorV3::StateUnavailable
+            WalletClientError::StateUnavailable
         })?;
-        let SendDirectiveV3::PersistJournal(mutation) = directive else {
+        let SendDirective::PersistJournal(mutation) = directive else {
             self.fail_send(generation, "invalid send persistence transition".to_owned())?;
-            return Err(WalletClientErrorV3::StateUnavailable);
+            return Err(WalletClientError::StateUnavailable);
         };
         self.publish_send_workflow(generation, &workflow)?;
         self.begin_send_commit(generation)?;
@@ -568,7 +568,7 @@ impl WalletClientV3 {
             Ok(journal) => journal,
             Err(error) => {
                 self.mark_send_unknown(generation, error.to_string())?;
-                return Err(WalletClientErrorV3::StateUnavailable);
+                return Err(WalletClientError::StateUnavailable);
             }
         };
         self.ensure_current_send(generation)?;
@@ -579,19 +579,19 @@ impl WalletClientV3 {
             } else {
                 let _ = self.fail_send(generation, error.to_string());
             }
-            WalletClientErrorV3::StateUnavailable
+            WalletClientError::StateUnavailable
         })?;
-        let SendDirectiveV3::Submit {
+        let SendDirective::Submit {
             signed_boc: _,
             message_hash,
         } = directive
         else {
             self.mark_send_unknown(generation, "invalid send submission transition".to_owned())?;
-            return Err(WalletClientErrorV3::StateUnavailable);
+            return Err(WalletClientError::StateUnavailable);
         };
         workflow.submission_started().map_err(|error| {
             let _ = self.mark_send_unknown(generation, error.to_string());
-            WalletClientErrorV3::StateUnavailable
+            WalletClientError::StateUnavailable
         })?;
         self.publish_send_workflow(generation, &workflow)?;
         self.start_send_http_call(generation, submit_call.id)?;
@@ -612,14 +612,14 @@ impl WalletClientV3 {
         }
         .map_err(|error| {
             let _ = self.mark_send_unknown(generation, error.to_string());
-            WalletClientErrorV3::StateUnavailable
+            WalletClientError::StateUnavailable
         })?;
-        let SendDirectiveV3::PersistJournal(mutation) = final_directive else {
+        let SendDirective::PersistJournal(mutation) = final_directive else {
             self.mark_send_unknown(
                 generation,
                 "invalid terminal persistence transition".to_owned(),
             )?;
-            return Err(WalletClientErrorV3::StateUnavailable);
+            return Err(WalletClientError::StateUnavailable);
         };
         self.publish_send_workflow(generation, &workflow)?;
         self.ensure_current_send(generation)?;
@@ -627,13 +627,13 @@ impl WalletClientV3 {
             Ok(journal) => journal,
             Err(error) => {
                 self.mark_send_unknown(generation, error.to_string())?;
-                return Err(WalletClientErrorV3::StateUnavailable);
+                return Err(WalletClientError::StateUnavailable);
             }
         };
         self.ensure_current_send(generation)?;
         workflow.journal_persisted(journal).map_err(|error| {
             let _ = self.mark_send_unknown(generation, error.to_string());
-            WalletClientErrorV3::StateUnavailable
+            WalletClientError::StateUnavailable
         })?;
         let phase = workflow.snapshot().phase;
         {
@@ -647,18 +647,18 @@ impl WalletClientV3 {
             }
         }
         let _ = summary;
-        Ok(SendResultV3 {
+        Ok(SendResult {
             operation_id: request.operation_id,
             message_hash,
             phase,
         })
     }
 
-    pub async fn cancel_send(&self) -> Result<(), WalletClientErrorV3> {
+    pub async fn cancel_send(&self) -> Result<(), WalletClientError> {
         let calls = {
             let mut state = self.lock()?;
             if state.active_send.is_some() && state.send_commit_started {
-                return Err(WalletClientErrorV3::SendCancellationTooLate);
+                return Err(WalletClientError::SendCancellationTooLate);
             }
             let active = state.active_send.take();
             state.send_commit_started = false;
@@ -668,7 +668,7 @@ impl WalletClientV3 {
                     state.snapshot.send = workflow.snapshot();
                     state.send_workflow = Some(workflow);
                 }
-                state.snapshot.send.phase = SendPhaseV3::Cancelled;
+                state.snapshot.send.phase = SendPhase::Cancelled;
                 state.next_revision()?;
             }
             active.map(|active| active.1).unwrap_or_default()
@@ -679,14 +679,14 @@ impl WalletClientV3 {
         Ok(())
     }
 
-    pub async fn shutdown(&self) -> Result<(), WalletClientErrorV3> {
+    pub async fn shutdown(&self) -> Result<(), WalletClientError> {
         let (calls, waiters) = {
             let mut state = self.lock()?;
             if state.shutdown {
                 return Ok(());
             }
             if state.active_send.is_some() && state.send_commit_started {
-                return Err(WalletClientErrorV3::SendCancellationTooLate);
+                return Err(WalletClientError::SendCancellationTooLate);
             }
             state.shutdown = true;
             let mut calls = state
@@ -711,18 +711,18 @@ impl WalletClientV3 {
     }
 }
 
-impl WalletClientV3 {
-    fn lock(&self) -> Result<std::sync::MutexGuard<'_, State>, WalletClientErrorV3> {
+impl WalletClient {
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, State>, WalletClientError> {
         self.state
             .lock()
-            .map_err(|_| WalletClientErrorV3::StateUnavailable)
+            .map_err(|_| WalletClientError::StateUnavailable)
     }
 
     fn publish_refresh_component(
         &self,
         generation: u64,
         value: RefreshValue,
-    ) -> Result<(), WalletClientErrorV3> {
+    ) -> Result<(), WalletClientError> {
         let mut state = self.lock()?;
         if !state.is_current(OperationFamily::Refresh, generation) {
             return Ok(());
@@ -731,78 +731,74 @@ impl WalletClientV3 {
             RefreshValue::Account(result) => match result {
                 Ok(account) => {
                     state.snapshot.account = Some(account);
-                    state.snapshot.account_resource = ResourceStateV3::ready();
+                    state.snapshot.account_resource = ResourceState::ready();
                 }
-                Err(error) => state.snapshot.account_resource = ResourceStateV3::failed(error),
+                Err(error) => state.snapshot.account_resource = ResourceState::failed(error),
             },
             RefreshValue::Activity(result) => match result {
                 Ok(page) => {
                     state.snapshot.activity = page.items;
                     state.snapshot.activity_cursor = page.cursor;
                     state.snapshot.activity_has_more = page.has_more;
-                    state.snapshot.activity_resource = ResourceStateV3::ready();
+                    state.snapshot.activity_resource = ResourceState::ready();
                 }
-                Err(error) => state.snapshot.activity_resource = ResourceStateV3::failed(error),
+                Err(error) => state.snapshot.activity_resource = ResourceState::failed(error),
             },
             RefreshValue::Rate(result) => match result {
                 Ok(rate) => {
                     state.snapshot.usd_per_gram = Some(rate);
-                    state.snapshot.rate_resource = ResourceStateV3::ready();
+                    state.snapshot.rate_resource = ResourceState::ready();
                 }
-                Err(error) => state.snapshot.rate_resource = ResourceStateV3::failed(error),
+                Err(error) => state.snapshot.rate_resource = ResourceState::failed(error),
             },
         }
         state.next_revision()?;
         Ok(())
     }
 
-    fn fail_send(&self, generation: u64, message: String) -> Result<(), WalletClientErrorV3> {
+    fn fail_send(&self, generation: u64, message: String) -> Result<(), WalletClientError> {
         let mut state = self.lock()?;
         if state.is_current(OperationFamily::Send, generation) {
             state.active_send = None;
             state.send_commit_started = false;
-            state.snapshot.send.phase = SendPhaseV3::Failed;
+            state.snapshot.send.phase = SendPhase::Failed;
             state.snapshot.send.error_message = Some(sanitize_diagnostic(&message));
             state.next_revision()?;
         }
         Ok(())
     }
 
-    fn mark_send_unknown(
-        &self,
-        generation: u64,
-        message: String,
-    ) -> Result<(), WalletClientErrorV3> {
+    fn mark_send_unknown(&self, generation: u64, message: String) -> Result<(), WalletClientError> {
         let mut state = self.lock()?;
         if state.is_current(OperationFamily::Send, generation) {
             state.active_send = None;
             state.send_commit_started = false;
-            state.snapshot.send.phase = SendPhaseV3::SubmissionUnknown;
+            state.snapshot.send.phase = SendPhase::SubmissionUnknown;
             state.snapshot.send.error_message = Some(sanitize_diagnostic(&message));
             state.next_revision()?;
         }
         Ok(())
     }
 
-    fn begin_send_commit(&self, generation: u64) -> Result<(), WalletClientErrorV3> {
+    fn begin_send_commit(&self, generation: u64) -> Result<(), WalletClientError> {
         let mut state = self.lock()?;
         if state.shutdown {
-            return Err(WalletClientErrorV3::Shutdown);
+            return Err(WalletClientError::Shutdown);
         }
         if !state.is_current(OperationFamily::Send, generation) {
-            return Err(WalletClientErrorV3::StateUnavailable);
+            return Err(WalletClientError::StateUnavailable);
         }
         state.send_commit_started = true;
         Ok(())
     }
 
-    fn ensure_current_send(&self, generation: u64) -> Result<(), WalletClientErrorV3> {
+    fn ensure_current_send(&self, generation: u64) -> Result<(), WalletClientError> {
         let state = self.lock()?;
         if state.shutdown {
-            return Err(WalletClientErrorV3::Shutdown);
+            return Err(WalletClientError::Shutdown);
         }
         if !state.is_current(OperationFamily::Send, generation) {
-            return Err(WalletClientErrorV3::StateUnavailable);
+            return Err(WalletClientError::StateUnavailable);
         }
         Ok(())
     }
@@ -810,11 +806,11 @@ impl WalletClientV3 {
     fn publish_send_workflow(
         &self,
         generation: u64,
-        workflow: &SendWorkflowV3,
-    ) -> Result<(), WalletClientErrorV3> {
+        workflow: &SendWorkflow,
+    ) -> Result<(), WalletClientError> {
         let mut state = self.lock()?;
         if !state.is_current(OperationFamily::Send, generation) {
-            return Err(WalletClientErrorV3::StateUnavailable);
+            return Err(WalletClientError::StateUnavailable);
         }
         state.snapshot.send = workflow.snapshot();
         state.send_workflow = Some(workflow.clone());
@@ -825,17 +821,17 @@ impl WalletClientV3 {
     fn start_send_http_call(
         &self,
         generation: u64,
-        call_id: HttpCallIdV3,
-    ) -> Result<(), WalletClientErrorV3> {
+        call_id: HttpCallId,
+    ) -> Result<(), WalletClientError> {
         let mut state = self.lock()?;
         if state.shutdown {
-            return Err(WalletClientErrorV3::Shutdown);
+            return Err(WalletClientError::Shutdown);
         }
         let Some((active_generation, calls)) = state.active_send.as_mut() else {
-            return Err(WalletClientErrorV3::StateUnavailable);
+            return Err(WalletClientError::StateUnavailable);
         };
         if *active_generation != generation {
-            return Err(WalletClientErrorV3::StateUnavailable);
+            return Err(WalletClientError::StateUnavailable);
         }
         calls.push(call_id);
         Ok(())
@@ -844,17 +840,17 @@ impl WalletClientV3 {
     fn finish_send_http_call(
         &self,
         generation: u64,
-        call_id: HttpCallIdV3,
-    ) -> Result<(), WalletClientErrorV3> {
+        call_id: HttpCallId,
+    ) -> Result<(), WalletClientError> {
         let mut state = self.lock()?;
         if state.shutdown {
-            return Err(WalletClientErrorV3::Shutdown);
+            return Err(WalletClientError::Shutdown);
         }
         let Some((active_generation, calls)) = state.active_send.as_mut() else {
-            return Err(WalletClientErrorV3::StateUnavailable);
+            return Err(WalletClientError::StateUnavailable);
         };
         if *active_generation != generation {
-            return Err(WalletClientErrorV3::StateUnavailable);
+            return Err(WalletClientError::StateUnavailable);
         }
         calls.retain(|active| *active != call_id);
         Ok(())
@@ -862,22 +858,22 @@ impl WalletClientV3 {
 }
 
 enum RefreshValue {
-    Account(Result<AccountSnapshotV3, DomainErrorV3>),
-    Activity(Result<ActivityPage, DomainErrorV3>),
-    Rate(Result<f64, DomainErrorV3>),
+    Account(Result<AccountSnapshot, DomainError>),
+    Activity(Result<ActivityPage, DomainError>),
+    Rate(Result<f64, DomainError>),
 }
 
-const fn ensure_running(state: &State) -> Result<(), WalletClientErrorV3> {
+const fn ensure_running(state: &State) -> Result<(), WalletClientError> {
     if state.shutdown {
-        Err(WalletClientErrorV3::Shutdown)
+        Err(WalletClientError::Shutdown)
     } else {
         Ok(())
     }
 }
 
-struct SensitiveBytesV3(Vec<u8>);
+struct SensitiveBytes(Vec<u8>);
 
-impl SensitiveBytesV3 {
+impl SensitiveBytes {
     const fn new(bytes: Vec<u8>) -> Self {
         Self(bytes)
     }
@@ -887,14 +883,14 @@ impl SensitiveBytesV3 {
     }
 }
 
-impl Drop for SensitiveBytesV3 {
+impl Drop for SensitiveBytes {
     fn drop(&mut self) {
         self.0.fill(0);
     }
 }
 
-fn update(outcome: WalletOperationOutcomeV3, added: u64, state: &State) -> WalletUpdateV3 {
-    WalletUpdateV3 {
+fn update(outcome: WalletOperationOutcome, added: u64, state: &State) -> WalletUpdate {
+    WalletUpdate {
         outcome,
         activity_items_added: added,
         snapshot: state.snapshot.clone(),
@@ -903,8 +899,8 @@ fn update(outcome: WalletOperationOutcomeV3, added: u64, state: &State) -> Walle
 
 fn evaluate<T>(
     result: Result<HttpResponse, HttpHostError>,
-    parse: impl FnOnce(&[u8]) -> Result<T, DomainErrorV3>,
-) -> Result<T, DomainErrorV3> {
+    parse: impl FnOnce(&[u8]) -> Result<T, DomainError>,
+) -> Result<T, DomainError> {
     let response = match result {
         Ok(response) => response,
         Err(HttpHostError::Failed { kind, message }) => return Err(host_error(kind, &message)),
@@ -918,8 +914,8 @@ fn evaluate<T>(
 fn evaluate_for_call<T>(
     call: &HttpCall,
     result: Result<HttpResponse, HttpHostError>,
-    parse: impl FnOnce(&[u8]) -> Result<T, DomainErrorV3>,
-) -> Result<T, DomainErrorV3> {
+    parse: impl FnOnce(&[u8]) -> Result<T, DomainError>,
+) -> Result<T, DomainError> {
     if let Ok(response) = &result
         && response.final_url != call.url
     {
@@ -948,31 +944,31 @@ fn evaluate_for_call<T>(
     evaluate(result, parse)
 }
 
-fn host_error(kind: HttpHostErrorKind, message: &str) -> DomainErrorV3 {
+fn host_error(kind: HttpHostErrorKind, message: &str) -> DomainError {
     let cancelled = kind == HttpHostErrorKind::Cancelled;
     let policy = kind == HttpHostErrorKind::PolicyViolation;
     let too_large = kind == HttpHostErrorKind::ResponseTooLarge;
-    DomainErrorV3 {
+    DomainError {
         code: if cancelled {
-            ErrorCodeV3::HostCancelled
+            ErrorCode::HostCancelled
         } else if policy {
-            ErrorCodeV3::HostPolicyViolation
+            ErrorCode::HostPolicyViolation
         } else if too_large {
-            ErrorCodeV3::ResponseTooLarge
+            ErrorCode::ResponseTooLarge
         } else {
-            ErrorCodeV3::TransportFailed
+            ErrorCode::TransportFailed
         },
         category: if cancelled {
-            ErrorCategoryV3::Cancellation
+            ErrorCategory::Cancellation
         } else if policy || too_large {
-            ErrorCategoryV3::HostPolicy
+            ErrorCategory::HostPolicy
         } else {
-            ErrorCategoryV3::Transport
+            ErrorCategory::Transport
         },
         retry: if cancelled || policy || too_large {
-            RetryAdviceV3::None
+            RetryAdvice::None
         } else {
-            RetryAdviceV3::Safe
+            RetryAdvice::Safe
         },
         developer_message: sanitize_diagnostic(message),
         provider_status: None,
@@ -981,13 +977,13 @@ fn host_error(kind: HttpHostErrorKind, message: &str) -> DomainErrorV3 {
     }
 }
 
-fn mark_loading_cancelled(resource: &mut ResourceStateV3) {
-    if resource.phase == ResourcePhaseV3::Loading {
-        *resource = ResourceStateV3::idle();
+fn mark_loading_cancelled(resource: &mut ResourceState) {
+    if resource.phase == ResourcePhase::Loading {
+        *resource = ResourceState::idle();
     }
 }
 
-fn apply_activity_page(snapshot: &mut WalletSnapshotV3, page: ActivityPage) -> u64 {
+fn apply_activity_page(snapshot: &mut WalletSnapshot, page: ActivityPage) -> u64 {
     let advanced = match (snapshot.activity_cursor.as_ref(), page.cursor.as_ref()) {
         (Some(previous), Some(next)) => {
             decimal_cmp(&next.logical_time, &previous.logical_time).is_lt()
@@ -1015,11 +1011,11 @@ fn apply_activity_page(snapshot: &mut WalletSnapshotV3, page: ActivityPage) -> u
 }
 
 fn refresh_calls(
-    config: &WalletClientConfigV3,
-    account_id: HttpCallIdV3,
-    activity_id: HttpCallIdV3,
-    rate_id: HttpCallIdV3,
-) -> Result<(HttpCall, HttpCall, HttpCall), WalletClientErrorV3> {
+    config: &WalletClientConfig,
+    account_id: HttpCallId,
+    activity_id: HttpCallId,
+    rate_id: HttpCallId,
+) -> Result<(HttpCall, HttpCall, HttpCall), WalletClientError> {
     Ok((
         toncenter_call(
             config,
@@ -1043,10 +1039,10 @@ fn refresh_calls(
 }
 
 fn activity_page_call(
-    config: &WalletClientConfigV3,
-    cursor: &ActivityCursorV3,
-    id: HttpCallIdV3,
-) -> Result<HttpCall, WalletClientErrorV3> {
+    config: &WalletClientConfig,
+    cursor: &ActivityCursor,
+    id: HttpCallId,
+) -> Result<HttpCall, WalletClientError> {
     if cursor.logical_time.is_empty()
         || !cursor
             .logical_time
@@ -1054,7 +1050,7 @@ fn activity_page_call(
             .all(|byte| byte.is_ascii_digit())
         || cursor.hash.is_empty()
     {
-        return Err(WalletClientErrorV3::InvalidConfig);
+        return Err(WalletClientError::InvalidConfig);
     }
     toncenter_call(
         config,
@@ -1069,10 +1065,7 @@ fn activity_page_call(
     )
 }
 
-fn seqno_call(
-    config: &WalletClientConfigV3,
-    id: HttpCallIdV3,
-) -> Result<HttpCall, WalletClientErrorV3> {
+fn seqno_call(config: &WalletClientConfig, id: HttpCallId) -> Result<HttpCall, WalletClientError> {
     json_rpc_call(
         config,
         id,
@@ -1086,31 +1079,31 @@ fn seqno_call(
 }
 
 fn send_boc_call(
-    config: &WalletClientConfigV3,
-    id: HttpCallIdV3,
+    config: &WalletClientConfig,
+    id: HttpCallId,
     boc: &[u8],
-) -> Result<HttpCall, WalletClientErrorV3> {
+) -> Result<HttpCall, WalletClientError> {
     use base64::Engine as _;
     let encoded = base64::engine::general_purpose::STANDARD.encode(boc);
     json_rpc_call(config, id, "sendBoc", serde_json::json!({ "boc": encoded }))
 }
 
 fn json_rpc_call(
-    config: &WalletClientConfigV3,
-    id: HttpCallIdV3,
+    config: &WalletClientConfig,
+    id: HttpCallId,
     method: &str,
     params: Value,
-) -> Result<HttpCall, WalletClientErrorV3> {
+) -> Result<HttpCall, WalletClientError> {
     let body = serde_json::to_vec(&serde_json::json!({
         "jsonrpc": "2.0",
         "id": id.value.to_string(),
         "method": method,
         "params": params,
     }))
-    .map_err(|_| WalletClientErrorV3::StateUnavailable)?;
+    .map_err(|_| WalletClientError::StateUnavailable)?;
     let mut call = toncenter_call(config, id, "jsonRPC", &[])?;
-    call.method = HttpMethodV3::Post;
-    call.headers.push(HttpHeaderV3 {
+    call.method = HttpMethod::Post;
+    call.headers.push(HttpHeader {
         name: "Content-Type".to_owned(),
         value: "application/json".to_owned(),
     });
@@ -1118,7 +1111,7 @@ fn json_rpc_call(
     Ok(call)
 }
 
-fn parse_seqno(body: &[u8]) -> Result<u32, DomainErrorV3> {
+fn parse_seqno(body: &[u8]) -> Result<u32, DomainError> {
     let value: Value =
         serde_json::from_slice(body).map_err(|error| invalid_json(error.to_string()))?;
     if let Some(error) = value.get("error") {
@@ -1151,7 +1144,7 @@ enum SendBocResponse {
     Rejected(String),
 }
 
-fn parse_send_response(body: &[u8]) -> Result<SendBocResponse, DomainErrorV3> {
+fn parse_send_response(body: &[u8]) -> Result<SendBocResponse, DomainError> {
     let value: Value =
         serde_json::from_slice(body).map_err(|error| invalid_json(error.to_string()))?;
     if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
@@ -1177,17 +1170,17 @@ fn json_error_message(value: &Value) -> String {
     sanitize_diagnostic(&message)
 }
 
-fn is_explicit_send_rejection(error: &DomainErrorV3) -> bool {
+fn is_explicit_send_rejection(error: &DomainError) -> bool {
     error
         .provider_status
         .is_some_and(|status| matches!(status, 400 | 401 | 403 | 404 | 405 | 413 | 422 | 429))
 }
 
-fn invalid_json(message: impl Into<String>) -> DomainErrorV3 {
-    DomainErrorV3 {
-        code: ErrorCodeV3::InvalidProviderResponse,
-        category: ErrorCategoryV3::ProviderProtocol,
-        retry: RetryAdviceV3::None,
+fn invalid_json(message: impl Into<String>) -> DomainError {
+    DomainError {
+        code: ErrorCode::InvalidProviderResponse,
+        category: ErrorCategory::ProviderProtocol,
+        retry: RetryAdvice::None,
         developer_message: sanitize_diagnostic(&message.into()),
         provider_status: None,
         retry_after_ms: None,
@@ -1196,11 +1189,11 @@ fn invalid_json(message: impl Into<String>) -> DomainErrorV3 {
 }
 
 fn toncenter_call(
-    config: &WalletClientConfigV3,
-    id: HttpCallIdV3,
+    config: &WalletClientConfig,
+    id: HttpCallId,
     path: &str,
     query: &[(&str, &str)],
-) -> Result<HttpCall, WalletClientErrorV3> {
+) -> Result<HttpCall, WalletClientError> {
     let mut call = public_call(id, &config.providers.toncenter_base_url, path, query)?;
     call.credential
         .clone_from(&config.providers.toncenter_credential);
@@ -1210,16 +1203,16 @@ fn toncenter_call(
 }
 
 fn public_call(
-    id: HttpCallIdV3,
+    id: HttpCallId,
     base: &str,
     path: &str,
     query: &[(&str, &str)],
-) -> Result<HttpCall, WalletClientErrorV3> {
+) -> Result<HttpCall, WalletClientError> {
     Ok(HttpCall {
         id,
-        method: HttpMethodV3::Get,
+        method: HttpMethod::Get,
         url: provider_url(base, path, query)?,
-        headers: vec![HttpHeaderV3 {
+        headers: vec![HttpHeader {
             name: "Accept".to_owned(),
             value: "application/json".to_owned(),
         }],
@@ -1235,19 +1228,19 @@ fn provider_url(
     base: &str,
     path: &str,
     query: &[(&str, &str)],
-) -> Result<String, WalletClientErrorV3> {
-    let mut url = Url::parse(base).map_err(|_| WalletClientErrorV3::InvalidConfig)?;
+) -> Result<String, WalletClientError> {
+    let mut url = Url::parse(base).map_err(|_| WalletClientError::InvalidConfig)?;
     url.path_segments_mut()
-        .map_err(|_| WalletClientErrorV3::InvalidConfig)?
+        .map_err(|_| WalletClientError::InvalidConfig)?
         .pop_if_empty()
         .push(path);
     url.query_pairs_mut().extend_pairs(query.iter().copied());
     Ok(url.into())
 }
 
-fn validate_config(config: &WalletClientConfigV3) -> Result<(), WalletClientErrorV3> {
+fn validate_config(config: &WalletClientConfig) -> Result<(), WalletClientError> {
     if config.wallet_id.trim().is_empty() || config.address.trim().is_empty() {
-        return Err(WalletClientErrorV3::InvalidConfig);
+        return Err(WalletClientError::InvalidConfig);
     }
     validate_https_url(&config.providers.toncenter_base_url)?;
     validate_https_url(&config.providers.tonapi_base_url)?;
@@ -1258,34 +1251,34 @@ fn validate_config(config: &WalletClientConfigV3) -> Result<(), WalletClientErro
         (Some(_), Some(origin)) => {
             validate_https_origin(origin)?;
             if effective_origin(&config.providers.toncenter_base_url)? != *origin {
-                return Err(WalletClientErrorV3::InvalidConfig);
+                return Err(WalletClientError::InvalidConfig);
             }
             Ok(())
         }
         (None, None) => Ok(()),
-        _ => Err(WalletClientErrorV3::InvalidConfig),
+        _ => Err(WalletClientError::InvalidConfig),
     }
 }
 
-fn effective_origin(value: &str) -> Result<String, WalletClientErrorV3> {
-    let url = Url::parse(value).map_err(|_| WalletClientErrorV3::InvalidConfig)?;
-    let host = url.host_str().ok_or(WalletClientErrorV3::InvalidConfig)?;
+fn effective_origin(value: &str) -> Result<String, WalletClientError> {
+    let url = Url::parse(value).map_err(|_| WalletClientError::InvalidConfig)?;
+    let host = url.host_str().ok_or(WalletClientError::InvalidConfig)?;
     let port = url
         .port_or_known_default()
-        .ok_or(WalletClientErrorV3::InvalidConfig)?;
+        .ok_or(WalletClientError::InvalidConfig)?;
     Ok(format!("{}://{host}:{port}", url.scheme()))
 }
 
-fn validate_https_url(value: &str) -> Result<(), WalletClientErrorV3> {
-    let url = Url::parse(value).map_err(|_| WalletClientErrorV3::InvalidConfig)?;
+fn validate_https_url(value: &str) -> Result<(), WalletClientError> {
+    let url = Url::parse(value).map_err(|_| WalletClientError::InvalidConfig)?;
     if url.scheme() != "https" || url.host_str().is_none() || url.fragment().is_some() {
-        return Err(WalletClientErrorV3::InvalidConfig);
+        return Err(WalletClientError::InvalidConfig);
     }
     Ok(())
 }
 
-fn validate_https_origin(value: &str) -> Result<(), WalletClientErrorV3> {
-    let url = Url::parse(value).map_err(|_| WalletClientErrorV3::InvalidConfig)?;
+fn validate_https_origin(value: &str) -> Result<(), WalletClientError> {
+    let url = Url::parse(value).map_err(|_| WalletClientError::InvalidConfig)?;
     if url.scheme() != "https"
         || url.host_str().is_none()
         || url.port_or_known_default() != Some(443)
@@ -1293,12 +1286,12 @@ fn validate_https_origin(value: &str) -> Result<(), WalletClientErrorV3> {
         || url.query().is_some()
         || url.fragment().is_some()
     {
-        return Err(WalletClientErrorV3::InvalidConfig);
+        return Err(WalletClientError::InvalidConfig);
     }
     Ok(())
 }
 
-fn validate_send(request: &SendRequestV3) -> Result<(), WalletClientErrorV3> {
+fn validate_send(request: &SendRequest) -> Result<(), WalletClientError> {
     if request.operation_id.trim().is_empty()
         || request.destination.trim().is_empty()
         || request.secret_ref.value.trim().is_empty()
@@ -1309,7 +1302,7 @@ fn validate_send(request: &SendRequestV3) -> Result<(), WalletClientErrorV3> {
             .all(|byte| byte.is_ascii_digit())
         || request.amount_nanograms.bytes().all(|byte| byte == b'0')
     {
-        return Err(WalletClientErrorV3::InvalidConfig);
+        return Err(WalletClientError::InvalidConfig);
     }
     Ok(())
 }

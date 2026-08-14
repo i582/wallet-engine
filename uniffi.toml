@@ -1,5 +1,5 @@
 [bindings.swift]
-module_name = "WalletEngineV3FFI"
-ffi_module_name = "wallet_engine_v3FFI"
-ffi_module_filename = "wallet_engine_v3FFI"
+module_name = "WalletEngineFFI"
+ffi_module_name = "wallet_engineFFI"
+ffi_module_filename = "wallet_engineFFI"
 generate_immutable_records = true

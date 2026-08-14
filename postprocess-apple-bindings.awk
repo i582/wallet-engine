@@ -1,6 +1,6 @@
 # UniFFI 0.32 generates callback closures without the Sendable annotations
 # required by Swift 6 strict concurrency. Keep this mechanical transform next
-# to the V3 generator so committed bindings are reproducible.
+# to the generator so committed bindings are reproducible.
 
 function fail(message) {
     print "error: " message > "/dev/stderr"
@@ -42,8 +42,8 @@ pending_make_call {
     next
 }
 
-$0 == "import wallet_engine_v3FFI" {
-    print "@preconcurrency import wallet_engine_v3FFI"
+$0 == "import wallet_engineFFI" {
+    print "@preconcurrency import wallet_engineFFI"
     import_count++
     next
 }
@@ -121,7 +121,7 @@ END {
         fail("generated Swift ended after 'let makeCall = {'")
     }
     if (import_count != 1) {
-        fail("expected one wallet_engine_v3FFI import, found " import_count)
+        fail("expected one wallet_engineFFI import, found " import_count)
     }
     if (make_call_count == 0 || make_call_count != success_count || make_call_count != error_count) {
         fail("incomplete async callback rewrite: makeCall=" make_call_count ", success=" success_count ", error=" error_count)

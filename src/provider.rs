@@ -6,8 +6,8 @@ use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::Value;
 
 use crate::{
-    AccountSnapshotV3, AccountStatusV3, ActivityCursorV3, ActivityDirectionV3, ActivityItemV3,
-    DomainErrorV3, ErrorCategoryV3, ErrorCodeV3, HttpHeaderV3, RetryAdviceV3,
+    AccountSnapshot, AccountStatus, ActivityCursor, ActivityDirection, ActivityItem, DomainError,
+    ErrorCategory, ErrorCode, HttpHeader, RetryAdvice,
 };
 
 #[derive(Debug, Deserialize)]
@@ -59,29 +59,29 @@ struct Message {
 
 #[derive(Debug)]
 pub(crate) struct ActivityPage {
-    pub items: Vec<ActivityItemV3>,
-    pub cursor: Option<ActivityCursorV3>,
+    pub items: Vec<ActivityItem>,
+    pub cursor: Option<ActivityCursor>,
     pub has_more: bool,
 }
 
 pub(crate) fn response_error(
     status: u16,
-    headers: &[HttpHeaderV3],
+    headers: &[HttpHeader],
     body: &[u8],
-) -> Option<DomainErrorV3> {
+) -> Option<DomainError> {
     if (200..300).contains(&status) {
         return None;
     }
     let developer_message = provider_message(body).unwrap_or_else(|| format!("HTTP {status}"));
     if status == 429 {
         let retry_after_ms = parse_retry_after_ms(headers);
-        return Some(DomainErrorV3 {
-            code: ErrorCodeV3::RateLimited,
-            category: ErrorCategoryV3::RateLimit,
+        return Some(DomainError {
+            code: ErrorCode::RateLimited,
+            category: ErrorCategory::RateLimit,
             retry: if retry_after_ms.is_some() {
-                RetryAdviceV3::AfterDelay
+                RetryAdvice::AfterDelay
             } else {
-                RetryAdviceV3::Safe
+                RetryAdvice::Safe
             },
             developer_message,
             provider_status: Some(status),
@@ -89,13 +89,13 @@ pub(crate) fn response_error(
             host_kind: None,
         });
     }
-    Some(DomainErrorV3 {
-        code: ErrorCodeV3::HttpRejected,
-        category: ErrorCategoryV3::ProviderProtocol,
+    Some(DomainError {
+        code: ErrorCode::HttpRejected,
+        category: ErrorCategory::ProviderProtocol,
         retry: if status >= 500 {
-            RetryAdviceV3::Safe
+            RetryAdvice::Safe
         } else {
-            RetryAdviceV3::None
+            RetryAdvice::None
         },
         developer_message,
         provider_status: Some(status),
@@ -104,18 +104,18 @@ pub(crate) fn response_error(
     })
 }
 
-pub(crate) fn parse_account(body: &[u8]) -> Result<AccountSnapshotV3, DomainErrorV3> {
+pub(crate) fn parse_account(body: &[u8]) -> Result<AccountSnapshot, DomainError> {
     let account: Account = decode_envelope(body)?;
     let balance_nanograms = decimal_string(&account.balance, "account balance")?;
     let balance_grams = format_nanograms(&balance_nanograms)?;
     let status = match account.state.to_ascii_lowercase().as_str() {
-        "nonexist" | "nonexistent" => AccountStatusV3::Nonexistent,
-        "uninit" | "uninitialized" => AccountStatusV3::Uninitialized,
-        "active" => AccountStatusV3::Active,
-        "frozen" => AccountStatusV3::Frozen,
-        _ => AccountStatusV3::Unknown,
+        "nonexist" | "nonexistent" => AccountStatus::Nonexistent,
+        "uninit" | "uninitialized" => AccountStatus::Uninitialized,
+        "active" => AccountStatus::Active,
+        "frozen" => AccountStatus::Frozen,
+        _ => AccountStatus::Unknown,
     };
-    Ok(AccountSnapshotV3 {
+    Ok(AccountSnapshot {
         balance_nanograms,
         balance_grams,
         status,
@@ -123,7 +123,7 @@ pub(crate) fn parse_account(body: &[u8]) -> Result<AccountSnapshotV3, DomainErro
     })
 }
 
-pub(crate) fn parse_activity(body: &[u8], page_size: u32) -> Result<ActivityPage, DomainErrorV3> {
+pub(crate) fn parse_activity(body: &[u8], page_size: u32) -> Result<ActivityPage, DomainError> {
     let transactions: Vec<Transaction> = decode_envelope(body)?;
     let cursor = transactions
         .last()
@@ -131,7 +131,7 @@ pub(crate) fn parse_activity(body: &[u8], page_size: u32) -> Result<ActivityPage
             if transaction.transaction_id.hash.is_empty() {
                 return Err(invalid_response("transaction hash must not be empty"));
             }
-            Ok(ActivityCursorV3 {
+            Ok(ActivityCursor {
                 logical_time: decimal_string(&transaction.transaction_id.lt, "logical time")?,
                 hash: canonical_hash(&transaction.transaction_id.hash),
             })
@@ -143,14 +143,14 @@ pub(crate) fn parse_activity(body: &[u8], page_size: u32) -> Result<ActivityPage
         if let Some(message) = &transaction.in_msg
             && message_address(&message.source).is_some()
             && let Some(item) =
-                activity_from_message(&transaction, message, ActivityDirectionV3::Received, 0)?
+                activity_from_message(&transaction, message, ActivityDirection::Received, 0)?
         {
             items.push(item);
         }
         let outgoing = ordered_out_messages(&transaction)?;
         for (index, (_, _, _, message)) in outgoing.into_iter().enumerate() {
             if let Some(item) =
-                activity_from_message(&transaction, message, ActivityDirectionV3::Sent, index)?
+                activity_from_message(&transaction, message, ActivityDirection::Sent, index)?
             {
                 items.push(item);
             }
@@ -165,7 +165,7 @@ pub(crate) fn parse_activity(body: &[u8], page_size: u32) -> Result<ActivityPage
     })
 }
 
-pub(crate) fn parse_rate(body: &[u8]) -> Result<f64, DomainErrorV3> {
+pub(crate) fn parse_rate(body: &[u8]) -> Result<f64, DomainError> {
     let value: Value = decode(body)?;
     let price = ["TON", "GRAM"]
         .into_iter()
@@ -179,7 +179,7 @@ pub(crate) fn parse_rate(body: &[u8]) -> Result<f64, DomainErrorV3> {
     Ok(price)
 }
 
-pub(crate) fn activity_item_order(left: &ActivityItemV3, right: &ActivityItemV3) -> Ordering {
+pub(crate) fn activity_item_order(left: &ActivityItem, right: &ActivityItem) -> Ordering {
     decimal_cmp(&right.logical_time, &left.logical_time)
         .then_with(|| right.timestamp.cmp(&left.timestamp))
         .then_with(|| left.id.cmp(&right.id))
@@ -194,27 +194,27 @@ pub(crate) fn decimal_cmp(left: &str, right: &str) -> Ordering {
 fn activity_from_message(
     transaction: &Transaction,
     message: &Message,
-    direction: ActivityDirectionV3,
+    direction: ActivityDirection,
     index: usize,
-) -> Result<Option<ActivityItemV3>, DomainErrorV3> {
+) -> Result<Option<ActivityItem>, DomainError> {
     let amount_nanograms = decimal_string(&message.value, "message value")?;
     if amount_nanograms.bytes().all(|byte| byte == b'0') {
         return Ok(None);
     }
     let counterparty = match direction {
-        ActivityDirectionV3::Received => message_address(&message.source),
-        ActivityDirectionV3::Sent => message_address(&message.destination),
+        ActivityDirection::Received => message_address(&message.source),
+        ActivityDirection::Sent => message_address(&message.destination),
     };
     let logical_time = decimal_string(&transaction.transaction_id.lt, "logical time")?;
     let direction_name = match direction {
-        ActivityDirectionV3::Received => "received",
-        ActivityDirectionV3::Sent => "sent",
+        ActivityDirection::Received => "received",
+        ActivityDirection::Sent => "sent",
     };
     let transaction_hash = canonical_hash(&transaction.transaction_id.hash);
     if transaction_hash.is_empty() {
         return Err(invalid_response("transaction hash must not be empty"));
     }
-    Ok(Some(ActivityItemV3 {
+    Ok(Some(ActivityItem {
         id: format!("{transaction_hash}:{direction_name}:{index}"),
         transaction_hash,
         logical_time,
@@ -228,9 +228,7 @@ fn activity_from_message(
 
 type OrderedMessage<'a> = (Option<String>, String, usize, &'a Message);
 
-fn ordered_out_messages(
-    transaction: &Transaction,
-) -> Result<Vec<OrderedMessage<'_>>, DomainErrorV3> {
+fn ordered_out_messages(transaction: &Transaction) -> Result<Vec<OrderedMessage<'_>>, DomainError> {
     let mut messages = transaction
         .out_msgs
         .iter()
@@ -249,7 +247,7 @@ fn ordered_out_messages(
                 .unwrap_or_default();
             Ok((created_lt, message_hash, original_index, message))
         })
-        .collect::<Result<Vec<_>, DomainErrorV3>>()?;
+        .collect::<Result<Vec<_>, DomainError>>()?;
     messages.sort_by(|left, right| {
         optional_decimal_cmp(left.0.as_deref(), right.0.as_deref())
             .then_with(|| left.1.cmp(&right.1))
@@ -258,11 +256,11 @@ fn ordered_out_messages(
     Ok(messages)
 }
 
-fn decode<'a, T: Deserialize<'a>>(body: &'a [u8]) -> Result<T, DomainErrorV3> {
+fn decode<'a, T: Deserialize<'a>>(body: &'a [u8]) -> Result<T, DomainError> {
     serde_json::from_slice(body).map_err(|error| invalid_response(error.to_string()))
 }
 
-fn decode_envelope<T: DeserializeOwned>(body: &[u8]) -> Result<T, DomainErrorV3> {
+fn decode_envelope<T: DeserializeOwned>(body: &[u8]) -> Result<T, DomainError> {
     let envelope: Envelope = decode(body)?;
     if !envelope.ok {
         return Err(provider_envelope_error(envelope));
@@ -273,7 +271,7 @@ fn decode_envelope<T: DeserializeOwned>(body: &[u8]) -> Result<T, DomainErrorV3>
     serde_json::from_value(result).map_err(|error| invalid_response(error.to_string()))
 }
 
-fn provider_envelope_error(envelope: Envelope) -> DomainErrorV3 {
+fn provider_envelope_error(envelope: Envelope) -> DomainError {
     let status = envelope.code.as_ref().and_then(provider_code);
     let developer_message = envelope
         .error
@@ -282,23 +280,23 @@ fn provider_envelope_error(envelope: Envelope) -> DomainErrorV3 {
         .or(envelope.description)
         .unwrap_or_else(|| "provider rejected request".to_owned());
     if status == Some(429) {
-        return DomainErrorV3 {
-            code: ErrorCodeV3::RateLimited,
-            category: ErrorCategoryV3::RateLimit,
-            retry: RetryAdviceV3::Safe,
+        return DomainError {
+            code: ErrorCode::RateLimited,
+            category: ErrorCategory::RateLimit,
+            retry: RetryAdvice::Safe,
             developer_message: sanitize_diagnostic(&developer_message),
             provider_status: status,
             retry_after_ms: None,
             host_kind: None,
         };
     }
-    DomainErrorV3 {
-        code: ErrorCodeV3::HttpRejected,
-        category: ErrorCategoryV3::ProviderProtocol,
+    DomainError {
+        code: ErrorCode::HttpRejected,
+        category: ErrorCategory::ProviderProtocol,
         retry: if status.is_some_and(|value| value >= 500) {
-            RetryAdviceV3::Safe
+            RetryAdvice::Safe
         } else {
-            RetryAdviceV3::None
+            RetryAdvice::None
         },
         developer_message: sanitize_diagnostic(&developer_message),
         provider_status: status,
@@ -321,11 +319,11 @@ fn value_message(value: &Value) -> Option<String> {
         .or_else(|| value.as_i64().map(|value| value.to_string()))
 }
 
-fn invalid_response(message: impl Into<String>) -> DomainErrorV3 {
-    DomainErrorV3 {
-        code: ErrorCodeV3::InvalidProviderResponse,
-        category: ErrorCategoryV3::ProviderProtocol,
-        retry: RetryAdviceV3::None,
+fn invalid_response(message: impl Into<String>) -> DomainError {
+    DomainError {
+        code: ErrorCode::InvalidProviderResponse,
+        category: ErrorCategory::ProviderProtocol,
+        retry: RetryAdvice::None,
         developer_message: sanitize_diagnostic(&message.into()),
         provider_status: None,
         retry_after_ms: None,
@@ -333,7 +331,7 @@ fn invalid_response(message: impl Into<String>) -> DomainErrorV3 {
     }
 }
 
-fn decimal_string(value: &Value, field: &str) -> Result<String, DomainErrorV3> {
+fn decimal_string(value: &Value, field: &str) -> Result<String, DomainError> {
     let value = match value {
         Value::String(value) => value.clone(),
         Value::Number(value) => value.to_string(),
@@ -347,7 +345,7 @@ fn decimal_string(value: &Value, field: &str) -> Result<String, DomainErrorV3> {
     Ok(value)
 }
 
-fn format_nanograms(value: &str) -> Result<String, DomainErrorV3> {
+fn format_nanograms(value: &str) -> Result<String, DomainError> {
     let nanograms = value
         .parse::<u128>()
         .map_err(|error| invalid_response(error.to_string()))?;
@@ -413,7 +411,7 @@ pub(crate) fn sanitize_diagnostic(message: &str) -> String {
         .to_owned()
 }
 
-fn parse_retry_after_ms(headers: &[HttpHeaderV3]) -> Option<u64> {
+fn parse_retry_after_ms(headers: &[HttpHeader]) -> Option<u64> {
     let seconds = headers
         .iter()
         .find(|header| header.name.eq_ignore_ascii_case("retry-after"))?

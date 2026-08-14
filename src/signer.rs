@@ -8,19 +8,19 @@ use ton::ton_core::traits::tlb::TLB;
 use ton::ton_core::types::TonAddress;
 use ton::ton_core::types::tlb_core::TLBCoins;
 
-use crate::send::{FreshSendAccountV3, PreparedTransferV3};
+use crate::send::{FreshSendAccount, PreparedTransfer};
 use crate::wallet_crypto::derive_v5r1_wallet;
-use crate::{NetworkV3, SendRequestV3};
+use crate::{Network, SendRequest};
 
 pub(crate) fn prepare_transfer(
     mnemonic_bytes: &[u8],
     wallet_id: &str,
     source: &str,
-    network: NetworkV3,
-    request: &SendRequestV3,
-    account: &FreshSendAccountV3,
+    network: Network,
+    request: &SendRequest,
+    account: &FreshSendAccount,
     valid_until: u64,
-) -> Result<PreparedTransferV3, String> {
+) -> Result<PreparedTransfer, String> {
     let mnemonic = std::str::from_utf8(mnemonic_bytes).map_err(sanitize)?;
     let wallet = derive_v5r1_wallet(mnemonic, network).map_err(sanitize)?;
     let destination = TonAddress::from_str(&request.destination).map_err(sanitize)?;
@@ -49,7 +49,7 @@ pub(crate) fn prepare_transfer(
     let normalized = Msg::<TonCell>::from_cell(&external).map_err(sanitize)?;
     let message_hash = STANDARD.encode(normalized.cell_hash_normalized().map_err(sanitize)?);
     let signed_boc = external.to_boc().map_err(sanitize)?;
-    Ok(PreparedTransferV3 {
+    Ok(PreparedTransfer {
         operation_id: request.operation_id.clone(),
         wallet_id: wallet_id.to_owned(),
         source: source.to_owned(),
@@ -63,12 +63,12 @@ pub(crate) fn prepare_transfer(
     })
 }
 
-pub(crate) fn derive_source(mnemonic_bytes: &[u8], network: NetworkV3) -> Result<String, String> {
+pub(crate) fn derive_source(mnemonic_bytes: &[u8], network: Network) -> Result<String, String> {
     let mnemonic = std::str::from_utf8(mnemonic_bytes).map_err(sanitize)?;
     let wallet = derive_v5r1_wallet(mnemonic, network).map_err(sanitize)?;
     Ok(wallet
         .address
-        .to_base64(network == NetworkV3::Mainnet, false, true))
+        .to_base64(network == Network::Mainnet, false, true))
 }
 
 pub(crate) fn same_address(left: &str, right: &str) -> Result<bool, String> {

@@ -4,9 +4,8 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
 
 use crate::domain::{
-    AccountStatusV3, JournalCompareExchangeResultV3, JournalCompareExchangeV3, JournalKeyV3,
-    JournalRecordV3, PreparedSendV3, ProtectedSecretReadV3, SecretAccessReasonV3, SendPhaseV3,
-    SendRequestV3, SendSnapshotV3,
+    AccountStatus, JournalCompareExchange, JournalCompareExchangeResult, JournalKey, JournalRecord,
+    PreparedSend, ProtectedSecretRead, SecretAccessReason, SendPhase, SendRequest, SendSnapshot,
 };
 
 const JOURNAL_SCHEMA_VERSION: u32 = 1;
@@ -19,22 +18,22 @@ pub(crate) const SEND_SLOT: &str = "outgoing-transfer";
 /// parsing provider responses belongs to the HTTP workflow, not to the send
 /// state machine.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct FreshSendAccountV3 {
-    pub status: AccountStatusV3,
+pub(crate) struct FreshSendAccount {
+    pub status: AccountStatus,
     pub seqno: u32,
     pub observed_at: u64,
 }
 
-impl FreshSendAccountV3 {
+impl FreshSendAccount {
     pub(crate) fn needs_state_init(&self) -> bool {
-        self.status != AccountStatusV3::Active
+        self.status != AccountStatus::Active
     }
 }
 
 /// Signed material produced inside Rust after the host authorizes access to
 /// the protected mnemonic. Secret bytes must not be retained in this value.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PreparedTransferV3 {
+pub(crate) struct PreparedTransfer {
     pub operation_id: String,
     pub wallet_id: String,
     pub source: String,
@@ -47,9 +46,9 @@ pub(crate) struct PreparedTransferV3 {
     pub message_hash: String,
 }
 
-impl PreparedTransferV3 {
-    pub(crate) fn public_summary(&self) -> PreparedSendV3 {
-        PreparedSendV3 {
+impl PreparedTransfer {
+    pub(crate) fn public_summary(&self) -> PreparedSend {
+        PreparedSend {
             operation_id: self.operation_id.clone(),
             valid_until: self.valid_until,
             destination: self.destination.clone(),
@@ -58,11 +57,11 @@ impl PreparedTransferV3 {
     }
 }
 
-/// Full internal state. Public `SendPhaseV3` intentionally remains a compact
-/// UI projection while V3 is being integrated.
+/// Full internal state. Public `SendPhase` intentionally remains a compact
+/// UI projection while  is being integrated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum SendStageV3 {
+pub(crate) enum SendStage {
     Validating,
     LoadingJournal,
     FetchingFreshAccount,
@@ -77,21 +76,21 @@ pub(crate) enum SendStageV3 {
     Cancelled,
 }
 
-impl SendStageV3 {
-    const fn public_phase(self) -> SendPhaseV3 {
+impl SendStage {
+    const fn public_phase(self) -> SendPhase {
         match self {
             Self::Validating | Self::LoadingJournal | Self::FetchingFreshAccount => {
-                SendPhaseV3::Validating
+                SendPhase::Validating
             }
-            Self::Authorizing => SendPhaseV3::Authorizing,
-            Self::Preparing => SendPhaseV3::Preparing,
-            Self::PersistingPrepared => SendPhaseV3::Persisting,
-            Self::ReadyToSubmit => SendPhaseV3::ReadyToSubmit,
-            Self::Submitting => SendPhaseV3::Submitting,
-            Self::SubmissionUnknown => SendPhaseV3::SubmissionUnknown,
-            Self::Submitted => SendPhaseV3::Submitted,
-            Self::Failed => SendPhaseV3::Failed,
-            Self::Cancelled => SendPhaseV3::Cancelled,
+            Self::Authorizing => SendPhase::Authorizing,
+            Self::Preparing => SendPhase::Preparing,
+            Self::PersistingPrepared => SendPhase::Persisting,
+            Self::ReadyToSubmit => SendPhase::ReadyToSubmit,
+            Self::Submitting => SendPhase::Submitting,
+            Self::SubmissionUnknown => SendPhase::SubmissionUnknown,
+            Self::Submitted => SendPhase::Submitted,
+            Self::Failed => SendPhase::Failed,
+            Self::Cancelled => SendPhase::Cancelled,
         }
     }
 
@@ -106,15 +105,15 @@ impl SendStageV3 {
 /// The next capability the coordinator must perform without holding the
 /// wallet-state mutex.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum SendDirectiveV3 {
-    LoadJournal(JournalKeyV3),
+pub(crate) enum SendDirective {
+    LoadJournal(JournalKey),
     FetchFreshAccount,
-    ReadProtectedSecret(ProtectedSecretReadV3),
+    ReadProtectedSecret(ProtectedSecretRead),
     PrepareTransfer {
-        request: SendRequestV3,
-        account: FreshSendAccountV3,
+        request: SendRequest,
+        account: FreshSendAccount,
     },
-    PersistJournal(JournalCompareExchangeV3),
+    PersistJournal(JournalCompareExchange),
     Submit {
         signed_boc: Vec<u8>,
         message_hash: String,
@@ -123,12 +122,12 @@ pub(crate) enum SendDirectiveV3 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum SendWorkflowErrorV3 {
+pub(crate) enum SendWorkflowError {
     #[error("invalid send request: {0}")]
     InvalidRequest(String),
     #[error("invalid send transition from {from:?}: {event}")]
     InvalidTransition {
-        from: SendStageV3,
+        from: SendStage,
         event: &'static str,
     },
     #[error("prepared transfer does not match the active send request")]
@@ -145,7 +144,7 @@ pub(crate) enum SendWorkflowErrorV3 {
 
 /// No secret material is ever serialized into this record.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct DurableSendRecordV3 {
+struct DurableSendRecord {
     schema_version: u32,
     operation_id: String,
     wallet_id: String,
@@ -157,7 +156,7 @@ struct DurableSendRecordV3 {
     valid_until: u64,
     signed_boc_base64: String,
     message_hash: String,
-    stage: SendStageV3,
+    stage: SendStage,
     provider_reference: Option<String>,
     diagnostic: Option<String>,
 }
@@ -165,26 +164,26 @@ struct DurableSendRecordV3 {
 /// Pure send reducer. All callbacks are invoked by the owning coordinator
 /// between calls to this type; none are invoked while the reducer is borrowed.
 #[derive(Debug, Clone)]
-pub(crate) struct SendWorkflowV3 {
+pub(crate) struct SendWorkflow {
     wallet_id: String,
     source: String,
-    request: SendRequestV3,
-    stage: SendStageV3,
-    fresh_account: Option<FreshSendAccountV3>,
-    prepared: Option<PreparedTransferV3>,
+    request: SendRequest,
+    stage: SendStage,
+    fresh_account: Option<FreshSendAccount>,
+    prepared: Option<PreparedTransfer>,
     journal_version: Option<u64>,
     prior_submitted_seqno: Option<u32>,
     provider_reference: Option<String>,
     diagnostic: Option<String>,
 }
 
-impl SendWorkflowV3 {
-    pub(crate) const fn new(wallet_id: String, source: String, request: SendRequestV3) -> Self {
+impl SendWorkflow {
+    pub(crate) const fn new(wallet_id: String, source: String, request: SendRequest) -> Self {
         Self {
             wallet_id,
             source,
             request,
-            stage: SendStageV3::Validating,
+            stage: SendStage::Validating,
             fresh_account: None,
             prepared: None,
             journal_version: None,
@@ -198,23 +197,23 @@ impl SendWorkflowV3 {
         &self.request.operation_id
     }
 
-    pub(crate) const fn stage(&self) -> SendStageV3 {
+    pub(crate) const fn stage(&self) -> SendStage {
         self.stage
     }
 
-    pub(crate) fn snapshot(&self) -> SendSnapshotV3 {
-        SendSnapshotV3 {
+    pub(crate) fn snapshot(&self) -> SendSnapshot {
+        SendSnapshot {
             operation_id: Some(self.request.operation_id.clone()),
             phase: self.stage.public_phase(),
             error_message: self.diagnostic.clone(),
         }
     }
 
-    pub(crate) fn begin(&mut self) -> Result<SendDirectiveV3, SendWorkflowErrorV3> {
-        self.expect(SendStageV3::Validating, "begin")?;
+    pub(crate) fn begin(&mut self) -> Result<SendDirective, SendWorkflowError> {
+        self.expect(SendStage::Validating, "begin")?;
         validate_request(&self.wallet_id, &self.source, &self.request)?;
-        self.stage = SendStageV3::LoadingJournal;
-        Ok(SendDirectiveV3::LoadJournal(self.journal_key()))
+        self.stage = SendStage::LoadingJournal;
+        Ok(SendDirective::LoadJournal(self.journal_key()))
     }
 
     /// Seeds the compare-and-swap version of the wallet-level send slot.
@@ -224,88 +223,83 @@ impl SendWorkflowV3 {
     /// the persisted BOC may already have reached the network.
     pub(crate) fn journal_loaded(
         &mut self,
-        record: Option<JournalRecordV3>,
-    ) -> Result<SendDirectiveV3, SendWorkflowErrorV3> {
-        self.expect(SendStageV3::LoadingJournal, "journal_loaded")?;
+        record: Option<JournalRecord>,
+    ) -> Result<SendDirective, SendWorkflowError> {
+        self.expect(SendStage::LoadingJournal, "journal_loaded")?;
 
         self.journal_version = match record {
             None => None,
             Some(record) => {
                 let durable = decode_durable_record(&record)?;
                 if durable.wallet_id != self.wallet_id || durable.source != self.source {
-                    return Err(SendWorkflowErrorV3::InvalidJournal(
+                    return Err(SendWorkflowError::InvalidJournal(
                         "record belongs to another wallet".to_owned(),
                     ));
                 }
                 match durable.stage {
-                    SendStageV3::Submitted => {
+                    SendStage::Submitted => {
                         self.prior_submitted_seqno = Some(durable.seqno);
                         Some(record.version)
                     }
-                    SendStageV3::Failed | SendStageV3::Cancelled => {
+                    SendStage::Failed | SendStage::Cancelled => {
                         self.prior_submitted_seqno = None;
                         Some(record.version)
                     }
-                    SendStageV3::SubmissionUnknown => {
-                        return Err(SendWorkflowErrorV3::JournalBusy);
+                    SendStage::SubmissionUnknown => {
+                        return Err(SendWorkflowError::JournalBusy);
                     }
-                    _ => return Err(SendWorkflowErrorV3::JournalBusy),
+                    _ => return Err(SendWorkflowError::JournalBusy),
                 }
             }
         };
 
-        self.stage = SendStageV3::FetchingFreshAccount;
-        Ok(SendDirectiveV3::FetchFreshAccount)
+        self.stage = SendStage::FetchingFreshAccount;
+        Ok(SendDirective::FetchFreshAccount)
     }
 
     pub(crate) fn fresh_account_loaded(
         &mut self,
-        account: FreshSendAccountV3,
-    ) -> Result<SendDirectiveV3, SendWorkflowErrorV3> {
-        self.expect(SendStageV3::FetchingFreshAccount, "fresh_account_loaded")?;
+        account: FreshSendAccount,
+    ) -> Result<SendDirective, SendWorkflowError> {
+        self.expect(SendStage::FetchingFreshAccount, "fresh_account_loaded")?;
         if let Some(prior_seqno) = self.prior_submitted_seqno
-            && (account.status != AccountStatusV3::Active || account.seqno <= prior_seqno)
+            && (account.status != AccountStatus::Active || account.seqno <= prior_seqno)
         {
-            return Err(SendWorkflowErrorV3::JournalBusy);
+            return Err(SendWorkflowError::JournalBusy);
         }
         match account.status {
-            AccountStatusV3::Active => {}
-            AccountStatusV3::Nonexistent | AccountStatusV3::Uninitialized if account.seqno == 0 => {
-            }
-            AccountStatusV3::Nonexistent
-            | AccountStatusV3::Uninitialized
-            | AccountStatusV3::Frozen
-            | AccountStatusV3::Unknown => {
-                return Err(SendWorkflowErrorV3::AccountUnavailable);
+            AccountStatus::Active => {}
+            AccountStatus::Nonexistent | AccountStatus::Uninitialized if account.seqno == 0 => {}
+            AccountStatus::Nonexistent
+            | AccountStatus::Uninitialized
+            | AccountStatus::Frozen
+            | AccountStatus::Unknown => {
+                return Err(SendWorkflowError::AccountUnavailable);
             }
         }
         self.fresh_account = Some(account);
-        self.stage = SendStageV3::Authorizing;
-        Ok(SendDirectiveV3::ReadProtectedSecret(
-            ProtectedSecretReadV3 {
-                secret_ref: self.request.secret_ref.clone(),
-                reason: SecretAccessReasonV3::SignTransfer,
-                prompt: "Authenticate to sign this GRAM transfer".to_owned(),
-            },
-        ))
+        self.stage = SendStage::Authorizing;
+        Ok(SendDirective::ReadProtectedSecret(ProtectedSecretRead {
+            secret_ref: self.request.secret_ref.clone(),
+            reason: SecretAccessReason::SignTransfer,
+            prompt: "Authenticate to sign this GRAM transfer".to_owned(),
+        }))
     }
 
     /// Marks successful host authorization. The secret itself is intentionally
     /// not accepted or retained by the reducer; the coordinator passes it
     /// directly to the Rust signer and zeroizes its temporary buffer.
-    pub(crate) fn authorization_succeeded(
-        &mut self,
-    ) -> Result<SendDirectiveV3, SendWorkflowErrorV3> {
-        self.expect(SendStageV3::Authorizing, "authorization_succeeded")?;
+    pub(crate) fn authorization_succeeded(&mut self) -> Result<SendDirective, SendWorkflowError> {
+        self.expect(SendStage::Authorizing, "authorization_succeeded")?;
         let account = self
             .fresh_account
             .clone()
-            .ok_or(SendWorkflowErrorV3::InvalidTransition {
+            .ok_or(SendWorkflowError::InvalidTransition {
                 from: self.stage,
                 event: "authorization_without_fresh_account",
             })?;
-        self.stage = SendStageV3::Preparing;
-        Ok(SendDirectiveV3::PrepareTransfer {
+        self.stage = SendStage::Preparing;
+        Ok(SendDirective::PrepareTransfer {
             request: self.request.clone(),
             account,
         })
@@ -313,59 +307,59 @@ impl SendWorkflowV3 {
 
     pub(crate) fn transfer_prepared(
         &mut self,
-        prepared: PreparedTransferV3,
-    ) -> Result<SendDirectiveV3, SendWorkflowErrorV3> {
-        self.expect(SendStageV3::Preparing, "transfer_prepared")?;
+        prepared: PreparedTransfer,
+    ) -> Result<SendDirective, SendWorkflowError> {
+        self.expect(SendStage::Preparing, "transfer_prepared")?;
         self.validate_prepared(&prepared)?;
         self.prepared = Some(prepared);
-        self.stage = SendStageV3::PersistingPrepared;
+        self.stage = SendStage::PersistingPrepared;
         self.persist_directive()
     }
 
     pub(crate) fn journal_persisted(
         &mut self,
-        result: JournalCompareExchangeResultV3,
-    ) -> Result<SendDirectiveV3, SendWorkflowErrorV3> {
+        result: JournalCompareExchangeResult,
+    ) -> Result<SendDirective, SendWorkflowError> {
         if !result.applied {
             self.fail("Another send operation changed the journal");
-            return Err(SendWorkflowErrorV3::JournalConflict);
+            return Err(SendWorkflowError::JournalConflict);
         }
 
         self.journal_version = Some(next_journal_version(self.journal_version)?);
         match self.stage {
-            SendStageV3::PersistingPrepared => {
-                self.stage = SendStageV3::ReadyToSubmit;
+            SendStage::PersistingPrepared => {
+                self.stage = SendStage::ReadyToSubmit;
                 let prepared = self.prepared_ref()?;
-                Ok(SendDirectiveV3::Submit {
+                Ok(SendDirective::Submit {
                     signed_boc: prepared.signed_boc.clone(),
                     message_hash: prepared.message_hash.clone(),
                 })
             }
-            SendStageV3::SubmissionUnknown
-            | SendStageV3::Submitted
-            | SendStageV3::Failed
-            | SendStageV3::Cancelled => Ok(SendDirectiveV3::Finished),
-            stage => Err(SendWorkflowErrorV3::InvalidTransition {
+            SendStage::SubmissionUnknown
+            | SendStage::Submitted
+            | SendStage::Failed
+            | SendStage::Cancelled => Ok(SendDirective::Finished),
+            stage => Err(SendWorkflowError::InvalidTransition {
                 from: stage,
                 event: "journal_persisted",
             }),
         }
     }
 
-    pub(crate) fn submission_started(&mut self) -> Result<(), SendWorkflowErrorV3> {
-        self.expect(SendStageV3::ReadyToSubmit, "submission_started")?;
-        self.stage = SendStageV3::Submitting;
+    pub(crate) fn submission_started(&mut self) -> Result<(), SendWorkflowError> {
+        self.expect(SendStage::ReadyToSubmit, "submission_started")?;
+        self.stage = SendStage::Submitting;
         Ok(())
     }
 
     pub(crate) fn submission_succeeded(
         &mut self,
         provider_reference: Option<String>,
-    ) -> Result<SendDirectiveV3, SendWorkflowErrorV3> {
-        self.expect(SendStageV3::Submitting, "submission_succeeded")?;
+    ) -> Result<SendDirective, SendWorkflowError> {
+        self.expect(SendStage::Submitting, "submission_succeeded")?;
         self.provider_reference = provider_reference;
         self.diagnostic = None;
-        self.stage = SendStageV3::Submitted;
+        self.stage = SendStage::Submitted;
         self.persist_directive()
     }
 
@@ -376,50 +370,50 @@ impl SendWorkflowV3 {
     pub(crate) fn submission_unknown(
         &mut self,
         diagnostic: String,
-    ) -> Result<SendDirectiveV3, SendWorkflowErrorV3> {
-        self.expect(SendStageV3::Submitting, "submission_unknown")?;
+    ) -> Result<SendDirective, SendWorkflowError> {
+        self.expect(SendStage::Submitting, "submission_unknown")?;
         self.diagnostic = Some(sanitize_diagnostic(diagnostic));
-        self.stage = SendStageV3::SubmissionUnknown;
+        self.stage = SendStage::SubmissionUnknown;
         self.persist_directive()
     }
 
     pub(crate) fn submission_rejected(
         &mut self,
         diagnostic: String,
-    ) -> Result<SendDirectiveV3, SendWorkflowErrorV3> {
-        self.expect(SendStageV3::Submitting, "submission_rejected")?;
+    ) -> Result<SendDirective, SendWorkflowError> {
+        self.expect(SendStage::Submitting, "submission_rejected")?;
         self.fail(diagnostic);
         self.persist_directive()
     }
 
-    pub(crate) fn cancel(&mut self) -> Result<SendDirectiveV3, SendWorkflowErrorV3> {
+    pub(crate) fn cancel(&mut self) -> Result<SendDirective, SendWorkflowError> {
         if self.stage.is_terminal() {
-            return Ok(SendDirectiveV3::Finished);
+            return Ok(SendDirective::Finished);
         }
-        self.stage = SendStageV3::Cancelled;
+        self.stage = SendStage::Cancelled;
         if self.prepared.is_some() {
             self.persist_directive()
         } else {
-            Ok(SendDirectiveV3::Finished)
+            Ok(SendDirective::Finished)
         }
     }
 
-    fn persist_directive(&self) -> Result<SendDirectiveV3, SendWorkflowErrorV3> {
+    fn persist_directive(&self) -> Result<SendDirective, SendWorkflowError> {
         let record = self.journal_record()?;
-        Ok(SendDirectiveV3::PersistJournal(JournalCompareExchangeV3 {
+        Ok(SendDirective::PersistJournal(JournalCompareExchange {
             key: self.journal_key(),
             expected_version: self.journal_version,
-            replacement: JournalRecordV3 {
+            replacement: JournalRecord {
                 version: next_journal_version(self.journal_version)?,
                 payload: serde_json::to_vec(&record)
-                    .map_err(|error| SendWorkflowErrorV3::InvalidJournal(error.to_string()))?,
+                    .map_err(|error| SendWorkflowError::InvalidJournal(error.to_string()))?,
             },
         }))
     }
 
-    fn journal_record(&self) -> Result<DurableSendRecordV3, SendWorkflowErrorV3> {
+    fn journal_record(&self) -> Result<DurableSendRecord, SendWorkflowError> {
         let prepared = self.prepared_ref()?;
-        Ok(DurableSendRecordV3 {
+        Ok(DurableSendRecord {
             schema_version: JOURNAL_SCHEMA_VERSION,
             operation_id: prepared.operation_id.clone(),
             wallet_id: prepared.wallet_id.clone(),
@@ -437,27 +431,27 @@ impl SendWorkflowV3 {
         })
     }
 
-    fn journal_key(&self) -> JournalKeyV3 {
-        JournalKeyV3 {
+    fn journal_key(&self) -> JournalKey {
+        JournalKey {
             wallet_id: self.wallet_id.clone(),
             slot: SEND_SLOT.to_owned(),
         }
     }
 
-    fn prepared_ref(&self) -> Result<&PreparedTransferV3, SendWorkflowErrorV3> {
+    fn prepared_ref(&self) -> Result<&PreparedTransfer, SendWorkflowError> {
         self.prepared
             .as_ref()
-            .ok_or(SendWorkflowErrorV3::InvalidTransition {
+            .ok_or(SendWorkflowError::InvalidTransition {
                 from: self.stage,
                 event: "prepared_transfer_required",
             })
     }
 
-    fn validate_prepared(&self, prepared: &PreparedTransferV3) -> Result<(), SendWorkflowErrorV3> {
+    fn validate_prepared(&self, prepared: &PreparedTransfer) -> Result<(), SendWorkflowError> {
         let account = self
             .fresh_account
             .as_ref()
-            .ok_or(SendWorkflowErrorV3::PreparedTransferMismatch)?;
+            .ok_or(SendWorkflowError::PreparedTransferMismatch)?;
         if prepared.operation_id != self.request.operation_id
             || prepared.wallet_id != self.wallet_id
             || prepared.source != self.source
@@ -468,20 +462,16 @@ impl SendWorkflowV3 {
             || prepared.signed_boc.is_empty()
             || prepared.message_hash.is_empty()
         {
-            return Err(SendWorkflowErrorV3::PreparedTransferMismatch);
+            return Err(SendWorkflowError::PreparedTransferMismatch);
         }
         Ok(())
     }
 
-    fn expect(
-        &self,
-        expected: SendStageV3,
-        event: &'static str,
-    ) -> Result<(), SendWorkflowErrorV3> {
+    fn expect(&self, expected: SendStage, event: &'static str) -> Result<(), SendWorkflowError> {
         if self.stage == expected {
             Ok(())
         } else {
-            Err(SendWorkflowErrorV3::InvalidTransition {
+            Err(SendWorkflowError::InvalidTransition {
                 from: self.stage,
                 event,
             })
@@ -489,7 +479,7 @@ impl SendWorkflowV3 {
     }
 
     fn fail(&mut self, diagnostic: impl Into<String>) {
-        self.stage = SendStageV3::Failed;
+        self.stage = SendStage::Failed;
         self.diagnostic = Some(sanitize_diagnostic(diagnostic.into()));
     }
 }
@@ -497,15 +487,15 @@ impl SendWorkflowV3 {
 fn validate_request(
     wallet_id: &str,
     source: &str,
-    request: &SendRequestV3,
-) -> Result<(), SendWorkflowErrorV3> {
+    request: &SendRequest,
+) -> Result<(), SendWorkflowError> {
     if wallet_id.trim().is_empty() || source.trim().is_empty() {
-        return Err(SendWorkflowErrorV3::InvalidRequest(
+        return Err(SendWorkflowError::InvalidRequest(
             "wallet identity is empty".to_owned(),
         ));
     }
     if request.operation_id.trim().is_empty() || request.operation_id.len() > 128 {
-        return Err(SendWorkflowErrorV3::InvalidRequest(
+        return Err(SendWorkflowError::InvalidRequest(
             "operation identifier is invalid".to_owned(),
         ));
     }
@@ -513,7 +503,7 @@ fn validate_request(
         || request.destination.len() > 128
         || request.destination.chars().any(char::is_whitespace)
     {
-        return Err(SendWorkflowErrorV3::InvalidRequest(
+        return Err(SendWorkflowError::InvalidRequest(
             "destination is invalid".to_owned(),
         ));
     }
@@ -525,30 +515,28 @@ fn validate_request(
             .bytes()
             .all(|byte| byte.is_ascii_digit())
     {
-        return Err(SendWorkflowErrorV3::InvalidRequest(
+        return Err(SendWorkflowError::InvalidRequest(
             "amount must be positive canonical nanograms".to_owned(),
         ));
     }
     if request.secret_ref.value.trim().is_empty() {
-        return Err(SendWorkflowErrorV3::InvalidRequest(
+        return Err(SendWorkflowError::InvalidRequest(
             "protected secret reference is empty".to_owned(),
         ));
     }
     Ok(())
 }
 
-fn decode_durable_record(
-    record: &JournalRecordV3,
-) -> Result<DurableSendRecordV3, SendWorkflowErrorV3> {
+fn decode_durable_record(record: &JournalRecord) -> Result<DurableSendRecord, SendWorkflowError> {
     if record.version == 0 {
-        return Err(SendWorkflowErrorV3::InvalidJournal(
+        return Err(SendWorkflowError::InvalidJournal(
             "version must be positive".to_owned(),
         ));
     }
-    let durable: DurableSendRecordV3 = serde_json::from_slice(&record.payload)
-        .map_err(|error| SendWorkflowErrorV3::InvalidJournal(error.to_string()))?;
+    let durable: DurableSendRecord = serde_json::from_slice(&record.payload)
+        .map_err(|error| SendWorkflowError::InvalidJournal(error.to_string()))?;
     if durable.schema_version != JOURNAL_SCHEMA_VERSION {
-        return Err(SendWorkflowErrorV3::InvalidJournal(
+        return Err(SendWorkflowError::InvalidJournal(
             "unsupported schema version".to_owned(),
         ));
     }
@@ -570,18 +558,18 @@ fn decode_durable_record(
         || durable.signed_boc_base64.is_empty()
         || boc_is_invalid
     {
-        return Err(SendWorkflowErrorV3::InvalidJournal(
+        return Err(SendWorkflowError::InvalidJournal(
             "record fields are invalid".to_owned(),
         ));
     }
     Ok(durable)
 }
 
-fn next_journal_version(current: Option<u64>) -> Result<u64, SendWorkflowErrorV3> {
+fn next_journal_version(current: Option<u64>) -> Result<u64, SendWorkflowError> {
     match current {
         Some(version) => version
             .checked_add(1)
-            .ok_or_else(|| SendWorkflowErrorV3::InvalidJournal("version exhausted".to_owned())),
+            .ok_or_else(|| SendWorkflowError::InvalidJournal("version exhausted".to_owned())),
         None => Ok(FIRST_JOURNAL_VERSION),
     }
 }

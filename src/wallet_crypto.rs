@@ -1,6 +1,6 @@
 use ton::ton_wallet::{Mnemonic, TonWallet, WORDLIST_EN_SET, WalletVersion};
 
-use crate::NetworkV3;
+use crate::Network;
 
 const MAINNET_GLOBAL_ID: i32 = -239;
 const TESTNET_GLOBAL_ID: i32 = -3;
@@ -51,7 +51,7 @@ pub(crate) fn generate_mnemonic() -> Result<String, WalletCryptoError> {
 /// Derives the V5R1 wallet contract used by lifecycle and transaction signing.
 pub(crate) fn derive_v5r1_wallet(
     mnemonic: &str,
-    network: NetworkV3,
+    network: Network,
 ) -> Result<TonWallet, WalletCryptoError> {
     let mnemonic =
         Mnemonic::from_str(mnemonic, None).map_err(|_| WalletCryptoError::InvalidMnemonic)?;
@@ -59,8 +59,8 @@ pub(crate) fn derive_v5r1_wallet(
         .to_key_pair()
         .map_err(|_| WalletCryptoError::InvalidMnemonic)?;
     let network_global_id = match network {
-        NetworkV3::Mainnet => MAINNET_GLOBAL_ID,
-        NetworkV3::Testnet => TESTNET_GLOBAL_ID,
+        Network::Mainnet => MAINNET_GLOBAL_ID,
+        Network::Testnet => TESTNET_GLOBAL_ID,
     };
     let wallet_id = network_global_id ^ i32::MIN;
 
@@ -70,13 +70,13 @@ pub(crate) fn derive_v5r1_wallet(
 
 pub(crate) fn derive_v5r1_address(
     mnemonic: &str,
-    network: NetworkV3,
+    network: Network,
     bounceable: bool,
 ) -> Result<String, WalletCryptoError> {
     let wallet = derive_v5r1_wallet(mnemonic, network)?;
     Ok(wallet
         .address
-        .to_base64(network == NetworkV3::Mainnet, bounceable, true))
+        .to_base64(network == Network::Mainnet, bounceable, true))
 }
 
 #[cfg(test)]
@@ -87,16 +87,16 @@ mod tests {
 
     #[test]
     fn derives_the_known_mainnet_v5r1_address() {
-        let address = derive_v5r1_address(TEST_MNEMONIC, NetworkV3::Mainnet, true).unwrap();
+        let address = derive_v5r1_address(TEST_MNEMONIC, Network::Mainnet, true).unwrap();
 
         assert_eq!(address, "EQAz8sBz-Twy965gFWNHlwa2ArkRLaoVzAowtRaW542bDO5p");
     }
 
     #[test]
     fn network_and_bounce_flags_change_the_friendly_address() {
-        let mainnet = derive_v5r1_address(TEST_MNEMONIC, NetworkV3::Mainnet, true).unwrap();
-        let testnet = derive_v5r1_address(TEST_MNEMONIC, NetworkV3::Testnet, true).unwrap();
-        let non_bounceable = derive_v5r1_address(TEST_MNEMONIC, NetworkV3::Mainnet, false).unwrap();
+        let mainnet = derive_v5r1_address(TEST_MNEMONIC, Network::Mainnet, true).unwrap();
+        let testnet = derive_v5r1_address(TEST_MNEMONIC, Network::Testnet, true).unwrap();
+        let non_bounceable = derive_v5r1_address(TEST_MNEMONIC, Network::Mainnet, false).unwrap();
 
         assert_ne!(mainnet, testnet);
         assert_ne!(mainnet, non_bounceable);
@@ -110,6 +110,6 @@ mod tests {
 
         assert_eq!(mnemonic.split_whitespace().count(), MNEMONIC_WORD_COUNT);
         assert!(Mnemonic::from_str(&mnemonic, None).is_ok());
-        assert!(derive_v5r1_wallet(&mnemonic, NetworkV3::Testnet).is_ok());
+        assert!(derive_v5r1_wallet(&mnemonic, Network::Testnet).is_ok());
     }
 }
