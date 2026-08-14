@@ -10,6 +10,7 @@ publish = false
 [dependencies]
 anyhow = "=1.0.104"
 base64 = "=0.22.1"
+cbindgen = "=0.29.4"
 clap = { version = "=4.6.6", features = ["derive"] }
 tempfile = "=3.27.0"
 

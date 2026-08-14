@@ -1,0 +1,26 @@
+[package]
+name = "wallet-engine-c"
+version = "0.1.0"
+authors = ["TON Core"]
+edition = "2024"
+rust-version = "1.96.1"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+name = "wallet_engine_c"
+crate-type = ["rlib", "staticlib", "cdylib"]
+
+[lints.rust]
+unsafe_code = "deny"
+unreachable_pub = "warn"
+unused_qualifications = "warn"
+
+[lints.clippy]
+nursery = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+
+doc_markdown = "warn"
+manual_let_else = "warn"
+unwrap_used = "deny"
+undocumented_unsafe_blocks = "deny"

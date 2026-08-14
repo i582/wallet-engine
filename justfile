@@ -11,6 +11,7 @@ build-release-size:
 
 fmt:
     cargo fmt --all
+    cargo fmt --manifest-path c-bindings/Cargo.toml
     cargo fmt --manifest-path apple-bindgen/Cargo.toml
     cargo fmt --manifest-path kotlin-bindgen/Cargo.toml
     cargo fmt --manifest-path wasm-bindings/Cargo.toml
@@ -18,6 +19,7 @@ fmt:
 
 fmt-check:
     cargo fmt --all --check
+    cargo fmt --manifest-path c-bindings/Cargo.toml -- --check
     cargo fmt --manifest-path apple-bindgen/Cargo.toml -- --check
     cargo fmt --manifest-path kotlin-bindgen/Cargo.toml -- --check
     cargo fmt --manifest-path wasm-bindings/Cargo.toml -- --check
@@ -25,6 +27,7 @@ fmt-check:
 
 check-build:
     cargo check --locked --all-targets
+    cargo check --locked --manifest-path c-bindings/Cargo.toml --all-targets
     cargo check --locked --manifest-path apple-bindgen/Cargo.toml --all-targets
     cargo check --locked --manifest-path kotlin-bindgen/Cargo.toml --all-targets
     cargo check --locked --manifest-path wasm-bindings/Cargo.toml --target wasm32-unknown-unknown
@@ -32,6 +35,7 @@ check-build:
 
 clippy:
     cargo clippy --locked --all-targets -- -D warnings
+    cargo clippy --locked --manifest-path c-bindings/Cargo.toml --all-targets -- -D warnings
     cargo clippy --locked --manifest-path apple-bindgen/Cargo.toml --all-targets -- -D warnings
     cargo clippy --locked --manifest-path kotlin-bindgen/Cargo.toml --all-targets -- -D warnings
     cargo clippy --locked --manifest-path wasm-bindings/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
@@ -39,6 +43,7 @@ clippy:
 
 test:
     cargo test --locked
+    cargo test --locked --manifest-path c-bindings/Cargo.toml
     cargo test --locked --manifest-path xtask/Cargo.toml
 
 check-wasm:
@@ -64,6 +69,15 @@ bindings-wasm:
 
 bindings-wasm-check:
     cargo xtask bindings wasm --check
+
+bindings-c:
+    cargo xtask bindings c
+
+bindings-c-check:
+    cargo xtask bindings c --check
+
+build-c:
+    cargo build --release --locked --manifest-path c-bindings/Cargo.toml
 
 web-install:
     bun install --cwd web --frozen-lockfile
@@ -104,6 +118,13 @@ example-web-build: example-web-install bindings-wasm
 example-web-test: example-web-install bindings-wasm
     bun --cwd examples/web test
 
+example-c-build: bindings-c build-c
+    cmake -S examples/c -B target/c-example
+    cmake --build target/c-example
+
+example-c-run: example-c-build
+    ./target/c-example/wallet_engine_c_example
+
 build-android abi="all":
     cargo xtask android --abi {{abi}}
 
@@ -124,6 +145,7 @@ install-tools:
 
 clean:
     cargo clean
+    cargo clean --manifest-path c-bindings/Cargo.toml
     cargo clean --manifest-path apple-bindgen/Cargo.toml
     cargo clean --manifest-path kotlin-bindgen/Cargo.toml
     cargo clean --manifest-path wasm-bindings/Cargo.toml

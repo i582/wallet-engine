@@ -65,8 +65,21 @@ For a small React integration, see the
 shows the recovery phrase, refreshes the balance and activity, and loads more
 history. The engine integration is kept separate from the interface code.
 
-This repository does not track generated bindings. Generate them from the same
-revision that you use to build the Rust library.
+### C
+
+Generate the C ABI header:
+
+```shell
+just bindings-c
+```
+
+The ABI lives in the separate `c-bindings` crate, and its header is generated
+with `cbindgen`. See [the C example](examples/c/README.md) for build and run
+commands.
+
+Except for the checked-in C ABI header, this repository does not track generated
+bindings. Generate them from the same revision that you use to build the Rust
+library.
 
 ## Integration model
 

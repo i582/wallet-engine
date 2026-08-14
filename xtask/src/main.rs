@@ -8,7 +8,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 use crate::android::{AndroidAbi, build_android};
-use crate::bindings::{generate_kotlin, generate_swift, generate_wasm};
+use crate::bindings::{generate_c, generate_kotlin, generate_swift, generate_wasm};
 
 #[derive(Parser)]
 #[command(about = "Wallet Engine repository tasks")]
@@ -33,6 +33,12 @@ enum Command {
 
 #[derive(Subcommand)]
 enum BindingLanguage {
+    /// Generate the Wallet Engine C ABI header.
+    C {
+        /// Verify that the existing header matches the Rust C ABI.
+        #[arg(long)]
+        check: bool,
+    },
     /// Generate Swift sources and the Apple C module.
     Swift {
         /// Verify generation without updating ignored outputs.
@@ -59,6 +65,9 @@ fn main() -> Result<()> {
 
 fn run() -> Result<()> {
     match Cli::parse().command {
+        Command::Bindings {
+            language: BindingLanguage::C { check },
+        } => generate_c(check),
         Command::Bindings {
             language: BindingLanguage::Swift { check },
         } => generate_swift(check),
