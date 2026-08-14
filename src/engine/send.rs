@@ -49,7 +49,7 @@ impl WalletClient {
             let mut state = self.lock()?;
             ensure_running(&state)?;
             if state.active_send.is_some() {
-                return Err(WalletClientError::StateUnavailable);
+                return Err(WalletClientError::SendAlreadyInProgress);
             }
             state.send_generation = state
                 .send_generation
