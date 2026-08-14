@@ -218,7 +218,9 @@ impl SendWorkflow {
     pub(crate) fn begin(&mut self) -> Result<SendDirective, SendWorkflowError> {
         self.expect(SendStage::Validating, "begin")?;
         validate_request(&self.record_id, &self.source, &self.request)?;
+
         self.stage = SendStage::LoadingJournal;
+
         Ok(SendDirective::LoadJournal(self.journal_key()))
     }
 
@@ -242,6 +244,7 @@ impl SendWorkflow {
                         "record belongs to another wallet".to_owned(),
                     ));
                 }
+
                 match durable.stage {
                     SendStage::Submitted => {
                         self.prior_submitted_seqno = Some(durable.seqno);
@@ -260,6 +263,7 @@ impl SendWorkflow {
         };
 
         self.stage = SendStage::FetchingFreshAccount;
+
         Ok(SendDirective::FetchFreshAccount)
     }
 
@@ -268,11 +272,13 @@ impl SendWorkflow {
         account: FreshSendAccount,
     ) -> Result<SendDirective, SendWorkflowError> {
         self.expect(SendStage::FetchingFreshAccount, "fresh_account_loaded")?;
+
         if let Some(prior_seqno) = self.prior_submitted_seqno
             && (account.status != AccountStatus::Active || account.seqno <= prior_seqno)
         {
             return Err(SendWorkflowError::JournalBusy);
         }
+
         match account.status {
             AccountStatus::Active => {}
             AccountStatus::Nonexistent | AccountStatus::Uninitialized if account.seqno == 0 => {}
@@ -283,8 +289,10 @@ impl SendWorkflow {
                 return Err(SendWorkflowError::AccountUnavailable);
             }
         }
+
         self.fresh_account = Some(account);
         self.stage = SendStage::Authorizing;
+
         Ok(SendDirective::ReadProtectedSecret(ProtectedSecretRead {
             secret_ref: self.request.secret_ref.clone(),
             reason: SecretAccessReason::SignTransfer,
@@ -305,7 +313,9 @@ impl SendWorkflow {
                 from: self.stage,
                 event: "authorization_without_fresh_account",
             })?;
+
         self.stage = SendStage::Preparing;
+
         Ok(SendDirective::PrepareTransfer {
             request: self.request.clone(),
             account,
@@ -318,8 +328,10 @@ impl SendWorkflow {
     ) -> Result<SendDirective, SendWorkflowError> {
         self.expect(SendStage::Preparing, "transfer_prepared")?;
         self.validate_prepared(&prepared)?;
+
         self.prepared = Some(prepared);
         self.stage = SendStage::PersistingPrepared;
+
         self.persist_directive()
     }
 
@@ -333,6 +345,7 @@ impl SendWorkflow {
         }
 
         self.journal_version = Some(next_journal_version(self.journal_version)?);
+
         match self.stage {
             SendStage::PersistingPrepared => {
                 self.stage = SendStage::ReadyToSubmit;
@@ -355,7 +368,9 @@ impl SendWorkflow {
 
     pub(crate) fn submission_started(&mut self) -> Result<(), SendWorkflowError> {
         self.expect(SendStage::ReadyToSubmit, "submission_started")?;
+
         self.stage = SendStage::Submitting;
+
         Ok(())
     }
 
@@ -364,9 +379,11 @@ impl SendWorkflow {
         provider_reference: Option<String>,
     ) -> Result<SendDirective, SendWorkflowError> {
         self.expect(SendStage::Submitting, "submission_succeeded")?;
+
         self.provider_reference = provider_reference;
         self.diagnostic = None;
         self.stage = SendStage::Submitted;
+
         self.persist_directive()
     }
 
@@ -379,8 +396,10 @@ impl SendWorkflow {
         diagnostic: String,
     ) -> Result<SendDirective, SendWorkflowError> {
         self.expect(SendStage::Submitting, "submission_unknown")?;
+
         self.diagnostic = Some(sanitize_diagnostic(diagnostic));
         self.stage = SendStage::SubmissionUnknown;
+
         self.persist_directive()
     }
 
@@ -389,7 +408,9 @@ impl SendWorkflow {
         diagnostic: String,
     ) -> Result<SendDirective, SendWorkflowError> {
         self.expect(SendStage::Submitting, "submission_rejected")?;
+
         self.fail(diagnostic);
+
         self.persist_directive()
     }
 
@@ -397,7 +418,9 @@ impl SendWorkflow {
         if self.stage.is_terminal() {
             return Ok(SendDirective::Finished);
         }
+
         self.stage = SendStage::Cancelled;
+
         if self.prepared.is_some() {
             self.persist_directive()
         } else {
@@ -407,6 +430,7 @@ impl SendWorkflow {
 
     fn persist_directive(&self) -> Result<SendDirective, SendWorkflowError> {
         let record = self.journal_record()?;
+
         Ok(SendDirective::PersistJournal(JournalCompareExchange {
             key: self.journal_key(),
             expected_version: self.journal_version,
@@ -420,6 +444,7 @@ impl SendWorkflow {
 
     fn journal_record(&self) -> Result<DurableSendRecord, SendWorkflowError> {
         let prepared = self.prepared_ref()?;
+
         Ok(DurableSendRecord {
             schema_version: JOURNAL_SCHEMA_VERSION,
             operation_id: prepared.operation_id.clone(),
@@ -459,6 +484,7 @@ impl SendWorkflow {
             .fresh_account
             .as_ref()
             .ok_or(SendWorkflowError::PreparedTransferMismatch)?;
+
         if prepared.operation_id != self.request.operation_id
             || prepared.record_id != self.record_id
             || prepared.source != self.source
@@ -471,6 +497,7 @@ impl SendWorkflow {
         {
             return Err(SendWorkflowError::PreparedTransferMismatch);
         }
+
         Ok(())
     }
 
@@ -501,11 +528,13 @@ fn validate_request(
             "wallet record identity is empty".to_owned(),
         ));
     }
+
     if request.operation_id.trim().is_empty() || request.operation_id.len() > 128 {
         return Err(SendWorkflowError::InvalidRequest(
             "operation identifier is invalid".to_owned(),
         ));
     }
+
     if request.destination.trim().is_empty()
         || request.destination.len() > 128
         || request.destination.chars().any(char::is_whitespace)
@@ -514,6 +543,7 @@ fn validate_request(
             "destination is invalid".to_owned(),
         ));
     }
+
     if request.amount_nanograms.is_empty()
         || request.amount_nanograms == "0"
         || request.amount_nanograms.starts_with('0')
@@ -526,11 +556,13 @@ fn validate_request(
             "amount must be positive canonical nanograms".to_owned(),
         ));
     }
+
     if request.secret_ref.value.trim().is_empty() {
         return Err(SendWorkflowError::InvalidRequest(
             "protected secret reference is empty".to_owned(),
         ));
     }
+
     Ok(())
 }
 
@@ -540,17 +572,21 @@ fn decode_durable_record(record: &JournalRecord) -> Result<DurableSendRecord, Se
             "version must be positive".to_owned(),
         ));
     }
+
     let durable: DurableSendRecord = serde_json::from_slice(&record.payload)
         .map_err(|error| SendWorkflowError::InvalidJournal(error.to_string()))?;
+
     if durable.schema_version != JOURNAL_SCHEMA_VERSION {
         return Err(SendWorkflowError::InvalidJournal(
             "unsupported schema version".to_owned(),
         ));
     }
+
     let boc_is_invalid = match BASE64.decode(&durable.signed_boc_base64) {
         Ok(boc) => boc.is_empty(),
         Err(_) => true,
     };
+
     if durable.operation_id.trim().is_empty()
         || durable.record_id.trim().is_empty()
         || durable.source.trim().is_empty()
@@ -569,6 +605,7 @@ fn decode_durable_record(record: &JournalRecord) -> Result<DurableSendRecord, Se
             "record fields are invalid".to_owned(),
         ));
     }
+
     Ok(durable)
 }
 

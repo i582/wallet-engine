@@ -208,8 +208,10 @@ impl WalletLifecycle {
                 prompt: "Authenticate to reveal this wallet's recovery phrase".to_owned(),
             })
             .await?;
+
         let secret = SensitiveMnemonic::from_bytes(bytes)?;
         let actual = derive_address(descriptor.network, &secret)?;
+
         if actual != descriptor.address {
             return Err(WalletLifecycleError::SecretWalletMismatch);
         }
@@ -226,6 +228,7 @@ impl WalletLifecycle {
         descriptor: WalletDescriptor,
     ) -> Result<(), WalletLifecycleError> {
         validate_descriptor(&descriptor)?;
+
         self.platform_host
             .delete_protected_secret(descriptor.secret_ref)
             .await
@@ -273,32 +276,41 @@ impl SensitiveMnemonic {
         let mut candidate = Self {
             bytes: Vec::with_capacity(words.iter().map(String::len).sum::<usize>() + 23),
         };
+
         for (index, word) in words.into_iter().enumerate() {
             if !valid_mnemonic_word(&word) {
                 return Err(WalletLifecycleError::InvalidRecoveryPhrase);
             }
+
             if index != 0 {
                 candidate.bytes.push(b' ');
             }
+
             candidate.bytes.extend_from_slice(word.as_bytes());
         }
+
         candidate.validate()?;
+
         Ok(candidate)
     }
 
     fn from_bytes(bytes: Vec<u8>) -> Result<Self, WalletLifecycleError> {
         let candidate = Self { bytes };
+
         candidate.validate()?;
+
         Ok(candidate)
     }
 
     fn validate(&self) -> Result<(), WalletLifecycleError> {
         let phrase = self.as_str()?;
         let words = phrase.split(' ').collect::<Vec<_>>();
+
         if words.len() != MNEMONIC_WORD_COUNT || words.iter().any(|word| !valid_mnemonic_word(word))
         {
             return Err(WalletLifecycleError::InvalidRecoveryPhrase);
         }
+
         Ok(())
     }
 
@@ -329,6 +341,7 @@ fn derive_descriptor(
     secret: &SensitiveMnemonic,
 ) -> Result<WalletDescriptor, WalletLifecycleError> {
     let secret_ref = secret_ref_for(record_id)?;
+
     Ok(WalletDescriptor {
         record_id: record_id.to_owned(),
         address: derive_address(network, secret)?,
@@ -347,20 +360,25 @@ fn derive_address(
 
 fn secret_ref_for(record_id: &str) -> Result<ProtectedSecretRef, WalletLifecycleError> {
     validate_record_id(record_id)?;
+
     let value = format!("wallet:{record_id}:mnemonic");
+
     if value.len() > MAX_SECRET_REF_BYTES {
         return Err(WalletLifecycleError::InvalidRecordId);
     }
+
     Ok(ProtectedSecretRef { value })
 }
 
 fn validate_descriptor(descriptor: &WalletDescriptor) -> Result<(), WalletLifecycleError> {
     validate_record_id(&descriptor.record_id)?;
+
     if descriptor.secret_ref != secret_ref_for(&descriptor.record_id)?
         || descriptor.address.is_empty()
     {
         return Err(WalletLifecycleError::InvalidRecordId);
     }
+
     Ok(())
 }
 
@@ -373,6 +391,7 @@ fn validate_record_id(record_id: &str) -> Result<(), WalletLifecycleError> {
     {
         return Err(WalletLifecycleError::InvalidRecordId);
     }
+
     Ok(())
 }
 

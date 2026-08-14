@@ -29,19 +29,24 @@ pub(crate) fn prepare_transfer(
     let mnemonic = std::str::from_utf8(mnemonic_bytes).map_err(sanitize)?;
     let wallet = derive_v5r1_wallet(mnemonic, network).map_err(sanitize)?;
     let destination = TonAddress::from_str(&request.destination).map_err(sanitize)?;
+
+    // The friendly-address tag determines whether the internal message can bounce.
     let tag = URL_SAFE_NO_PAD
         .decode(&request.destination)
         .map_err(sanitize)?
         .first()
         .copied();
+
     let mut info = CommonMsgInfoInt::new(
         destination.to_msg_address(),
         TLBCoins::new(request.amount_nanograms.parse::<u128>().map_err(sanitize)?),
     );
     info.bounce = matches!(tag, Some(0x11 | 0x91));
+
     let internal = Msg::new(info, TonCell::builder().build().map_err(sanitize)?)
         .to_cell()
         .map_err(sanitize)?;
+
     let valid_until_u32 = u32::try_from(valid_until).map_err(sanitize)?;
     let external = wallet
         .create_ext_in_msg(
@@ -51,9 +56,11 @@ pub(crate) fn prepare_transfer(
             account.needs_state_init(),
         )
         .map_err(sanitize)?;
+
     let normalized = Msg::<TonCell>::from_cell(&external).map_err(sanitize)?;
     let message_hash = STANDARD.encode(normalized.cell_hash_normalized().map_err(sanitize)?);
     let signed_boc = external.to_boc().map_err(sanitize)?;
+
     Ok(PreparedTransfer {
         operation_id: request.operation_id.clone(),
         record_id: record_id.to_owned(),
@@ -68,18 +75,11 @@ pub(crate) fn prepare_transfer(
     })
 }
 
-pub(crate) fn derive_source(mnemonic_bytes: &[u8], network: Network) -> Result<String, String> {
+pub(crate) fn derive_source(mnemonic_bytes: &[u8], network: Network) -> Result<TonAddress, String> {
     let mnemonic = std::str::from_utf8(mnemonic_bytes).map_err(sanitize)?;
     let wallet = derive_v5r1_wallet(mnemonic, network).map_err(sanitize)?;
-    Ok(wallet
-        .address
-        .to_base64(network == Network::Mainnet, false, true))
-}
 
-pub(crate) fn same_address(left: &str, right: &str) -> Result<bool, String> {
-    let left = TonAddress::from_str(left).map_err(sanitize)?;
-    let right = TonAddress::from_str(right).map_err(sanitize)?;
-    Ok(left == right)
+    Ok(wallet.address)
 }
 
 fn sanitize(error: impl std::fmt::Display) -> String {

@@ -5,12 +5,14 @@
 //! awaited host callback.
 
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use futures::channel::oneshot;
 use futures::future::join;
 use serde_json::Value;
+use ton::ton_core::types::TonAddress;
 use url::Url;
 
 use crate::provider::{
@@ -18,7 +20,7 @@ use crate::provider::{
     sanitize_diagnostic,
 };
 use crate::send::{FreshSendAccount, SendDirective, SendWorkflow};
-use crate::signer::{derive_source, prepare_transfer, same_address};
+use crate::signer::{derive_source, prepare_transfer};
 use crate::{
     AccountSnapshot, AccountStatus, ActivityCursor, DomainError, ErrorCategory, ErrorCode,
     HttpCall, HttpCallId, HttpHeader, HttpHostError, HttpHostErrorKind, HttpMethod, HttpResponse,
@@ -194,7 +196,9 @@ impl WalletClient {
         platform_host: Arc<dyn WalletPlatformHost>,
     ) -> Result<Arc<Self>, WalletClientError> {
         validate_config(&config)?;
+
         let snapshot = WalletSnapshot::empty(&config);
+
         Ok(Arc::new(Self {
             http_host,
             platform_host,
@@ -237,18 +241,24 @@ impl WalletClient {
             if state.shutdown {
                 return Err(WalletClientError::Shutdown);
             }
+
             if state.snapshot.revision > after_revision {
                 return Ok(state.snapshot.clone());
             }
+
             let (sender, receiver) = oneshot::channel();
             state.waiters.push((after_revision, sender));
+
             receiver
         };
+
         receiver.await.map_err(|_| WalletClientError::Shutdown)?;
+
         let state = self.lock()?;
         if state.shutdown {
             return Err(WalletClientError::Shutdown);
         }
+
         Ok(state.snapshot.clone())
     }
 
@@ -261,6 +271,7 @@ impl WalletClient {
         let (generation, calls, previous_calls) = {
             let mut state = self.lock()?;
             ensure_running(&state)?;
+
             let config = state.config.clone();
             let account_id = HttpCallId {
                 value: state.allocate_id()?,
@@ -268,12 +279,15 @@ impl WalletClient {
             let activity_id = HttpCallId {
                 value: state.allocate_id()?,
             };
-            let calls = refresh_calls(&config, account_id, activity_id)?;
+
+            let calls = build_refresh_calls(&config, account_id, activity_id)?;
+
             state.refresh_generation = state
                 .refresh_generation
                 .checked_add(1)
                 .ok_or(WalletClientError::IdentifierExhausted)?;
             let generation = state.refresh_generation;
+
             let mut previous_calls = state
                 .active_refresh
                 .replace((generation, vec![account_id, activity_id]))
@@ -282,12 +296,15 @@ impl WalletClient {
             if let Some((_, page_call)) = state.active_pagination.take() {
                 previous_calls.push(page_call);
             }
+
             state.snapshot.account_resource = ResourceState::loading();
             state.snapshot.activity_resource = ResourceState::loading();
             state.snapshot.activity_pagination_resource = ResourceState::idle();
             state.next_revision()?;
+
             (generation, calls, previous_calls)
         };
+
         for call_id in previous_calls {
             self.http_host.cancel_http(call_id).await;
         }
@@ -300,14 +317,18 @@ impl WalletClient {
 
         let account = evaluate_for_call(&calls.0, account, parse_account);
         self.publish_refresh_component(generation, RefreshValue::Account(account))?;
+
         let activity =
             evaluate_for_call(&calls.1, activity, |body| parse_activity(body, PAGE_SIZE));
         self.publish_refresh_component(generation, RefreshValue::Activity(activity))?;
+
         let mut state = self.lock()?;
         if !state.is_current(OperationFamily::Refresh, generation) {
             return Ok(update(WalletOperationOutcome::Superseded, 0, &state));
         }
+
         state.active_refresh = None;
+
         let failed = [
             &state.snapshot.account_resource,
             &state.snapshot.activity_resource,
@@ -315,11 +336,13 @@ impl WalletClient {
         .into_iter()
         .filter(|resource| resource.phase == ResourcePhase::Failed)
         .count();
+
         let outcome = match failed {
             0 => WalletOperationOutcome::Completed,
             2 => WalletOperationOutcome::Failed,
             _ => WalletOperationOutcome::PartiallyCompleted,
         };
+
         Ok(update(outcome, 0, &state))
     }
 
@@ -339,11 +362,14 @@ impl WalletClient {
                 mark_loading_cancelled(&mut state.snapshot.activity_resource);
                 state.next_revision()?;
             }
+
             calls
         };
+
         for call_id in calls {
             self.http_host.cancel_http(call_id).await;
         }
+
         Ok(())
     }
 
@@ -356,19 +382,23 @@ impl WalletClient {
         let (generation, call) = {
             let mut state = self.lock()?;
             ensure_running(&state)?;
+
             if state.active_refresh.is_some()
                 || state.active_pagination.is_some()
                 || !state.snapshot.activity_has_more
             {
                 return Ok(update(WalletOperationOutcome::Skipped, 0, &state));
             }
+
             let Some(cursor) = state.snapshot.activity_cursor.clone() else {
                 return Ok(update(WalletOperationOutcome::Skipped, 0, &state));
             };
+
             let id = HttpCallId {
                 value: state.allocate_id()?,
             };
-            let call = activity_page_call(&state.config, &cursor, id)?;
+            let call = build_activity_page_call(&state.config, &cursor, id)?;
+
             state.pagination_generation = state
                 .pagination_generation
                 .checked_add(1)
@@ -377,6 +407,7 @@ impl WalletClient {
             state.active_pagination = Some((generation, id));
             state.snapshot.activity_pagination_resource = ResourceState::loading();
             state.next_revision()?;
+
             (generation, call)
         };
 
@@ -385,11 +416,14 @@ impl WalletClient {
             self.http_host.execute_http(call.clone()).await,
             |body| parse_activity(body, PAGE_SIZE),
         );
+
         let mut state = self.lock()?;
         if !state.is_current(OperationFamily::Pagination, generation) {
             return Ok(update(WalletOperationOutcome::Superseded, 0, &state));
         }
+
         state.active_pagination = None;
+
         let (outcome, added) = match result {
             Ok(page) => {
                 let added = apply_activity_page(&mut state.snapshot, page);
@@ -405,7 +439,9 @@ impl WalletClient {
                 (WalletOperationOutcome::Failed, 0)
             }
         };
+
         state.next_revision()?;
+
         Ok(update(outcome, added, &state))
     }
 
@@ -420,11 +456,14 @@ impl WalletClient {
                 state.snapshot.activity_pagination_resource = ResourceState::idle();
                 state.next_revision()?;
             }
+
             call
         };
+
         if let Some(call_id) = call {
             self.http_host.cancel_http(call_id).await;
         }
+
         Ok(())
     }
 
@@ -441,10 +480,15 @@ impl WalletClient {
     /// Some workflow failures return [`WalletClientError::StateUnavailable`].
     /// Read `snapshot().send.error_message` for the sanitized workflow detail.
     pub async fn send(&self, request: SendRequest) -> Result<SendResult, WalletClientError> {
+        // Reject malformed input before reserving IDs or changing observable state.
         validate_send(&request)?;
+
+        // Reserve one send generation and every HTTP ID under the state lock.
+        // This makes concurrent sends single-flight and lets late callbacks be ignored safely.
         let (
             generation,
             config,
+            expected_source,
             account_call,
             seqno_call,
             submit_call_id,
@@ -462,7 +506,9 @@ impl WalletClient {
                 .ok_or(WalletClientError::IdentifierExhausted)?;
             let generation = state.send_generation;
             let config = state.config.clone();
-            let account_call = toncenter_call(
+            let expected_source = config.parsed_address()?;
+
+            let account_call = build_toncenter_call(
                 &config,
                 HttpCallId {
                     value: state.allocate_id()?,
@@ -470,7 +516,7 @@ impl WalletClient {
                 "getAddressInformation",
                 &[("address", config.address.as_str())],
             )?;
-            let seqno_call = seqno_call(
+            let seqno_call = build_seqno_call(
                 &config,
                 HttpCallId {
                     value: state.allocate_id()?,
@@ -498,6 +544,7 @@ impl WalletClient {
             (
                 generation,
                 config,
+                expected_source,
                 account_call,
                 seqno_call,
                 submit_call_id,
@@ -506,6 +553,8 @@ impl WalletClient {
             )
         };
 
+        // Read the durable wallet-wide send slot before fetching or signing.
+        // An unresolved earlier submission must block creation of a different signed message.
         let journal_record =
             self.platform_host
                 .load_journal(journal_key)
@@ -525,18 +574,23 @@ impl WalletClient {
         };
         self.publish_send_workflow(generation, &workflow)?;
 
-        self.start_send_http_call(generation, account_call.id)?;
-        let account_response = self.http_host.execute_http(account_call.clone()).await;
-        self.finish_send_http_call(generation, account_call.id)?;
+        // Fetch current account status before authorization. A stale cached status can produce
+        // an invalid seqno or incorrectly include StateInit in the external message.
+        let account_response = self
+            .execute_tracked_send_call(generation, &account_call)
+            .await?;
         let account =
             evaluate_for_call(&account_call, account_response, parse_account).map_err(|error| {
                 let _ = self.fail_send(generation, error.developer_message);
                 WalletClientError::StateUnavailable
             })?;
+        // Active wallets require a fresh seqno for replay protection. A wallet that is not yet
+        // deployed starts at seqno zero; the workflow rejects unsupported account states later.
         let seqno = if account.status == AccountStatus::Active {
-            self.start_send_http_call(generation, seqno_call.id)?;
-            let seqno_response = self.http_host.execute_http(seqno_call.clone()).await;
-            self.finish_send_http_call(generation, seqno_call.id)?;
+            let seqno_response = self
+                .execute_tracked_send_call(generation, &seqno_call)
+                .await?;
+
             evaluate_for_call(&seqno_call, seqno_response, parse_seqno).map_err(|error| {
                 let _ = self.fail_send(generation, error.developer_message);
                 WalletClientError::StateUnavailable
@@ -549,6 +603,7 @@ impl WalletClient {
             seqno,
             observed_at: account.sync_utime.unwrap_or_default(),
         };
+
         let directive = workflow
             .fresh_account_loaded(fresh.clone())
             .map_err(|error| {
@@ -559,7 +614,11 @@ impl WalletClient {
             self.fail_send(generation, "invalid secret-read transition".to_owned())?;
             return Err(WalletClientError::StateUnavailable);
         };
+
         self.publish_send_workflow(generation, &workflow)?;
+
+        // Ask the platform host for the mnemonic only after all public preconditions pass.
+        // The RAII wrapper clears the Rust-owned byte buffer on every return path.
         let secret = SensitiveBytes::new(
             self.platform_host
                 .read_protected_secret(secret_request)
@@ -570,24 +629,22 @@ impl WalletClient {
                 })?,
         );
         self.ensure_current_send(generation)?;
+
+        // Derive the source again from the unlocked mnemonic. This prevents signing a transfer
+        // for wallet A with a secret that belongs to wallet B.
         let source = derive_source(secret.as_slice(), config.network).map_err(|_| {
             let _ = self.fail_send(generation, "protected mnemonic is invalid".to_owned());
             WalletClientError::InvalidConfig
         })?;
-        let source_matches = match same_address(&source, &config.address) {
-            Ok(matches) => matches,
-            Err(error) => {
-                self.fail_send(generation, error)?;
-                return Err(WalletClientError::InvalidConfig);
-            }
-        };
-        if !source_matches {
+
+        if source != expected_source {
             self.fail_send(
                 generation,
                 "protected mnemonic does not belong to this wallet".to_owned(),
             )?;
             return Err(WalletClientError::InvalidConfig);
         }
+
         let SendDirective::PrepareTransfer { .. } =
             workflow.authorization_succeeded().map_err(|error| {
                 let _ = self.fail_send(generation, error.to_string());
@@ -600,17 +657,23 @@ impl WalletClient {
             )?;
             return Err(WalletClientError::StateUnavailable);
         };
+
         self.publish_send_workflow(generation, &workflow)?;
+
+        // Use host wall time only to create a bounded validity window. Rust still owns the exact
+        // signed payload so every platform produces the same V5R1 message.
         let now = self.platform_host.now().await;
         self.ensure_current_send(generation)?;
+
         let Some(valid_until) = now.checked_add(300) else {
             self.fail_send(generation, "transfer expiry overflow".to_owned())?;
             return Err(WalletClientError::IdentifierExhausted);
         };
+
         let prepared = prepare_transfer(
             secret.as_slice(),
             &config.record_id,
-            &source,
+            &config.address,
             config.network,
             &request,
             &fresh,
@@ -620,9 +683,10 @@ impl WalletClient {
             let _ = self.fail_send(generation, "failed to prepare transfer".to_owned());
             WalletClientError::StateUnavailable
         })?;
+
         let summary = prepared.public_summary();
-        let submit_call =
-            send_boc_call(&config, submit_call_id, &prepared.signed_boc).map_err(|_| {
+        let submit_call = build_send_boc_call(&config, submit_call_id, &prepared.signed_boc)
+            .map_err(|_| {
                 let _ = self.fail_send(generation, "failed to construct submission".to_owned());
                 WalletClientError::StateUnavailable
             })?;
@@ -635,6 +699,9 @@ impl WalletClient {
             return Err(WalletClientError::StateUnavailable);
         };
         self.publish_send_workflow(generation, &workflow)?;
+
+        // Start the irreversible boundary before awaiting durable CAS. After this point cancel
+        // returns TooLate because the exact BOC can survive a crash or already be in flight.
         self.begin_send_commit(generation)?;
         let journal = match self.platform_host.compare_exchange_journal(mutation).await {
             Ok(journal) => journal,
@@ -644,6 +711,7 @@ impl WalletClient {
             }
         };
         self.ensure_current_send(generation)?;
+
         let journal_applied = journal.applied;
         let directive = workflow.journal_persisted(journal).map_err(|error| {
             if journal_applied {
@@ -653,6 +721,7 @@ impl WalletClient {
             }
             WalletClientError::StateUnavailable
         })?;
+
         let SendDirective::Submit {
             signed_boc: _,
             message_hash,
@@ -666,9 +735,13 @@ impl WalletClient {
             WalletClientError::StateUnavailable
         })?;
         self.publish_send_workflow(generation, &workflow)?;
-        self.start_send_http_call(generation, submit_call.id)?;
-        let submit_result = self.http_host.execute_http(submit_call.clone()).await;
-        self.finish_send_http_call(generation, submit_call.id)?;
+
+        // Submit exactly the BOC stored above. Transport or malformed-response failures are
+        // classified as SubmissionUnknown because the provider might have accepted the POST.
+        let submit_result = self
+            .execute_tracked_send_call(generation, &submit_call)
+            .await?;
+
         let final_directive = match submit_result {
             Ok(response) => {
                 match evaluate_for_call(&submit_call, Ok(response), parse_send_response) {
@@ -695,6 +768,9 @@ impl WalletClient {
         };
         self.publish_send_workflow(generation, &workflow)?;
         self.ensure_current_send(generation)?;
+
+        // Persist the terminal outcome before publishing completion. On failure, keep the public
+        // state unknown so a restart cannot silently replace a possibly submitted transfer.
         let journal = match self.platform_host.compare_exchange_journal(mutation).await {
             Ok(journal) => journal,
             Err(error) => {
@@ -708,6 +784,8 @@ impl WalletClient {
             WalletClientError::StateUnavailable
         })?;
         let phase = workflow.snapshot().phase;
+
+        // Publish one terminal snapshot and release the single-flight send slot.
         {
             let mut state = self.lock()?;
             if state.is_current(OperationFamily::Send, generation) {
@@ -737,8 +815,10 @@ impl WalletClient {
             if state.active_send.is_some() && state.send_commit_started {
                 return Err(WalletClientError::SendCancellationTooLate);
             }
+
             let active = state.active_send.take();
             state.send_commit_started = false;
+
             if active.is_some() {
                 if let Some(mut workflow) = state.send_workflow.take() {
                     let _ = workflow.cancel();
@@ -748,11 +828,14 @@ impl WalletClient {
                 state.snapshot.send.phase = SendPhase::Cancelled;
                 state.next_revision()?;
             }
+
             active.map(|active| active.1).unwrap_or_default()
         };
+
         for call in calls {
             self.http_host.cancel_http(call).await;
         }
+
         Ok(())
     }
 
@@ -767,10 +850,13 @@ impl WalletClient {
             if state.shutdown {
                 return Ok(());
             }
+
             if state.active_send.is_some() && state.send_commit_started {
                 return Err(WalletClientError::SendCancellationTooLate);
             }
+
             state.shutdown = true;
+
             let mut calls = state
                 .active_refresh
                 .take()
@@ -779,16 +865,22 @@ impl WalletClient {
             if let Some((_, call)) = state.active_pagination.take() {
                 calls.push(call);
             }
+
             if let Some((_, send_calls)) = state.active_send.take() {
                 calls.extend(send_calls);
             }
+
             state.send_commit_started = false;
+
             (calls, std::mem::take(&mut state.waiters))
         };
+
         for call in calls {
             self.http_host.cancel_http(call).await;
         }
+
         drop(waiters);
+
         Ok(())
     }
 }
@@ -809,6 +901,7 @@ impl WalletClient {
         if !state.is_current(OperationFamily::Refresh, generation) {
             return Ok(());
         }
+
         match value {
             RefreshValue::Account(result) => match result {
                 Ok(account) => {
@@ -827,7 +920,9 @@ impl WalletClient {
                 Err(error) => state.snapshot.activity_resource = ResourceState::failed(error),
             },
         }
+
         state.next_revision()?;
+
         Ok(())
     }
 
@@ -840,6 +935,7 @@ impl WalletClient {
             state.snapshot.send.error_message = Some(sanitize_diagnostic(&message));
             state.next_revision()?;
         }
+
         Ok(())
     }
 
@@ -852,6 +948,7 @@ impl WalletClient {
             state.snapshot.send.error_message = Some(sanitize_diagnostic(&message));
             state.next_revision()?;
         }
+
         Ok(())
     }
 
@@ -860,10 +957,13 @@ impl WalletClient {
         if state.shutdown {
             return Err(WalletClientError::Shutdown);
         }
+
         if !state.is_current(OperationFamily::Send, generation) {
             return Err(WalletClientError::StateUnavailable);
         }
+
         state.send_commit_started = true;
+
         Ok(())
     }
 
@@ -872,9 +972,11 @@ impl WalletClient {
         if state.shutdown {
             return Err(WalletClientError::Shutdown);
         }
+
         if !state.is_current(OperationFamily::Send, generation) {
             return Err(WalletClientError::StateUnavailable);
         }
+
         Ok(())
     }
 
@@ -887,9 +989,11 @@ impl WalletClient {
         if !state.is_current(OperationFamily::Send, generation) {
             return Err(WalletClientError::StateUnavailable);
         }
+
         state.snapshot.send = workflow.snapshot();
         state.send_workflow = Some(workflow.clone());
         state.next_revision()?;
+
         Ok(())
     }
 
@@ -902,14 +1006,33 @@ impl WalletClient {
         if state.shutdown {
             return Err(WalletClientError::Shutdown);
         }
+
         let Some((active_generation, calls)) = state.active_send.as_mut() else {
             return Err(WalletClientError::StateUnavailable);
         };
+
         if *active_generation != generation {
             return Err(WalletClientError::StateUnavailable);
         }
+
         calls.push(call_id);
+
         Ok(())
+    }
+
+    async fn execute_tracked_send_call(
+        &self,
+        generation: u64,
+        call: &HttpCall,
+    ) -> Result<Result<HttpResponse, HttpHostError>, WalletClientError> {
+        self.start_send_http_call(generation, call.id)?;
+
+        // Do not hold the state lock while the foreign host performs I/O.
+        let result = self.http_host.execute_http(call.clone()).await;
+
+        self.finish_send_http_call(generation, call.id)?;
+
+        Ok(result)
     }
 
     fn finish_send_http_call(
@@ -921,13 +1044,17 @@ impl WalletClient {
         if state.shutdown {
             return Err(WalletClientError::Shutdown);
         }
+
         let Some((active_generation, calls)) = state.active_send.as_mut() else {
             return Err(WalletClientError::StateUnavailable);
         };
+
         if *active_generation != generation {
             return Err(WalletClientError::StateUnavailable);
         }
+
         calls.retain(|active| *active != call_id);
+
         Ok(())
     }
 }
@@ -981,9 +1108,11 @@ fn evaluate<T>(
             return Err(host_error(kind, &diagnostic));
         }
     };
+
     if let Some(error) = response_error(response.status, &response.headers, &response.body) {
         return Err(error);
     }
+
     parse(&response.body)
 }
 
@@ -1000,6 +1129,7 @@ fn evaluate_for_call<T>(
             "HTTP redirect or mismatched final URL",
         ));
     }
+
     if let Ok(response) = &result {
         if response.body.len() as u64 > call.max_response_body_bytes {
             return Err(host_error(
@@ -1007,6 +1137,7 @@ fn evaluate_for_call<T>(
                 "HTTP response exceeded the requested limit",
             ));
         }
+
         let header_bytes = response.headers.iter().fold(0_u64, |size, header| {
             size.saturating_add((header.name.len() + header.value.len()) as u64)
         });
@@ -1017,6 +1148,7 @@ fn evaluate_for_call<T>(
             ));
         }
     }
+
     evaluate(result, parse)
 }
 
@@ -1024,6 +1156,7 @@ fn host_error(kind: HttpHostErrorKind, message: &str) -> DomainError {
     let cancelled = kind == HttpHostErrorKind::Cancelled;
     let policy = kind == HttpHostErrorKind::PolicyViolation;
     let too_large = kind == HttpHostErrorKind::ResponseTooLarge;
+
     DomainError {
         code: if cancelled {
             ErrorCode::HostCancelled
@@ -1070,35 +1203,39 @@ fn apply_activity_page(snapshot: &mut WalletSnapshot, page: ActivityPage) -> u64
         snapshot.activity_has_more = false;
         return 0;
     }
+
     let previous_len = snapshot.activity.len();
     let mut by_id: HashMap<_, _> = snapshot
         .activity
         .drain(..)
         .map(|item| (item.id.clone(), item))
         .collect();
+
     for item in page.items {
         by_id.insert(item.id.clone(), item);
     }
+
     snapshot.activity = by_id.into_values().collect();
     snapshot.activity.sort_by(activity_item_order);
     snapshot.activity_cursor = page.cursor;
     snapshot.activity_has_more = page.has_more;
+
     u64::try_from(snapshot.activity.len().saturating_sub(previous_len)).unwrap_or(u64::MAX)
 }
 
-fn refresh_calls(
+fn build_refresh_calls(
     config: &WalletClientConfig,
     account_id: HttpCallId,
     activity_id: HttpCallId,
 ) -> Result<(HttpCall, HttpCall), WalletClientError> {
     Ok((
-        toncenter_call(
+        build_toncenter_call(
             config,
             account_id,
             "getAddressInformation",
             &[("address", config.address.as_str())],
         )?,
-        toncenter_call(
+        build_toncenter_call(
             config,
             activity_id,
             "getTransactions",
@@ -1107,7 +1244,7 @@ fn refresh_calls(
     ))
 }
 
-fn activity_page_call(
+fn build_activity_page_call(
     config: &WalletClientConfig,
     cursor: &ActivityCursor,
     id: HttpCallId,
@@ -1121,7 +1258,8 @@ fn activity_page_call(
     {
         return Err(WalletClientError::InvalidConfig);
     }
-    toncenter_call(
+
+    build_toncenter_call(
         config,
         id,
         "getTransactions",
@@ -1134,8 +1272,11 @@ fn activity_page_call(
     )
 }
 
-fn seqno_call(config: &WalletClientConfig, id: HttpCallId) -> Result<HttpCall, WalletClientError> {
-    json_rpc_call(
+fn build_seqno_call(
+    config: &WalletClientConfig,
+    id: HttpCallId,
+) -> Result<HttpCall, WalletClientError> {
+    build_json_rpc_call(
         config,
         id,
         "runGetMethod",
@@ -1147,17 +1288,19 @@ fn seqno_call(config: &WalletClientConfig, id: HttpCallId) -> Result<HttpCall, W
     )
 }
 
-fn send_boc_call(
+fn build_send_boc_call(
     config: &WalletClientConfig,
     id: HttpCallId,
     boc: &[u8],
 ) -> Result<HttpCall, WalletClientError> {
     use base64::Engine as _;
+
     let encoded = base64::engine::general_purpose::STANDARD.encode(boc);
-    json_rpc_call(config, id, "sendBoc", serde_json::json!({ "boc": encoded }))
+
+    build_json_rpc_call(config, id, "sendBoc", serde_json::json!({ "boc": encoded }))
 }
 
-fn json_rpc_call(
+fn build_json_rpc_call(
     config: &WalletClientConfig,
     id: HttpCallId,
     method: &str,
@@ -1170,22 +1313,27 @@ fn json_rpc_call(
         "params": params,
     }))
     .map_err(|_| WalletClientError::StateUnavailable)?;
-    let mut call = toncenter_call(config, id, "jsonRPC", &[])?;
+
+    let mut call = build_toncenter_call(config, id, "jsonRPC", &[])?;
+
     call.method = HttpMethod::Post;
     call.headers.push(HttpHeader {
         name: "Content-Type".to_owned(),
         value: "application/json".to_owned(),
     });
     call.body = body;
+
     Ok(call)
 }
 
 fn parse_seqno(body: &[u8]) -> Result<u32, DomainError> {
     let value: Value =
         serde_json::from_slice(body).map_err(|error| invalid_json(error.to_string()))?;
+
     if let Some(error) = value.get("error") {
         return Err(invalid_json(error.to_string()));
     }
+
     let first = value
         .pointer("/result/stack/0")
         .ok_or_else(|| invalid_json("missing seqno stack"))?;
@@ -1199,6 +1347,7 @@ fn parse_seqno(body: &[u8]) -> Result<u32, DomainError> {
                 .flatten()
         })
         .ok_or_else(|| invalid_json("invalid seqno value"))?;
+
     if let Some(hex) = encoded.strip_prefix("0x") {
         u32::from_str_radix(hex, 16).map_err(|error| invalid_json(error.to_string()))
     } else {
@@ -1216,15 +1365,19 @@ enum SendBocResponse {
 fn parse_send_response(body: &[u8]) -> Result<SendBocResponse, DomainError> {
     let value: Value =
         serde_json::from_slice(body).map_err(|error| invalid_json(error.to_string()))?;
+
     if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
         return Ok(SendBocResponse::Rejected(json_error_message(error)));
     }
+
     if value.get("ok") == Some(&Value::Bool(false)) {
         return Ok(SendBocResponse::Rejected(json_error_message(&value)));
     }
+
     if value.pointer("/result/@type").and_then(Value::as_str) == Some("ok") {
         return Ok(SendBocResponse::Accepted);
     }
+
     Err(invalid_json("invalid sendBoc success response"))
 }
 
@@ -1236,6 +1389,7 @@ fn json_error_message(value: &Value) -> String {
         .or_else(|| value.get("description").and_then(Value::as_str))
         .or_else(|| value.as_str())
         .map_or_else(|| value.to_string(), str::to_owned);
+
     sanitize_diagnostic(&message)
 }
 
@@ -1257,21 +1411,23 @@ fn invalid_json(message: impl Into<String>) -> DomainError {
     }
 }
 
-fn toncenter_call(
+fn build_toncenter_call(
     config: &WalletClientConfig,
     id: HttpCallId,
     path: &str,
     query: &[(&str, &str)],
 ) -> Result<HttpCall, WalletClientError> {
-    let mut call = public_call(id, &config.providers.toncenter_base_url, path, query)?;
+    let mut call = build_public_call(id, &config.providers.toncenter_base_url, path, query)?;
+
     call.credential
         .clone_from(&config.providers.toncenter_credential);
     call.credential_origin
         .clone_from(&config.providers.toncenter_credential_origin);
+
     Ok(call)
 }
 
-fn public_call(
+fn build_public_call(
     id: HttpCallId,
     base: &str,
     path: &str,
@@ -1280,7 +1436,7 @@ fn public_call(
     Ok(HttpCall {
         id,
         method: HttpMethod::Get,
-        url: provider_url(base, path, query)?,
+        url: build_provider_url(base, path, query)?,
         headers: vec![HttpHeader {
             name: "Accept".to_owned(),
             value: "application/json".to_owned(),
@@ -1293,25 +1449,31 @@ fn public_call(
     })
 }
 
-fn provider_url(
+fn build_provider_url(
     base: &str,
     path: &str,
     query: &[(&str, &str)],
 ) -> Result<String, WalletClientError> {
     let mut url = Url::parse(base).map_err(|_| WalletClientError::InvalidConfig)?;
+
     url.path_segments_mut()
         .map_err(|_| WalletClientError::InvalidConfig)?
         .pop_if_empty()
         .push(path);
+
     url.query_pairs_mut().extend_pairs(query.iter().copied());
+
     Ok(url.into())
 }
 
 fn validate_config(config: &WalletClientConfig) -> Result<(), WalletClientError> {
-    if config.record_id.trim().is_empty() || config.address.trim().is_empty() {
+    if config.record_id.trim().is_empty() {
         return Err(WalletClientError::InvalidConfig);
     }
+
+    config.parsed_address()?;
     validate_https_url(&config.providers.toncenter_base_url)?;
+
     match (
         &config.providers.toncenter_credential,
         &config.providers.toncenter_credential_origin,
@@ -1328,12 +1490,20 @@ fn validate_config(config: &WalletClientConfig) -> Result<(), WalletClientError>
     }
 }
 
+impl WalletClientConfig {
+    fn parsed_address(&self) -> Result<TonAddress, WalletClientError> {
+        TonAddress::from_str(&self.address).map_err(|_| WalletClientError::InvalidConfig)
+    }
+}
+
 fn effective_origin(value: &str) -> Result<String, WalletClientError> {
     let url = Url::parse(value).map_err(|_| WalletClientError::InvalidConfig)?;
     let host = url.host_str().ok_or(WalletClientError::InvalidConfig)?;
+
     let port = url
         .port_or_known_default()
         .ok_or(WalletClientError::InvalidConfig)?;
+
     Ok(format!("{}://{host}:{port}", url.scheme()))
 }
 
@@ -1342,6 +1512,7 @@ fn validate_https_url(value: &str) -> Result<(), WalletClientError> {
     if url.scheme() != "https" || url.host_str().is_none() || url.fragment().is_some() {
         return Err(WalletClientError::InvalidConfig);
     }
+
     Ok(())
 }
 
@@ -1356,6 +1527,7 @@ fn validate_https_origin(value: &str) -> Result<(), WalletClientError> {
     {
         return Err(WalletClientError::InvalidConfig);
     }
+
     Ok(())
 }
 
@@ -1372,5 +1544,6 @@ fn validate_send(request: &SendRequest) -> Result<(), WalletClientError> {
     {
         return Err(WalletClientError::InvalidConfig);
     }
+
     Ok(())
 }

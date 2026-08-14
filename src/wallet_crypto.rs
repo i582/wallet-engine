@@ -31,6 +31,7 @@ pub(crate) enum WalletCryptoError {
 pub(crate) fn generate_mnemonic() -> Result<String, WalletCryptoError> {
     let mut wordlist = WORDLIST_EN_SET.iter().copied().collect::<Vec<_>>();
     wordlist.sort_unstable();
+
     if wordlist.len() != 2048 {
         return Err(WalletCryptoError::InvalidMnemonic);
     }
@@ -48,6 +49,7 @@ pub(crate) fn generate_mnemonic() -> Result<String, WalletCryptoError> {
             .collect::<Vec<_>>();
 
         debug_assert_eq!(words.len(), MNEMONIC_WORD_COUNT);
+
         if Mnemonic::new(words.clone(), None).is_ok() {
             return Ok(words.join(" "));
         }
@@ -67,6 +69,7 @@ pub(crate) fn derive_v5r1_wallet(
     let key_pair = mnemonic
         .to_key_pair()
         .map_err(|_| WalletCryptoError::InvalidMnemonic)?;
+
     let contract_wallet_id = v5r1_contract_wallet_id(network);
 
     TonWallet::new_with_params(WalletVersion::V5R1, key_pair, 0, contract_wallet_id)
@@ -78,6 +81,7 @@ const fn v5r1_contract_wallet_id(network: Network) -> i32 {
         Network::Mainnet => MAINNET_GLOBAL_ID,
         Network::Testnet => TESTNET_GLOBAL_ID,
     };
+
     network_global_id ^ V5R1_CLIENT_CONTEXT_ID
 }
 
@@ -87,6 +91,7 @@ pub(crate) fn derive_v5r1_address(
     bounceable: bool,
 ) -> Result<String, WalletCryptoError> {
     let wallet = derive_v5r1_wallet(mnemonic, network)?;
+
     Ok(wallet
         .address
         .to_base64(network == Network::Mainnet, bounceable, true))

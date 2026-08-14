@@ -16,7 +16,7 @@ use crate::{
 };
 
 #[derive(Debug, Deserialize)]
-struct Envelope {
+struct RawEnvelope {
     ok: bool,
     result: Option<Value>,
     error: Option<Value>,
@@ -77,7 +77,9 @@ pub(crate) fn response_error(
     if (200..300).contains(&status) {
         return None;
     }
+
     let developer_message = provider_message(body).unwrap_or_else(|| format!("HTTP {status}"));
+
     if status == 429 {
         let retry_after_ms = parse_retry_after_ms(headers);
         return Some(DomainError {
@@ -94,6 +96,7 @@ pub(crate) fn response_error(
             host_kind: None,
         });
     }
+
     Some(DomainError {
         code: ErrorCode::HttpRejected,
         category: ErrorCategory::ProviderProtocol,
@@ -113,6 +116,7 @@ pub(crate) fn parse_account(body: &[u8]) -> Result<AccountSnapshot, DomainError>
     let account: Account = decode_envelope(body)?;
     let balance_nanograms = decimal_string(&account.balance, "account balance")?;
     let balance_grams = format_nanograms(&balance_nanograms)?;
+
     let status = match account.state.to_ascii_lowercase().as_str() {
         "nonexist" | "nonexistent" => AccountStatus::Nonexistent,
         "uninit" | "uninitialized" => AccountStatus::Uninitialized,
@@ -120,6 +124,7 @@ pub(crate) fn parse_account(body: &[u8]) -> Result<AccountSnapshot, DomainError>
         "frozen" => AccountStatus::Frozen,
         _ => AccountStatus::Unknown,
     };
+
     Ok(AccountSnapshot {
         balance_nanograms,
         balance_grams,
@@ -142,8 +147,10 @@ pub(crate) fn parse_activity(body: &[u8], page_size: u32) -> Result<ActivityPage
             })
         })
         .transpose()?;
+
     let raw_count = transactions.len();
     let mut items = Vec::new();
+
     for transaction in transactions {
         if let Some(message) = &transaction.in_msg
             && message_address(&message.source).is_some()
@@ -152,6 +159,7 @@ pub(crate) fn parse_activity(body: &[u8], page_size: u32) -> Result<ActivityPage
         {
             items.push(item);
         }
+
         let outgoing = ordered_out_messages(&transaction)?;
         for (index, (_, _, _, message)) in outgoing.into_iter().enumerate() {
             if let Some(item) =
@@ -161,8 +169,10 @@ pub(crate) fn parse_activity(body: &[u8], page_size: u32) -> Result<ActivityPage
             }
         }
     }
+
     items.sort_by(activity_item_order);
     items.dedup_by(|left, right| left.id == right.id);
+
     Ok(ActivityPage {
         items,
         cursor,
@@ -192,19 +202,23 @@ fn activity_from_message(
     if amount_nanograms.bytes().all(|byte| byte == b'0') {
         return Ok(None);
     }
+
     let counterparty = match direction {
         ActivityDirection::Received => message_address(&message.source),
         ActivityDirection::Sent => message_address(&message.destination),
     };
+
     let logical_time = decimal_string(&transaction.transaction_id.lt, "logical time")?;
     let direction_name = match direction {
         ActivityDirection::Received => "received",
         ActivityDirection::Sent => "sent",
     };
+
     let transaction_hash = canonical_hash(&transaction.transaction_id.hash);
     if transaction_hash.is_empty() {
         return Err(invalid_response("transaction hash must not be empty"));
     }
+
     Ok(Some(ActivityItem {
         id: format!("{transaction_hash}:{direction_name}:{index}"),
         transaction_hash,
@@ -230,20 +244,24 @@ fn ordered_out_messages(transaction: &Transaction) -> Result<Vec<OrderedMessage<
                 .as_ref()
                 .map(|value| decimal_string(value, "message created logical time"))
                 .transpose()?;
+
             let message_hash = message
                 .hash
                 .as_deref()
                 .filter(|hash| !hash.is_empty())
                 .map(canonical_hash)
                 .unwrap_or_default();
+
             Ok((created_lt, message_hash, original_index, message))
         })
         .collect::<Result<Vec<_>, DomainError>>()?;
+
     messages.sort_by(|left, right| {
         optional_decimal_cmp(left.0.as_deref(), right.0.as_deref())
             .then_with(|| left.1.cmp(&right.1))
             .then_with(|| left.2.cmp(&right.2))
     });
+
     Ok(messages)
 }
 
@@ -252,24 +270,27 @@ fn decode<'a, T: Deserialize<'a>>(body: &'a [u8]) -> Result<T, DomainError> {
 }
 
 fn decode_envelope<T: DeserializeOwned>(body: &[u8]) -> Result<T, DomainError> {
-    let envelope: Envelope = decode(body)?;
+    let envelope: RawEnvelope = decode(body)?;
     if !envelope.ok {
         return Err(provider_envelope_error(envelope));
     }
+
     let result = envelope
         .result
         .ok_or_else(|| invalid_response("missing provider result"))?;
     serde_json::from_value(result).map_err(|error| invalid_response(error.to_string()))
 }
 
-fn provider_envelope_error(envelope: Envelope) -> DomainError {
+fn provider_envelope_error(envelope: RawEnvelope) -> DomainError {
     let status = envelope.code.as_ref().and_then(provider_code);
+
     let developer_message = envelope
         .error
         .as_ref()
         .and_then(value_message)
         .or(envelope.description)
         .unwrap_or_else(|| "provider rejected request".to_owned());
+
     if status == Some(429) {
         return DomainError {
             code: ErrorCode::RateLimited,
@@ -281,6 +302,7 @@ fn provider_envelope_error(envelope: Envelope) -> DomainError {
             host_kind: None,
         };
     }
+
     DomainError {
         code: ErrorCode::HttpRejected,
         category: ErrorCategory::ProviderProtocol,
@@ -328,11 +350,13 @@ fn decimal_string(value: &Value, field: &str) -> Result<String, DomainError> {
         Value::Number(value) => value.to_string(),
         _ => return Err(invalid_response(format!("{field} is not a decimal value"))),
     };
+
     if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err(invalid_response(format!(
             "{field} is not an unsigned decimal"
         )));
     }
+
     Ok(value)
 }
 
@@ -340,12 +364,16 @@ fn format_nanograms(value: &str) -> Result<String, DomainError> {
     let nanograms = value
         .parse::<u128>()
         .map_err(|error| invalid_response(error.to_string()))?;
+
     let whole = nanograms / 1_000_000_000;
     let fraction = nanograms % 1_000_000_000;
+
     if fraction == 0 {
         return Ok(whole.to_string());
     }
+
     let fraction = format!("{fraction:09}").trim_end_matches('0').to_owned();
+
     Ok(format!("{whole}.{fraction}"))
 }
 
@@ -372,6 +400,7 @@ fn canonical_hash(value: &str) -> String {
         .or_else(|_| STANDARD_NO_PAD.decode(value))
         .or_else(|_| URL_SAFE.decode(value))
         .or_else(|_| URL_SAFE_NO_PAD.decode(value));
+
     match decoded {
         Ok(bytes) if bytes.len() == 32 => STANDARD.encode(bytes),
         _ => value.to_owned(),
@@ -380,6 +409,7 @@ fn canonical_hash(value: &str) -> String {
 
 fn provider_message(body: &[u8]) -> Option<String> {
     let value: Value = serde_json::from_slice(body).ok()?;
+
     ["error", "description", "message"]
         .into_iter()
         .find_map(|field| value.get(field).and_then(Value::as_str))
@@ -410,5 +440,6 @@ fn parse_retry_after_ms(headers: &[HttpHeader]) -> Option<u64> {
         .trim()
         .parse::<u64>()
         .ok()?;
+
     seconds.checked_mul(1_000)
 }
