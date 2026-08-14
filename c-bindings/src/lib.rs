@@ -10,6 +10,8 @@
 mod abi;
 #[allow(unsafe_code)]
 mod host;
+#[allow(unsafe_code)]
+mod lifecycle;
 mod types;
 
 pub use abi::{
@@ -21,6 +23,9 @@ pub use host::{
     WalletEngineContextReleaseFn, WalletEngineContextRetainFn, WalletEnginePlatformHostAdapter,
     WalletEnginePlatformHostCallbacks, WalletEngineStoreProtectedSecretFn,
     wallet_engine_store_protected_secret_complete,
+};
+pub use lifecycle::{
+    WalletEngineLifecycle, wallet_engine_lifecycle_free, wallet_engine_lifecycle_new,
 };
 pub use types::{
     WALLET_ENGINE_NETWORK_MAINNET, WALLET_ENGINE_NETWORK_TESTNET,

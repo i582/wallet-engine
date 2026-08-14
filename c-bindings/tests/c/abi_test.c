@@ -162,14 +162,19 @@ static int test_create_wallet_types(void) {
     return 1;
 }
 
+typedef struct HostContext {
+    size_t retains;
+    size_t releases;
+} HostContext;
+
 static void retain_context(void *context) {
-    size_t *retain_count = context;
-    *retain_count += 1;
+    HostContext *host = context;
+    host->retains += 1;
 }
 
 static void release_context(void *context) {
-    size_t *release_count = context;
-    *release_count += 1;
+    HostContext *host = context;
+    host->releases += 1;
 }
 
 static void store_protected_secret(
@@ -183,7 +188,7 @@ static void store_protected_secret(
 }
 
 static int test_platform_host_contract(void) {
-    size_t context = 0;
+    HostContext context = {0};
     const WalletEnginePlatformHostCallbacks callbacks = {
         .struct_size = sizeof(WalletEnginePlatformHostCallbacks),
         .context = &context,
@@ -208,11 +213,50 @@ static int test_platform_host_contract(void) {
     return 1;
 }
 
+static int test_lifecycle_handle(void) {
+    HostContext context = {0};
+    const WalletEnginePlatformHostCallbacks callbacks = {
+        .struct_size = sizeof(WalletEnginePlatformHostCallbacks),
+        .context = &context,
+        .retain = retain_context,
+        .release = release_context,
+        .store_protected_secret = store_protected_secret,
+    };
+    WalletEngineLifecycle *lifecycle = (WalletEngineLifecycle *)(uintptr_t)1;
+
+    CHECK(
+        wallet_engine_lifecycle_new(NULL, &lifecycle) ==
+        WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT
+    );
+    CHECK(lifecycle == NULL);
+    CHECK(context.retains == 0);
+    CHECK(
+        wallet_engine_lifecycle_new(&callbacks, NULL) ==
+        WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT
+    );
+    CHECK(context.retains == 0);
+
+    CHECK(
+        wallet_engine_lifecycle_new(&callbacks, &lifecycle) ==
+        WALLET_ENGINE_ABI_STATUS_OK
+    );
+    CHECK(lifecycle != NULL);
+    CHECK(context.retains == 1);
+    CHECK(context.releases == 0);
+
+    wallet_engine_lifecycle_free(lifecycle);
+    CHECK(context.releases == 1);
+    wallet_engine_lifecycle_free(NULL);
+    CHECK(context.releases == 1);
+    return 1;
+}
+
 int main(void) {
     if (!test_abi_version() || !test_status_values() || !test_network_values() ||
         !test_protected_secret_host_error_values() ||
         !test_wallet_lifecycle_error_values() || !test_borrowed_views() ||
-        !test_create_wallet_types() || !test_platform_host_contract()) {
+        !test_create_wallet_types() || !test_platform_host_contract() ||
+        !test_lifecycle_handle()) {
         return 1;
     }
 
