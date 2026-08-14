@@ -26,11 +26,21 @@ after_includes = """
 [export]
 include = [
     "ABI_VERSION",
+    "WalletEngineAbiStatus",
+    "WalletEngineStringView",
+    "WalletEngineBytesView",
+    "WalletEngineNetwork",
+    "WALLET_ENGINE_NETWORK_MAINNET",
+    "WALLET_ENGINE_NETWORK_TESTNET",
     "wallet_engine_abi_version",
 ]
 
 [export.rename]
 "ABI_VERSION" = "WALLET_ENGINE_ABI_VERSION"
+
+[enum]
+rename_variants = "ScreamingSnakeCase"
+prefix_with_name = true
 
 [fn]
 prefix = "WALLET_ENGINE_API"

@@ -73,9 +73,15 @@ Generate the C ABI header:
 just bindings-c
 ```
 
-The ABI lives in the separate `c-bindings` crate, and its header is generated
-with `cbindgen`. See [the C example](examples/c/README.md) for build and run
-commands.
+Build the native library and run the C11 ABI tests:
+
+```shell
+just test-c
+```
+
+The ABI lives in the separate `c-bindings` crate, and its header
+is generated with `cbindgen`. See [the C example](examples/c/README.md) for
+build and run commands.
 
 Except for the checked-in C ABI header, this repository does not track generated
 bindings. Generate them from the same revision that you use to build the Rust

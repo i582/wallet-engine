@@ -11,7 +11,7 @@ just example-c-run
 
 Use `just example-c-build` when you only need to build it.
 
-The header is generated from the separate `c-bindings` crate with `cbindgen`:
+The header is generated from the separate `c-bindings` crate:
 
 ```shell
 cargo xtask bindings c

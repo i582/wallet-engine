@@ -41,7 +41,7 @@ clippy:
     cargo clippy --locked --manifest-path wasm-bindings/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
     cargo clippy --locked --manifest-path xtask/Cargo.toml --all-targets -- -D warnings
 
-test:
+test: test-c
     cargo test --locked
     cargo test --locked --manifest-path c-bindings/Cargo.toml
     cargo test --locked --manifest-path xtask/Cargo.toml
@@ -78,6 +78,11 @@ bindings-c-check:
 
 build-c:
     cargo build --release --locked --manifest-path c-bindings/Cargo.toml
+
+test-c: bindings-c build-c
+    cmake -S c-bindings/tests/c -B target/c-tests
+    cmake --build target/c-tests
+    ctest --test-dir target/c-tests --output-on-failure
 
 web-install:
     bun install --cwd web --frozen-lockfile
