@@ -146,6 +146,18 @@ pub enum WalletClientError {
     /// The internal state lock or active operation state is unavailable.
     #[error(" wallet client state is unavailable")]
     StateUnavailable,
+    /// A send failed before submission became ambiguous.
+    #[error("send failed: {diagnostic}")]
+    SendFailed {
+        /// A bounded developer-facing explanation that contains no secrets.
+        diagnostic: String,
+    },
+    /// A send can have reached the provider, but no definite result is available.
+    #[error("submission outcome is unknown: {diagnostic}")]
+    SubmissionUnknown {
+        /// A bounded developer-facing explanation that contains no secrets.
+        diagnostic: String,
+    },
     /// A send crossed its durable commit boundary and cannot be cancelled.
     #[error("the send has crossed its durable commit boundary and can no longer be cancelled")]
     SendCancellationTooLate,

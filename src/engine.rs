@@ -496,8 +496,8 @@ impl WalletClient {
     /// create a replacement transfer for the same funds. This crate does not
     /// reconcile the result or stream chain confirmation.
     ///
-    /// Some workflow failures return [`WalletClientError::StateUnavailable`].
-    /// Read `snapshot().send.error_message` for the sanitized workflow detail.
+    /// Workflow failures return [`WalletClientError::SendFailed`] with the same
+    /// bounded diagnostic published in `snapshot().send.error_message`.
     pub async fn send(&self, request: SendRequest) -> Result<SendResult, WalletClientError> {
         // Reject malformed input before reserving IDs or changing observable state.
         validate_send(&request)?;
@@ -574,22 +574,17 @@ impl WalletClient {
 
         // Read the durable wallet-wide send slot before fetching or signing.
         // An unresolved earlier submission must block creation of a different signed message.
-        let journal_record =
-            self.platform_host
-                .load_journal(journal_key)
-                .await
-                .map_err(|error| {
-                    let _ = self.fail_send(generation, error.to_string());
-                    WalletClientError::StateUnavailable
-                })?;
+        let journal_record = self
+            .platform_host
+            .load_journal(journal_key)
+            .await
+            .map_err(|error| self.send_failed_error(generation, error.to_string()))?;
         self.ensure_current_send(generation)?;
-        let directive = workflow.journal_loaded(journal_record).map_err(|error| {
-            let _ = self.fail_send(generation, error.to_string());
-            WalletClientError::StateUnavailable
-        })?;
+        let directive = workflow
+            .journal_loaded(journal_record)
+            .map_err(|error| self.send_failed_error(generation, error.to_string()))?;
         let SendDirective::FetchFreshAccount = directive else {
-            self.fail_send(generation, "invalid send journal transition".to_owned())?;
-            return Err(WalletClientError::StateUnavailable);
+            return Err(self.send_failed_error(generation, "invalid send journal transition"));
         };
         self.publish_send_workflow(generation, &workflow)?;
 
@@ -598,11 +593,8 @@ impl WalletClient {
         let account_response = self
             .execute_tracked_send_call(generation, &account_call)
             .await?;
-        let account =
-            evaluate_for_call(&account_call, account_response, parse_account).map_err(|error| {
-                let _ = self.fail_send(generation, error.developer_message);
-                WalletClientError::StateUnavailable
-            })?;
+        let account = evaluate_for_call(&account_call, account_response, parse_account)
+            .map_err(|error| self.send_failed_error(generation, error.developer_message))?;
         // Active wallets require a fresh seqno for replay protection. A wallet that is not yet
         // deployed starts at seqno zero; the workflow rejects unsupported account states later.
         let seqno = if account.status == AccountStatus::Active {
@@ -610,10 +602,8 @@ impl WalletClient {
                 .execute_tracked_send_call(generation, &seqno_call)
                 .await?;
 
-            evaluate_for_call(&seqno_call, seqno_response, parse_seqno).map_err(|error| {
-                let _ = self.fail_send(generation, error.developer_message);
-                WalletClientError::StateUnavailable
-            })?
+            evaluate_for_call(&seqno_call, seqno_response, parse_seqno)
+                .map_err(|error| self.send_failed_error(generation, error.developer_message))?
         } else {
             0
         };
@@ -625,13 +615,9 @@ impl WalletClient {
 
         let directive = workflow
             .fresh_account_loaded(fresh.clone())
-            .map_err(|error| {
-                let _ = self.fail_send(generation, error.to_string());
-                WalletClientError::StateUnavailable
-            })?;
+            .map_err(|error| self.send_failed_error(generation, error.to_string()))?;
         let SendDirective::ReadProtectedSecret(secret_request) = directive else {
-            self.fail_send(generation, "invalid secret-read transition".to_owned())?;
-            return Err(WalletClientError::StateUnavailable);
+            return Err(self.send_failed_error(generation, "invalid secret-read transition"));
         };
 
         self.publish_send_workflow(generation, &workflow)?;
@@ -642,39 +628,27 @@ impl WalletClient {
             self.platform_host
                 .read_protected_secret(secret_request)
                 .await
-                .map_err(|error| {
-                    let _ = self.fail_send(generation, error.to_string());
-                    WalletClientError::StateUnavailable
-                })?,
+                .map_err(|error| self.send_failed_error(generation, error.to_string()))?,
         );
         self.ensure_current_send(generation)?;
 
         // Derive the source again from the unlocked mnemonic. This prevents signing a transfer
         // for wallet A with a secret that belongs to wallet B.
-        let source = derive_source(secret.as_slice(), config.network).map_err(|_| {
-            let _ = self.fail_send(generation, "protected mnemonic is invalid".to_owned());
-            WalletClientError::InvalidConfig
-        })?;
+        let source = derive_source(secret.as_slice(), config.network)
+            .map_err(|_| self.send_failed_error(generation, "protected mnemonic is invalid"))?;
 
         if source != expected_source {
-            self.fail_send(
+            return Err(self.send_failed_error(
                 generation,
-                "protected mnemonic does not belong to this wallet".to_owned(),
-            )?;
-            return Err(WalletClientError::InvalidConfig);
+                "protected mnemonic does not belong to this wallet",
+            ));
         }
 
-        let SendDirective::PrepareTransfer { .. } =
-            workflow.authorization_succeeded().map_err(|error| {
-                let _ = self.fail_send(generation, error.to_string());
-                WalletClientError::StateUnavailable
-            })?
+        let SendDirective::PrepareTransfer { .. } = workflow
+            .authorization_succeeded()
+            .map_err(|error| self.send_failed_error(generation, error.to_string()))?
         else {
-            self.fail_send(
-                generation,
-                "invalid send authorization transition".to_owned(),
-            )?;
-            return Err(WalletClientError::StateUnavailable);
+            return Err(self.send_failed_error(generation, "invalid send authorization transition"));
         };
 
         self.publish_send_workflow(generation, &workflow)?;
@@ -702,23 +676,17 @@ impl WalletClient {
             valid_until,
         )
         .map_err(|error| {
-            let _ = self.fail_send(generation, format!("failed to prepare transfer: {error}"));
-            WalletClientError::StateUnavailable
+            self.send_failed_error(generation, format!("failed to prepare transfer: {error}"))
         })?;
 
         let summary = prepared.public_summary();
         let submit_call = build_send_boc_call(&config, submit_call_id, &prepared.signed_boc)
-            .map_err(|_| {
-                let _ = self.fail_send(generation, "failed to construct submission".to_owned());
-                WalletClientError::StateUnavailable
-            })?;
-        let directive = workflow.transfer_prepared(prepared).map_err(|error| {
-            let _ = self.fail_send(generation, error.to_string());
-            WalletClientError::StateUnavailable
-        })?;
+            .map_err(|_| self.send_failed_error(generation, "failed to construct submission"))?;
+        let directive = workflow
+            .transfer_prepared(prepared)
+            .map_err(|error| self.send_failed_error(generation, error.to_string()))?;
         let SendDirective::PersistJournal(mutation) = directive else {
-            self.fail_send(generation, "invalid send persistence transition".to_owned())?;
-            return Err(WalletClientError::StateUnavailable);
+            return Err(self.send_failed_error(generation, "invalid send persistence transition"));
         };
         self.publish_send_workflow(generation, &workflow)?;
 
@@ -728,8 +696,7 @@ impl WalletClient {
         let journal = match self.platform_host.compare_exchange_journal(mutation).await {
             Ok(journal) => journal,
             Err(error) => {
-                self.mark_send_unknown(generation, error.to_string())?;
-                return Err(WalletClientError::StateUnavailable);
+                return Err(self.submission_unknown_error(generation, error.to_string()));
             }
         };
         self.ensure_current_send(generation)?;
@@ -737,11 +704,10 @@ impl WalletClient {
         let journal_applied = journal.applied;
         let directive = workflow.journal_persisted(journal).map_err(|error| {
             if journal_applied {
-                let _ = self.mark_send_unknown(generation, error.to_string());
+                self.submission_unknown_error(generation, error.to_string())
             } else {
-                let _ = self.fail_send(generation, error.to_string());
+                self.send_failed_error(generation, error.to_string())
             }
-            WalletClientError::StateUnavailable
         })?;
 
         let SendDirective::Submit {
@@ -749,13 +715,13 @@ impl WalletClient {
             message_hash,
         } = directive
         else {
-            self.mark_send_unknown(generation, "invalid send submission transition".to_owned())?;
-            return Err(WalletClientError::StateUnavailable);
+            return Err(
+                self.submission_unknown_error(generation, "invalid send submission transition")
+            );
         };
-        workflow.submission_started().map_err(|error| {
-            let _ = self.mark_send_unknown(generation, error.to_string());
-            WalletClientError::StateUnavailable
-        })?;
+        workflow
+            .submission_started()
+            .map_err(|error| self.submission_unknown_error(generation, error.to_string()))?;
         self.publish_send_workflow(generation, &workflow)?;
 
         // Submit exactly the BOC stored above. Transport or malformed-response failures are
@@ -777,16 +743,10 @@ impl WalletClient {
             }
             Err(error) => workflow.submission_unknown(bounded_diagnostic(error.to_string())),
         }
-        .map_err(|error| {
-            let _ = self.mark_send_unknown(generation, error.to_string());
-            WalletClientError::StateUnavailable
-        })?;
+        .map_err(|error| self.submission_unknown_error(generation, error.to_string()))?;
         let SendDirective::PersistJournal(mutation) = final_directive else {
-            self.mark_send_unknown(
-                generation,
-                "invalid terminal persistence transition".to_owned(),
-            )?;
-            return Err(WalletClientError::StateUnavailable);
+            return Err(self
+                .submission_unknown_error(generation, "invalid terminal persistence transition"));
         };
         self.publish_send_workflow(generation, &workflow)?;
         self.ensure_current_send(generation)?;
@@ -796,15 +756,13 @@ impl WalletClient {
         let journal = match self.platform_host.compare_exchange_journal(mutation).await {
             Ok(journal) => journal,
             Err(error) => {
-                self.mark_send_unknown(generation, error.to_string())?;
-                return Err(WalletClientError::StateUnavailable);
+                return Err(self.submission_unknown_error(generation, error.to_string()));
             }
         };
         self.ensure_current_send(generation)?;
-        workflow.journal_persisted(journal).map_err(|error| {
-            let _ = self.mark_send_unknown(generation, error.to_string());
-            WalletClientError::StateUnavailable
-        })?;
+        workflow
+            .journal_persisted(journal)
+            .map_err(|error| self.submission_unknown_error(generation, error.to_string()))?;
         let phase = workflow.snapshot().phase;
 
         // Publish one terminal snapshot and release the single-flight send slot.
@@ -962,6 +920,15 @@ impl WalletClient {
         Ok(())
     }
 
+    fn send_failed_error(&self, generation: u64, message: impl Into<String>) -> WalletClientError {
+        let diagnostic = bounded_diagnostic(message.into());
+
+        match self.fail_send(generation, diagnostic.clone()) {
+            Ok(()) => WalletClientError::SendFailed { diagnostic },
+            Err(error) => error,
+        }
+    }
+
     fn mark_send_unknown(&self, generation: u64, message: String) -> Result<(), WalletClientError> {
         let mut state = self.lock()?;
         if state.is_current(OperationFamily::Send, generation) {
@@ -973,6 +940,19 @@ impl WalletClient {
         }
 
         Ok(())
+    }
+
+    fn submission_unknown_error(
+        &self,
+        generation: u64,
+        message: impl Into<String>,
+    ) -> WalletClientError {
+        let diagnostic = bounded_diagnostic(message.into());
+
+        match self.mark_send_unknown(generation, diagnostic.clone()) {
+            Ok(()) => WalletClientError::SubmissionUnknown { diagnostic },
+            Err(error) => error,
+        }
     }
 
     fn begin_send_commit(&self, generation: u64) -> Result<(), WalletClientError> {
