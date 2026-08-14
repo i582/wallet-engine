@@ -9,6 +9,7 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
 
+use crate::diagnostic::bounded_diagnostic;
 use crate::domain::{
     AccountStatus, JournalCompareExchange, JournalCompareExchangeResult, JournalKey, JournalRecord,
     PreparedSend, ProtectedSecretRead, SecretAccessReason, SendPhase, SendRequest, SendSnapshot,
@@ -401,7 +402,7 @@ impl SendWorkflow {
     ) -> Result<SendDirective, SendWorkflowError> {
         self.expect(SendStage::Submitting, "submission_unknown")?;
 
-        self.diagnostic = Some(sanitize_diagnostic(diagnostic));
+        self.diagnostic = Some(bounded_diagnostic(diagnostic));
         self.stage = SendStage::SubmissionUnknown;
 
         self.persist_directive()
@@ -518,7 +519,7 @@ impl SendWorkflow {
 
     fn fail(&mut self, diagnostic: impl Into<String>) {
         self.stage = SendStage::Failed;
-        self.diagnostic = Some(sanitize_diagnostic(diagnostic.into()));
+        self.diagnostic = Some(bounded_diagnostic(diagnostic.into()));
     }
 }
 
@@ -620,12 +621,4 @@ fn next_journal_version(current: Option<u64>) -> Result<u64, SendWorkflowError> 
             .ok_or_else(|| SendWorkflowError::InvalidJournal("version exhausted".to_owned())),
         None => Ok(FIRST_JOURNAL_VERSION),
     }
-}
-
-fn sanitize_diagnostic(value: String) -> String {
-    value
-        .chars()
-        .filter(|character| !character.is_control() || *character == ' ')
-        .take(256)
-        .collect()
 }

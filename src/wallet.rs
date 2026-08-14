@@ -5,17 +5,15 @@
 
 use std::sync::Arc;
 
+use crate::diagnostic::bounded_diagnostic;
 use crate::domain::{
     Network, ProtectedSecretHostError, ProtectedSecretHostErrorKind, ProtectedSecretRead,
     ProtectedSecretRef, ProtectedSecretStore, SecretAccessReason,
 };
 use crate::engine::WalletPlatformHost;
-use crate::wallet_crypto::{derive_v5r1_address, generate_mnemonic};
+use crate::wallet_crypto::{SensitiveMnemonic, derive_v5r1_wallet, generate_mnemonic};
 
-const MNEMONIC_WORD_COUNT: usize = 24;
 const MAX_RECORD_ID_BYTES: usize = 128;
-const MAX_SECRET_REF_BYTES: usize = 256;
-const MAX_HOST_DIAGNOSTIC_BYTES: usize = 256;
 
 /// Public, persistable wallet metadata. Recovery words never belong here.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
@@ -120,7 +118,7 @@ impl From<ProtectedSecretHostError> for WalletLifecycleError {
         match value {
             ProtectedSecretHostError::Failed { kind, diagnostic } => Self::ProtectedSecretHost {
                 kind,
-                diagnostic: sanitize_diagnostic(&diagnostic),
+                diagnostic: bounded_diagnostic(diagnostic),
             },
         }
     }
@@ -157,14 +155,13 @@ impl WalletLifecycle {
     ) -> Result<CreatedWallet, WalletLifecycleError> {
         validate_record_id(&request.record_id)?;
 
-        let mnemonic =
+        let secret =
             generate_mnemonic().map_err(|_| WalletLifecycleError::InvalidRecoveryPhrase)?;
-        let secret = SensitiveMnemonic::from_generated(mnemonic)?;
         let descriptor = derive_descriptor(&request.record_id, request.network, &secret)?;
 
         self.store(&descriptor.secret_ref, secret.as_bytes())
             .await?;
-        let recovery_phrase = secret.presentation()?;
+        let recovery_phrase = recovery_phrase(&secret)?;
 
         Ok(CreatedWallet {
             descriptor,
@@ -182,7 +179,8 @@ impl WalletLifecycle {
     ) -> Result<WalletDescriptor, WalletLifecycleError> {
         validate_record_id(&request.record_id)?;
 
-        let secret = SensitiveMnemonic::from_words(request.recovery_words)?;
+        let secret = SensitiveMnemonic::from_words(request.recovery_words)
+            .map_err(|_| WalletLifecycleError::InvalidRecoveryPhrase)?;
         let descriptor = derive_descriptor(&request.record_id, request.network, &secret)?;
 
         self.store(&descriptor.secret_ref, secret.as_bytes())
@@ -209,14 +207,15 @@ impl WalletLifecycle {
             })
             .await?;
 
-        let secret = SensitiveMnemonic::from_bytes(bytes)?;
+        let secret = SensitiveMnemonic::from_bytes(bytes)
+            .map_err(|_| WalletLifecycleError::InvalidRecoveryPhrase)?;
         let actual = derive_address(descriptor.network, &secret)?;
 
         if actual != descriptor.address {
             return Err(WalletLifecycleError::SecretWalletMismatch);
         }
 
-        secret.presentation()
+        recovery_phrase(&secret)
     }
 
     /// Deletes the protected secret for a wallet descriptor.
@@ -255,92 +254,12 @@ impl WalletLifecycle {
     }
 }
 
-/// Secret memory owned by Rust while a lifecycle operation is in flight.
-///
-/// FFI and platform APIs can still make bounded transient copies. This type
-/// guarantees only that the buffer retained by this Rust operation is wiped.
-struct SensitiveMnemonic {
-    bytes: Vec<u8>,
-}
-
-impl SensitiveMnemonic {
-    fn from_generated(mnemonic: String) -> Result<Self, WalletLifecycleError> {
-        Self::from_bytes(mnemonic.into_bytes())
-    }
-
-    fn from_words(words: Vec<String>) -> Result<Self, WalletLifecycleError> {
-        if words.len() != MNEMONIC_WORD_COUNT {
-            return Err(WalletLifecycleError::InvalidRecoveryPhrase);
-        }
-
-        let mut candidate = Self {
-            bytes: Vec::with_capacity(words.iter().map(String::len).sum::<usize>() + 23),
-        };
-
-        for (index, word) in words.into_iter().enumerate() {
-            if !valid_mnemonic_word(&word) {
-                return Err(WalletLifecycleError::InvalidRecoveryPhrase);
-            }
-
-            if index != 0 {
-                candidate.bytes.push(b' ');
-            }
-
-            candidate.bytes.extend_from_slice(word.as_bytes());
-        }
-
-        candidate.validate()?;
-
-        Ok(candidate)
-    }
-
-    fn from_bytes(bytes: Vec<u8>) -> Result<Self, WalletLifecycleError> {
-        let candidate = Self { bytes };
-
-        candidate.validate()?;
-
-        Ok(candidate)
-    }
-
-    fn validate(&self) -> Result<(), WalletLifecycleError> {
-        let phrase = self.as_str()?;
-        let words = phrase.split(' ').collect::<Vec<_>>();
-
-        if words.len() != MNEMONIC_WORD_COUNT || words.iter().any(|word| !valid_mnemonic_word(word))
-        {
-            return Err(WalletLifecycleError::InvalidRecoveryPhrase);
-        }
-
-        Ok(())
-    }
-
-    fn as_bytes(&self) -> &[u8] {
-        &self.bytes
-    }
-
-    fn as_str(&self) -> Result<&str, WalletLifecycleError> {
-        std::str::from_utf8(&self.bytes).map_err(|_| WalletLifecycleError::InvalidRecoveryPhrase)
-    }
-
-    fn presentation(&self) -> Result<RecoveryPhrase, WalletLifecycleError> {
-        Ok(RecoveryPhrase {
-            words: self.as_str()?.split(' ').map(str::to_owned).collect(),
-        })
-    }
-}
-
-impl Drop for SensitiveMnemonic {
-    fn drop(&mut self) {
-        self.bytes.fill(0);
-    }
-}
-
 fn derive_descriptor(
     record_id: &str,
     network: Network,
     secret: &SensitiveMnemonic,
 ) -> Result<WalletDescriptor, WalletLifecycleError> {
-    let secret_ref = secret_ref_for(record_id)?;
+    let secret_ref = secret_ref_for(record_id);
 
     Ok(WalletDescriptor {
         record_id: record_id.to_owned(),
@@ -354,26 +273,36 @@ fn derive_address(
     network: Network,
     secret: &SensitiveMnemonic,
 ) -> Result<String, WalletLifecycleError> {
-    derive_v5r1_address(secret.as_str()?, network, false)
-        .map_err(|_| WalletLifecycleError::AddressDerivationFailed)
+    let phrase = secret
+        .as_str()
+        .map_err(|_| WalletLifecycleError::InvalidRecoveryPhrase)?;
+
+    let wallet = derive_v5r1_wallet(phrase, network)
+        .map_err(|_| WalletLifecycleError::AddressDerivationFailed)?;
+
+    Ok(wallet
+        .address
+        .to_base64(network == Network::Mainnet, false, true))
 }
 
-fn secret_ref_for(record_id: &str) -> Result<ProtectedSecretRef, WalletLifecycleError> {
-    validate_record_id(record_id)?;
+fn recovery_phrase(secret: &SensitiveMnemonic) -> Result<RecoveryPhrase, WalletLifecycleError> {
+    Ok(RecoveryPhrase {
+        words: secret
+            .words()
+            .map_err(|_| WalletLifecycleError::InvalidRecoveryPhrase)?,
+    })
+}
 
-    let value = format!("wallet:{record_id}:mnemonic");
-
-    if value.len() > MAX_SECRET_REF_BYTES {
-        return Err(WalletLifecycleError::InvalidRecordId);
+fn secret_ref_for(record_id: &str) -> ProtectedSecretRef {
+    ProtectedSecretRef {
+        value: format!("wallet:{record_id}:mnemonic"),
     }
-
-    Ok(ProtectedSecretRef { value })
 }
 
 fn validate_descriptor(descriptor: &WalletDescriptor) -> Result<(), WalletLifecycleError> {
     validate_record_id(&descriptor.record_id)?;
 
-    if descriptor.secret_ref != secret_ref_for(&descriptor.record_id)?
+    if descriptor.secret_ref != secret_ref_for(&descriptor.record_id)
         || descriptor.address.is_empty()
     {
         return Err(WalletLifecycleError::InvalidRecordId);
@@ -393,27 +322,4 @@ fn validate_record_id(record_id: &str) -> Result<(), WalletLifecycleError> {
     }
 
     Ok(())
-}
-
-fn valid_mnemonic_word(word: &str) -> bool {
-    !word.is_empty()
-        && word.len() <= 32
-        && word
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() && byte.is_ascii_alphabetic())
-}
-
-fn sanitize_diagnostic(message: &str) -> String {
-    let mut result = String::with_capacity(message.len().min(MAX_HOST_DIAGNOSTIC_BYTES));
-    for character in message.chars() {
-        if result.len() >= MAX_HOST_DIAGNOSTIC_BYTES {
-            break;
-        }
-        result.push(if character.is_control() {
-            ' '
-        } else {
-            character
-        });
-    }
-    result
 }

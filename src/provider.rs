@@ -10,6 +10,7 @@ use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_S
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::Value;
 
+use crate::diagnostic::bounded_diagnostic;
 use crate::{
     AccountSnapshot, AccountStatus, ActivityCursor, ActivityDirection, ActivityItem, DomainError,
     ErrorCategory, ErrorCode, HttpHeader, RetryAdvice,
@@ -313,7 +314,7 @@ fn provider_envelope_error(envelope: RawEnvelope) -> DomainError {
             code: ErrorCode::RateLimited,
             category: ErrorCategory::RateLimit,
             retry: RetryAdvice::Safe,
-            developer_message: sanitize_diagnostic(&developer_message),
+            developer_message: bounded_diagnostic(developer_message),
             provider_status: status,
             retry_after_ms: None,
             host_kind: None,
@@ -328,7 +329,7 @@ fn provider_envelope_error(envelope: RawEnvelope) -> DomainError {
         } else {
             RetryAdvice::None
         },
-        developer_message: sanitize_diagnostic(&developer_message),
+        developer_message: bounded_diagnostic(developer_message),
         provider_status: status,
         retry_after_ms: None,
         host_kind: None,
@@ -354,7 +355,7 @@ fn invalid_response(message: impl Into<String>) -> DomainError {
         code: ErrorCode::InvalidProviderResponse,
         category: ErrorCategory::ProviderProtocol,
         retry: RetryAdvice::None,
-        developer_message: sanitize_diagnostic(&message.into()),
+        developer_message: bounded_diagnostic(message.into()),
         provider_status: None,
         retry_after_ms: None,
         host_kind: None,
@@ -430,23 +431,7 @@ fn provider_message(body: &[u8]) -> Option<String> {
     ["error", "description", "message"]
         .into_iter()
         .find_map(|field| value.get(field).and_then(Value::as_str))
-        .map(sanitize_diagnostic)
-}
-
-pub(crate) fn sanitize_diagnostic(message: &str) -> String {
-    message
-        .chars()
-        .map(|character| {
-            if character.is_control() {
-                ' '
-            } else {
-                character
-            }
-        })
-        .take(512)
-        .collect::<String>()
-        .trim()
-        .to_owned()
+        .map(bounded_diagnostic)
 }
 
 fn parse_retry_after_ms(headers: &[HttpHeader]) -> Option<u64> {

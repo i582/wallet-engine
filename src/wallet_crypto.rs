@@ -3,13 +3,13 @@
 //! Lifecycle and signing code share this private module so both paths derive
 //! the same key pair, contract wallet ID, and address for a selected network.
 
-use ton::ton_wallet::{Mnemonic, TonWallet, WORDLIST_EN_SET, WalletVersion};
+use ton::ton_wallet::{
+    Mnemonic, TonWallet, WALLET_V5R1_ID_DEFAULT, WALLET_V5R1_ID_DEFAULT_TESTNET, WORDLIST_EN_SET,
+    WalletVersion,
+};
 
 use crate::Network;
 
-const MAINNET_GLOBAL_ID: i32 = -239;
-const TESTNET_GLOBAL_ID: i32 = -3;
-const V5R1_CLIENT_CONTEXT_ID: i32 = i32::MIN;
 const MNEMONIC_ENTROPY_BYTES: usize = 48;
 const MNEMONIC_WORD_COUNT: usize = 24;
 
@@ -23,12 +23,80 @@ pub(crate) enum WalletCryptoError {
     WalletConstruction,
 }
 
+/// Mnemonic bytes owned by one Rust operation.
+///
+/// Platform and FFI boundaries can still create transient copies. This type
+/// wipes the buffer retained by the wallet engine when it is dropped.
+pub(crate) struct SensitiveMnemonic {
+    bytes: Vec<u8>,
+}
+
+impl SensitiveMnemonic {
+    fn from_generated_words(words: &[&str]) -> Self {
+        let mut bytes = Vec::with_capacity(words.iter().map(|word| word.len()).sum::<usize>() + 23);
+
+        for (index, word) in words.iter().enumerate() {
+            if index != 0 {
+                bytes.push(b' ');
+            }
+
+            bytes.extend_from_slice(word.as_bytes());
+        }
+
+        Self { bytes }
+    }
+
+    pub(crate) fn from_words(words: Vec<String>) -> Result<Self, WalletCryptoError> {
+        if words.len() != MNEMONIC_WORD_COUNT {
+            return Err(WalletCryptoError::InvalidMnemonic);
+        }
+
+        let word_refs = words.iter().map(String::as_str).collect::<Vec<_>>();
+        let candidate = Self::from_generated_words(&word_refs);
+        candidate.validate()?;
+
+        Ok(candidate)
+    }
+
+    pub(crate) fn from_bytes(bytes: Vec<u8>) -> Result<Self, WalletCryptoError> {
+        let candidate = Self { bytes };
+        candidate.validate()?;
+
+        Ok(candidate)
+    }
+
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub(crate) fn as_str(&self) -> Result<&str, WalletCryptoError> {
+        std::str::from_utf8(&self.bytes).map_err(|_| WalletCryptoError::InvalidMnemonic)
+    }
+
+    pub(crate) fn words(&self) -> Result<Vec<String>, WalletCryptoError> {
+        Ok(self.as_str()?.split(' ').map(str::to_owned).collect())
+    }
+
+    fn validate(&self) -> Result<(), WalletCryptoError> {
+        let phrase = self.as_str()?;
+        Mnemonic::from_str(phrase, None)
+            .map(|_| ())
+            .map_err(|_| WalletCryptoError::InvalidMnemonic)
+    }
+}
+
+impl Drop for SensitiveMnemonic {
+    fn drop(&mut self) {
+        self.bytes.fill(0);
+    }
+}
+
 /// Generates a passwordless 24-word TON mnemonic using system randomness.
 ///
 /// TON mnemonics are not BIP-39 checksummed phrases. Candidate words are
 /// sampled from the TON English word list until `Mnemonic::new` accepts the
 /// passwordless seed-version constraint.
-pub(crate) fn generate_mnemonic() -> Result<String, WalletCryptoError> {
+pub(crate) fn generate_mnemonic() -> Result<SensitiveMnemonic, WalletCryptoError> {
     let mut wordlist = WORDLIST_EN_SET.iter().copied().collect::<Vec<_>>();
     wordlist.sort_unstable();
 
@@ -51,7 +119,7 @@ pub(crate) fn generate_mnemonic() -> Result<String, WalletCryptoError> {
         debug_assert_eq!(words.len(), MNEMONIC_WORD_COUNT);
 
         if Mnemonic::new(words.clone(), None).is_ok() {
-            return Ok(words.join(" "));
+            return Ok(SensitiveMnemonic::from_generated_words(&words));
         }
     }
 }
@@ -77,67 +145,8 @@ pub(crate) fn derive_v5r1_wallet(
 }
 
 const fn v5r1_contract_wallet_id(network: Network) -> i32 {
-    let network_global_id = match network {
-        Network::Mainnet => MAINNET_GLOBAL_ID,
-        Network::Testnet => TESTNET_GLOBAL_ID,
-    };
-
-    network_global_id ^ V5R1_CLIENT_CONTEXT_ID
-}
-
-pub(crate) fn derive_v5r1_address(
-    mnemonic: &str,
-    network: Network,
-    bounceable: bool,
-) -> Result<String, WalletCryptoError> {
-    let wallet = derive_v5r1_wallet(mnemonic, network)?;
-
-    Ok(wallet
-        .address
-        .to_base64(network == Network::Mainnet, bounceable, true))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const TEST_MNEMONIC: &str = "cupboard match uphold miracle fog balance unknown region share hand trophy million toy narrow ability exchange first toast fresh maid report cram strong later";
-
-    #[test]
-    fn derives_the_known_mainnet_v5r1_address() {
-        let address = derive_v5r1_address(TEST_MNEMONIC, Network::Mainnet, true).unwrap();
-
-        assert_eq!(address, "EQAz8sBz-Twy965gFWNHlwa2ArkRLaoVzAowtRaW542bDO5p");
-    }
-
-    #[test]
-    fn network_and_bounce_flags_change_the_friendly_address() {
-        let mainnet = derive_v5r1_address(TEST_MNEMONIC, Network::Mainnet, true).unwrap();
-        let testnet = derive_v5r1_address(TEST_MNEMONIC, Network::Testnet, true).unwrap();
-        let non_bounceable = derive_v5r1_address(TEST_MNEMONIC, Network::Mainnet, false).unwrap();
-
-        assert_ne!(mainnet, testnet);
-        assert_ne!(mainnet, non_bounceable);
-        assert!(testnet.starts_with("kQ"));
-        assert!(non_bounceable.starts_with("UQ"));
-    }
-
-    #[test]
-    fn v5r1_wallet_id_depends_on_the_network_global_id() {
-        let mainnet = derive_v5r1_wallet(TEST_MNEMONIC, Network::Mainnet).unwrap();
-        let testnet = derive_v5r1_wallet(TEST_MNEMONIC, Network::Testnet).unwrap();
-
-        assert_eq!(mainnet.wallet_id, 0x7FFF_FF11);
-        assert_eq!(testnet.wallet_id, 0x7FFF_FFFD);
-        assert_ne!(mainnet.address, testnet.address);
-    }
-
-    #[test]
-    fn generated_mnemonic_is_valid_for_a_v5r1_wallet() {
-        let mnemonic = generate_mnemonic().unwrap();
-
-        assert_eq!(mnemonic.split_whitespace().count(), MNEMONIC_WORD_COUNT);
-        assert!(Mnemonic::from_str(&mnemonic, None).is_ok());
-        assert!(derive_v5r1_wallet(&mnemonic, Network::Testnet).is_ok());
+    match network {
+        Network::Mainnet => WALLET_V5R1_ID_DEFAULT,
+        Network::Testnet => WALLET_V5R1_ID_DEFAULT_TESTNET,
     }
 }

@@ -15,9 +15,9 @@ use serde_json::Value;
 use ton::ton_core::types::TonAddress;
 use url::Url;
 
+use crate::diagnostic::bounded_diagnostic;
 use crate::provider::{
     ActivityPage, activity_item_order, decimal_cmp, parse_account, parse_activity, response_error,
-    sanitize_diagnostic,
 };
 use crate::send::{FreshSendAccount, SendDirective, SendWorkflow};
 use crate::signer::{derive_source, prepare_transfer};
@@ -756,7 +756,7 @@ impl WalletClient {
                     Err(error) => workflow.submission_unknown(error.developer_message),
                 }
             }
-            Err(error) => workflow.submission_unknown(sanitize_diagnostic(&error.to_string())),
+            Err(error) => workflow.submission_unknown(bounded_diagnostic(error.to_string())),
         }
         .map_err(|error| {
             let _ = self.mark_send_unknown(generation, error.to_string());
@@ -935,7 +935,7 @@ impl WalletClient {
             state.active_send = None;
             state.send_commit_started = false;
             state.snapshot.send.phase = SendPhase::Failed;
-            state.snapshot.send.error_message = Some(sanitize_diagnostic(&message));
+            state.snapshot.send.error_message = Some(bounded_diagnostic(message));
             state.next_revision()?;
         }
 
@@ -948,7 +948,7 @@ impl WalletClient {
             state.active_send = None;
             state.send_commit_started = false;
             state.snapshot.send.phase = SendPhase::SubmissionUnknown;
-            state.snapshot.send.error_message = Some(sanitize_diagnostic(&message));
+            state.snapshot.send.error_message = Some(bounded_diagnostic(message));
             state.next_revision()?;
         }
 
@@ -1182,7 +1182,7 @@ fn host_error(kind: HttpHostErrorKind, message: &str) -> DomainError {
         } else {
             RetryAdvice::Safe
         },
-        developer_message: sanitize_diagnostic(message),
+        developer_message: bounded_diagnostic(message),
         provider_status: None,
         retry_after_ms: None,
         host_kind: Some(kind),
@@ -1393,7 +1393,7 @@ fn json_error_message(value: &Value) -> String {
         .or_else(|| value.as_str())
         .map_or_else(|| value.to_string(), str::to_owned);
 
-    sanitize_diagnostic(&message)
+    bounded_diagnostic(message)
 }
 
 fn is_explicit_send_rejection(error: &DomainError) -> bool {
@@ -1407,7 +1407,7 @@ fn invalid_json(message: impl Into<String>) -> DomainError {
         code: ErrorCode::InvalidProviderResponse,
         category: ErrorCategory::ProviderProtocol,
         retry: RetryAdvice::None,
-        developer_message: sanitize_diagnostic(&message.into()),
+        developer_message: bounded_diagnostic(message.into()),
         provider_status: None,
         retry_after_ms: None,
         host_kind: None,
