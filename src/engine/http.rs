@@ -138,3 +138,253 @@ fn build_provider_url(
 
     Ok(url.into())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Network, ProviderConfig};
+
+    fn request() -> HttpRequest {
+        HttpRequest {
+            id: HttpRequestId { value: 7 },
+            method: HttpMethod::Get,
+            url: "https://provider.example/api/v2/resource?limit=10".to_owned(),
+            headers: Vec::new(),
+            body: Vec::new(),
+            max_response_header_bytes: 32,
+            max_response_body_bytes: 16,
+        }
+    }
+
+    fn response(request: &HttpRequest, body: &[u8]) -> HttpResponse {
+        HttpResponse {
+            status: 200,
+            headers: Vec::new(),
+            body: body.to_vec(),
+            final_url: request.url.clone(),
+        }
+    }
+
+    fn parse_text(body: &[u8]) -> Result<String, DomainError> {
+        Ok(String::from_utf8_lossy(body).into_owned())
+    }
+
+    #[test]
+    fn accepts_a_bounded_response_and_invokes_the_parser() {
+        let request = request();
+        let parsed = evaluate_response(&request, Ok(response(&request, b"wallet")), parse_text);
+
+        assert_eq!(parsed, Ok("wallet".to_owned()));
+    }
+
+    #[test]
+    fn rejects_a_redirect_before_parsing_the_body() {
+        let request = request();
+        let mut redirected = response(&request, b"ignored");
+        redirected.final_url = "https://attacker.example/response".to_owned();
+
+        let error = evaluate_response(&request, Ok(redirected), parse_text)
+            .expect_err("a changed final URL must be rejected");
+
+        assert_eq!(error.code, ErrorCode::HostPolicyViolation);
+        assert_eq!(error.category, ErrorCategory::HostPolicy);
+        assert_eq!(error.retry, RetryAdvice::None);
+        assert_eq!(error.host_kind, Some(HttpHostErrorKind::PolicyViolation));
+        assert_eq!(
+            error.developer_message,
+            "HTTP redirect or mismatched final URL"
+        );
+    }
+
+    #[test]
+    fn rejects_a_body_above_the_request_limit() {
+        let mut request = request();
+        request.max_response_body_bytes = 3;
+
+        let error = evaluate_response(&request, Ok(response(&request, b"four")), parse_text)
+            .expect_err("an oversized body must be rejected");
+
+        assert_response_too_large(error, "HTTP response exceeded the requested limit");
+    }
+
+    #[test]
+    fn rejects_headers_above_the_combined_request_limit() {
+        let mut request = request();
+        request.max_response_header_bytes = 5;
+        let mut oversized = response(&request, b"ok");
+        oversized.headers = vec![
+            HttpHeader {
+                name: "A".to_owned(),
+                value: "123".to_owned(),
+            },
+            HttpHeader {
+                name: "B".to_owned(),
+                value: "45".to_owned(),
+            },
+        ];
+
+        let error = evaluate_response(&request, Ok(oversized), parse_text)
+            .expect_err("the combined header size must be enforced");
+
+        assert_response_too_large(error, "HTTP response headers exceeded the requested limit");
+    }
+
+    #[test]
+    fn maps_every_host_failure_family_to_a_stable_domain_error() {
+        let cases = [
+            (
+                HttpHostErrorKind::Cancelled,
+                ErrorCode::HostCancelled,
+                ErrorCategory::Cancellation,
+                RetryAdvice::None,
+            ),
+            (
+                HttpHostErrorKind::PolicyViolation,
+                ErrorCode::HostPolicyViolation,
+                ErrorCategory::HostPolicy,
+                RetryAdvice::None,
+            ),
+            (
+                HttpHostErrorKind::ResponseTooLarge,
+                ErrorCode::ResponseTooLarge,
+                ErrorCategory::HostPolicy,
+                RetryAdvice::None,
+            ),
+            (
+                HttpHostErrorKind::Offline,
+                ErrorCode::TransportFailed,
+                ErrorCategory::Transport,
+                RetryAdvice::Safe,
+            ),
+            (
+                HttpHostErrorKind::Timeout,
+                ErrorCode::TransportFailed,
+                ErrorCategory::Transport,
+                RetryAdvice::Safe,
+            ),
+            (
+                HttpHostErrorKind::ConnectionLost,
+                ErrorCode::TransportFailed,
+                ErrorCategory::Transport,
+                RetryAdvice::Safe,
+            ),
+            (
+                HttpHostErrorKind::Dns,
+                ErrorCode::TransportFailed,
+                ErrorCategory::Transport,
+                RetryAdvice::Safe,
+            ),
+            (
+                HttpHostErrorKind::Tls,
+                ErrorCode::TransportFailed,
+                ErrorCategory::Transport,
+                RetryAdvice::Safe,
+            ),
+            (
+                HttpHostErrorKind::Other,
+                ErrorCode::TransportFailed,
+                ErrorCategory::Transport,
+                RetryAdvice::Safe,
+            ),
+        ];
+
+        for (kind, code, category, retry) in cases {
+            let request = request();
+            let error = evaluate_response(
+                &request,
+                Err(HttpHostError::Failed {
+                    kind,
+                    diagnostic: format!("{kind:?} diagnostic"),
+                }),
+                parse_text,
+            )
+            .expect_err("a host error must not reach the parser");
+
+            assert_eq!(error.code, code, "wrong code for {kind:?}");
+            assert_eq!(error.category, category, "wrong category for {kind:?}");
+            assert_eq!(error.retry, retry, "wrong retry advice for {kind:?}");
+            assert_eq!(error.host_kind, Some(kind));
+            assert_eq!(error.provider_status, None);
+            assert_eq!(error.retry_after_ms, None);
+        }
+    }
+
+    #[test]
+    fn forwards_provider_rejections_before_parsing() {
+        let mut request = request();
+        request.max_response_body_bytes = 64;
+        let mut rejected = response(&request, br#"{"error":"denied"}"#);
+        rejected.status = 403;
+
+        let error = evaluate_response(&request, Ok(rejected), parse_text)
+            .expect_err("a provider rejection must not reach the parser");
+
+        assert_eq!(error.code, ErrorCode::HttpRejected);
+        assert_eq!(error.category, ErrorCategory::ProviderProtocol);
+        assert_eq!(error.provider_status, Some(403));
+    }
+
+    #[test]
+    fn builds_a_toncenter_request_without_losing_the_base_path() {
+        let config = WalletClientConfig {
+            record_id: "record".to_owned(),
+            address: "address".to_owned(),
+            network: Network::Testnet,
+            send_validity_seconds: 300,
+            providers: ProviderConfig {
+                toncenter_base_url: "https://provider.example/custom/api/v2/".to_owned(),
+            },
+        };
+
+        let request = build_toncenter_request(
+            &config,
+            HttpRequestId { value: 9 },
+            "getTransactions",
+            &[("address", "0:abc"), ("limit", "10")],
+        )
+        .expect("the provider URL is valid");
+
+        assert_eq!(request.id, HttpRequestId { value: 9 });
+        assert_eq!(request.method, HttpMethod::Get);
+        assert_eq!(
+            request.url,
+            "https://provider.example/custom/api/v2/getTransactions?address=0%3Aabc&limit=10"
+        );
+        assert_eq!(
+            request.headers,
+            vec![HttpHeader {
+                name: "Accept".to_owned(),
+                value: "application/json".to_owned(),
+            }]
+        );
+        assert!(request.body.is_empty());
+        assert_eq!(request.max_response_header_bytes, MAX_RESPONSE_HEADER_BYTES);
+        assert_eq!(request.max_response_body_bytes, MAX_RESPONSE_BODY_BYTES);
+    }
+
+    #[test]
+    fn rejects_a_provider_base_that_cannot_hold_path_segments() {
+        let config = WalletClientConfig {
+            record_id: "record".to_owned(),
+            address: "address".to_owned(),
+            network: Network::Testnet,
+            send_validity_seconds: 300,
+            providers: ProviderConfig {
+                toncenter_base_url: "mailto:provider@example.com".to_owned(),
+            },
+        };
+
+        assert_eq!(
+            build_toncenter_request(&config, HttpRequestId { value: 1 }, "resource", &[],),
+            Err(WalletClientError::InvalidConfig)
+        );
+    }
+
+    fn assert_response_too_large(error: DomainError, diagnostic: &str) {
+        assert_eq!(error.code, ErrorCode::ResponseTooLarge);
+        assert_eq!(error.category, ErrorCategory::HostPolicy);
+        assert_eq!(error.retry, RetryAdvice::None);
+        assert_eq!(error.host_kind, Some(HttpHostErrorKind::ResponseTooLarge));
+        assert_eq!(error.developer_message, diagnostic);
+    }
+}

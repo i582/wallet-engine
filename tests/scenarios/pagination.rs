@@ -172,3 +172,71 @@ fn preserves_multiple_older_pages_when_new_transactions_are_refreshed() {
         .then(activity_is(&["A", "B", "C", "D"]))
         .run();
 }
+
+#[test]
+fn in_flight_older_page_keeps_its_cursor_when_the_chain_head_changes() {
+    scenario("a localnet head change cannot retarget an in-flight older page")
+        .given(network().localnet())
+        .given(wallet().uninitialized().balance(grams(10)))
+        .when(call("deploy", send().to(own_address()).nanograms(1)))
+        .then(result("deploy").submitted())
+        .when(call("history", spam_transfers(14)))
+        .then(succeeds("history"))
+        .then(on_chain_wallet().active().seqno(15))
+        .when(call("head-A", refresh_wallet()))
+        .then(update("head-A").completed())
+        .then(remember_activity_cursor("cursor-A"))
+        .then(remember_activity_as("A"))
+        // Capture the actual older-page URL before changing the chain head.
+        .when(pause_next_activity_request("older-page"))
+        .when(start("more-B", load_more_activity()))
+        .when(wait_for_request("older-page"))
+        .when(call("new-head", spam_transfers(3)))
+        .then(succeeds("new-head"))
+        .then(on_chain_wallet().active().seqno(18))
+        .when(release_request("older-page"))
+        .then(update("more-B").completed())
+        .then(pagination_used_cursor("cursor-A"))
+        .then(update("more-B").added_any_items())
+        .then(remember_new_activity_as("B"))
+        .then(activity_is(&["A", "B"]))
+        // A later head refresh adds the three new transactions and preserves
+        // the older page returned by the request above.
+        .when(call("head-C", refresh_wallet()))
+        .then(update("head-C").completed())
+        .then(remember_new_activity_as("C"))
+        .then(activity_is(&["A", "B", "C"]))
+        .run();
+}
+
+#[test]
+fn refresh_supersedes_a_localnet_page_after_new_head_transactions_arrive() {
+    scenario("new localnet head plus refresh supersedes an older-page request")
+        .given(network().localnet())
+        .given(wallet().uninitialized().balance(grams(10)))
+        .when(call("deploy", send().to(own_address()).nanograms(1)))
+        .then(result("deploy").submitted())
+        .when(call("history", spam_transfers(14)))
+        .then(succeeds("history"))
+        .when(call("head-A", refresh_wallet()))
+        .then(update("head-A").completed())
+        .then(remember_activity_as("A"))
+        .when(pause_next_activity_request("older-page"))
+        .when(start("more", load_more_activity()))
+        .when(wait_for_request("older-page"))
+        // A different client changes the real chain while the old cursor request waits.
+        .when(call("new-head", spam_transfers(3)))
+        .then(succeeds("new-head"))
+        .then(on_chain_wallet().active().seqno(18))
+        // Refresh owns the new head and must cancel the exact older-page request.
+        .when(call("refresh", refresh_wallet()))
+        .then(update("refresh").completed())
+        .then(request_was_cancelled("older-page"))
+        .then(remember_new_activity_as("B"))
+        .then(remember_revision("after-refresh"))
+        .when(release_request("older-page"))
+        .then(update("more").superseded())
+        .then(revision_is("after-refresh"))
+        .then(activity_is(&["A", "B"]))
+        .run();
+}

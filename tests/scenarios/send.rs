@@ -33,6 +33,48 @@ fn send_cannot_be_cancelled_after_the_durable_commit_boundary() {
 }
 
 #[test]
+fn cancel_before_the_durable_boundary_stops_the_request_and_releases_the_slot() {
+    scenario("cancel before signing stops the send without durable state")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .when(pause_next_account_request("fresh-account"))
+        .when(start("cancelled-send", send().to(own_address()).grams(1)))
+        .when(wait_for_request("fresh-account"))
+        .when(call("cancel", cancel_send()))
+        .then(succeeds("cancel"))
+        .then(request_was_cancelled("fresh-account"))
+        .then(snapshot().send_phase(SendPhase::Cancelled))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        // A successful late response belongs to the cancelled generation and
+        // must not revive authorization, persistence, or submission.
+        .then(remember_revision("after-cancel"))
+        .when(release_request("fresh-account"))
+        .then(error("cancelled-send", WalletClientError::StateUnavailable))
+        .then(revision_is("after-cancel"))
+        .then(snapshot().send_phase(SendPhase::Cancelled))
+        // Cancellation before commit releases the wallet-local send slot.
+        .given(submission().paused("retry-submit"))
+        .when(start("retry", send().to(own_address()).grams(1)))
+        .then(send_phase("retry", SendPhase::Submitting))
+        .when(resume("retry-submit", submission_accepted()))
+        .then(result("retry").submitted())
+        .run();
+}
+
+#[test]
+fn cancelling_without_an_active_send_is_idempotent() {
+    scenario("cancel send is safe when no send exists")
+        .when(call("first-cancel", cancel_send()))
+        .then(succeeds("first-cancel"))
+        .then(snapshot().send_phase(SendPhase::Idle))
+        .when(call("second-cancel", cancel_send()))
+        .then(succeeds("second-cancel"))
+        .then(snapshot().send_phase(SendPhase::Idle))
+        .run();
+}
+
+#[test]
 fn unknown_submission_blocks_a_replacement_send() {
     scenario("unknown submission blocks a replacement send")
         .given(wallet().active().balance(grams(10)).seqno(7))
@@ -116,6 +158,109 @@ fn second_transfer_uses_the_advanced_wallet_seqno_on_localnet() {
         .when(call("final-refresh", refresh_wallet()))
         .then(update("final-refresh").completed())
         .then(activity_present())
+        .run();
+}
+
+#[test]
+fn send_uses_fresh_seqno_after_an_external_same_key_transfer() {
+    scenario("send reads seqno after another client spends with the same key")
+        .given(network().localnet())
+        .given(wallet().uninitialized().balance(grams(10)))
+        .when(call("deploy", send().to(own_address()).nanograms(1)))
+        .then(result("deploy").submitted())
+        .then(on_chain_wallet().active().seqno(1))
+        .when(call("baseline", refresh_wallet()))
+        .then(update("baseline").completed())
+        .then(remember_activity_as("A"))
+        // Stop this send before its fresh account HTTP request reaches Acton.
+        .when(pause_next_account_request("fresh-account"))
+        .when(start("engine-send", send().to(own_address()).nanograms(1)))
+        .when(wait_for_request("fresh-account"))
+        // A different client with the same mnemonic consumes seqno 1.
+        .when(call("external-send", spam_transfers(1)))
+        .then(succeeds("external-send"))
+        .then(on_chain_wallet().active().seqno(2))
+        // The engine must observe seqno 2, sign with it, and execute as seqno 3.
+        .when(release_request("fresh-account"))
+        .then(result("engine-send").submitted())
+        .then(on_chain_wallet().active().seqno(3))
+        .when(call("after-both", refresh_wallet()))
+        .then(update("after-both").completed())
+        .then(remember_new_activity_as("B"))
+        .then(activity_is(&["A", "B"]))
+        .run();
+}
+
+#[test]
+fn send_rereads_seqno_after_an_external_transfer_follows_fresh_account() {
+    scenario("send reads seqno after fresh account when another client spends")
+        .given(network().localnet())
+        .given(wallet().uninitialized().balance(grams(10)))
+        .when(call("deploy", send().to(own_address()).nanograms(1)))
+        .then(result("deploy").submitted())
+        .then(on_chain_wallet().active().seqno(1))
+        // The engine has fetched active account state before this seqno request waits.
+        .when(pause_next_seqno_request("fresh-seqno"))
+        .when(start("engine-send", send().to(own_address()).nanograms(1)))
+        .when(wait_for_request("fresh-seqno"))
+        // Another client consumes the seqno that existed at account-fetch time.
+        .when(call("external-send", spam_transfers(1)))
+        .then(succeeds("external-send"))
+        .then(on_chain_wallet().active().seqno(2))
+        .when(release_request("fresh-seqno"))
+        .then(result("engine-send").submitted())
+        .then(on_chain_wallet().active().seqno(3))
+        .run();
+}
+
+#[test]
+fn replaying_the_exact_external_message_executes_only_once_on_localnet() {
+    scenario("the chain deduplicates an exact signed external message replay")
+        .given(network().localnet())
+        .given(wallet().uninitialized().balance(grams(10)))
+        .when(call("original", send().to(own_address()).nanograms(1)))
+        .then(result("original").submitted())
+        .then(on_chain_wallet().active().seqno(1))
+        .when(call("initial-refresh", refresh_wallet()))
+        .then(update("initial-refresh").completed())
+        .then(remember_activity_as("A"))
+        // Replay the same BOC with the same external-message hash and seqno.
+        // Toncenter can accept the POST, but the wallet must execute it once.
+        .when(call("replay", replay_last_submission()))
+        .then(succeeds("replay"))
+        .then(on_chain_wallet().active().seqno(1))
+        .when(call("after-replay", refresh_wallet()))
+        .then(update("after-replay").completed())
+        .then(activity_is(&["A"]))
+        .run();
+}
+
+#[test]
+fn expired_external_message_does_not_leave_the_next_send_waiting_forever() {
+    scenario("an expired submitted message leaves seqno unchanged")
+        .given(network().localnet())
+        .given(client().send_validity_seconds(1))
+        .given(wallet().uninitialized().balance(grams(10)))
+        .when(call("baseline-refresh", refresh_wallet()))
+        .then(update("baseline-refresh").completed())
+        .then(remember_activity_as("funding"))
+        // sendBoc accepts the envelope, but valid_until is already at the
+        // provider timestamp and the wallet must not execute the message.
+        .when(call("expired", send().to(own_address()).nanograms(1)))
+        .then(result("expired").submitted())
+        .then(on_chain_wallet().uninitialized())
+        .when(call("refresh", refresh_wallet()))
+        .then(update("refresh").completed())
+        .then(activity_is(&["funding"]))
+        // The durable Submitted record is resolved by fresh seqno evidence on
+        // the next attempt. It fails deterministically instead of signing a
+        // replacement or waiting without a terminal result.
+        .when(call("replacement", send().to(own_address()).nanograms(1)))
+        .then(error(
+            "replacement",
+            WalletClientError::WalletSeqnoNotAdvanced,
+        ))
+        .then(snapshot().send_phase(SendPhase::Failed))
         .run();
 }
 
@@ -204,6 +349,43 @@ fn invalid_protected_secret_fails_without_submission() {
 }
 
 #[test]
+fn valid_secret_from_another_wallet_cannot_sign_the_selected_wallet() {
+    scenario("a valid mnemonic for another wallet cannot authorize this wallet")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(secret().belongs_to_another_wallet())
+        .when(call("send", send().to(own_address()).grams(1)))
+        .then(error(
+            "send",
+            send_failed("protected mnemonic does not belong to this wallet"),
+        ))
+        .then(snapshot().send_phase(SendPhase::Failed))
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .run();
+}
+
+#[test]
+fn protected_secret_host_failure_releases_the_send_slot() {
+    scenario("protected storage failure stops before persistence")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(secret().host_fails())
+        .when(call("failed", send().to(own_address()).grams(1)))
+        .then(error(
+            "failed",
+            send_failed("protected-secret host failure (Other): scripted protected secret failure"),
+        ))
+        .then(snapshot().send_phase(SendPhase::Failed))
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .given(submission().paused("retry-submit"))
+        .when(start("retry", send().to(own_address()).grams(1)))
+        .then(send_phase("retry", SendPhase::Submitting))
+        .when(resume("retry-submit", submission_accepted()))
+        .then(result("retry").submitted())
+        .run();
+}
+
+#[test]
 fn amount_larger_than_the_fresh_balance_fails_before_signing() {
     scenario("a transfer cannot exceed the fresh wallet balance")
         .given(wallet().active().balance(grams(1)).seqno(7))
@@ -250,6 +432,48 @@ fn missing_provider_time_prevents_transfer_expiration() {
 }
 
 #[test]
+fn provider_time_must_fit_the_wallet_timestamp_field() {
+    scenario("provider time outside u32 cannot be signed")
+        .given(
+            wallet()
+                .active()
+                .balance(grams(10))
+                .seqno(7)
+                .sync_time(u64::from(u32::MAX) + 1),
+        )
+        .when(call("send", send().to(own_address()).grams(1)))
+        .then(error(
+            "send",
+            send_failed("provider synchronization time does not fit the wallet timestamp field"),
+        ))
+        .then(snapshot().send_phase(SendPhase::Failed))
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .run();
+}
+
+#[test]
+fn transfer_expiration_overflow_fails_before_persistence() {
+    scenario("provider time plus validity must fit u32")
+        .given(
+            wallet()
+                .active()
+                .balance(grams(10))
+                .seqno(7)
+                .sync_time(u64::from(u32::MAX)),
+        )
+        .when(call("send", send().to(own_address()).grams(1)))
+        .then(error(
+            "send",
+            send_failed("transfer expiration timestamp overflow"),
+        ))
+        .then(snapshot().send_phase(SendPhase::Failed))
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .run();
+}
+
+#[test]
 fn journal_conflict_releases_the_in_memory_send_slot() {
     scenario("a journal CAS conflict does not leave the client busy")
         .given(wallet().active().balance(grams(10)).seqno(7))
@@ -262,6 +486,60 @@ fn journal_conflict_releases_the_in_memory_send_slot() {
         .then(send_phase("retry", SendPhase::Submitting))
         .when(resume("retry-submit", submission_accepted()))
         .then(result("retry").submitted())
+        .run();
+}
+
+#[test]
+fn journal_load_failure_stops_before_network_or_secret_access() {
+    scenario("send cannot start when its durable wallet slot cannot be read")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(journal().load_fails())
+        .when(call("send", send().to(own_address()).grams(1)))
+        .then(error(
+            "send",
+            send_failed("journal host failure (Unavailable): scripted journal load failure"),
+        ))
+        .then(snapshot().send_phase(SendPhase::Failed))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .run();
+}
+
+#[test]
+fn prepared_journal_write_failure_is_submission_unknown_without_http_submit() {
+    scenario("failure at the durable boundary preserves an unknown outcome")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(journal().write_fails(1))
+        .when(call("send", send().to(own_address()).grams(1)))
+        .then(error(
+            "send",
+            WalletClientError::SubmissionUnknown {
+                diagnostic: "journal host failure (Unavailable): scripted journal write 1 failure"
+                    .to_owned(),
+            },
+        ))
+        .then(snapshot().send_phase(SendPhase::SubmissionUnknown))
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .run();
+}
+
+#[test]
+fn terminal_journal_write_failure_is_unknown_after_http_submit() {
+    scenario("provider acceptance without terminal persistence remains unknown")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(journal().write_fails(2))
+        .when(call("send", send().to(own_address()).grams(1)))
+        .then(error(
+            "send",
+            WalletClientError::SubmissionUnknown {
+                diagnostic: "journal host failure (Unavailable): scripted journal write 2 failure"
+                    .to_owned(),
+            },
+        ))
+        .then(snapshot().send_phase(SendPhase::SubmissionUnknown))
+        .then(message_was_submitted())
         .run();
 }
 

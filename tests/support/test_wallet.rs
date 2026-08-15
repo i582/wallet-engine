@@ -9,6 +9,8 @@ impl TestWalletFixture {
 
     const TESTNET_V5_ADDRESS: &'static str = "0QA_6fh0aRAkD7n1MNfAUx8TvyCUw2iTQfzVM-0isMze2anN";
 
+    const OTHER_RECOVERY_PHRASE: &'static str = "fish uncle sort juice lunar salute peasant decorate flash cherry become treat obtain august diet safe describe area below nasty scale right armed rural";
+
     pub(crate) const fn recovery_phrase_bytes(&self) -> &'static [u8] {
         Self::RECOVERY_PHRASE.as_bytes()
     }
@@ -22,6 +24,10 @@ impl TestWalletFixture {
 
     pub(crate) const fn testnet_v5_address(&self) -> &'static str {
         Self::TESTNET_V5_ADDRESS
+    }
+
+    pub(crate) const fn other_recovery_phrase_bytes(&self) -> &'static [u8] {
+        Self::OTHER_RECOVERY_PHRASE.as_bytes()
     }
 }
 

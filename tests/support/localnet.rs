@@ -5,7 +5,7 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::str::FromStr;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Condvar, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -27,7 +27,7 @@ use wallet_engine::{
     HttpResponse, WalletHttpHost,
 };
 
-use super::host::SubmittedMessage;
+use super::host::{RequestKind, SubmittedMessage};
 use super::test_wallet;
 
 const READY_TIMEOUT: Duration = Duration::from_secs(45);
@@ -38,7 +38,18 @@ pub(super) struct LocalnetHttpHost {
     address: String,
     cancelled: Mutex<HashSet<HttpRequestId>>,
     submitted_message: Mutex<Option<SubmittedMessage>>,
+    submitted_boc_base64: Mutex<Option<String>>,
     activity_requests: Mutex<Vec<String>>,
+    request_gate: Mutex<Option<RequestGate>>,
+    request_changed: Condvar,
+}
+
+struct RequestGate {
+    name: String,
+    kind: RequestKind,
+    request_id: Option<HttpRequestId>,
+    reached: bool,
+    released: bool,
 }
 
 impl std::fmt::Debug for LocalnetHttpHost {
@@ -64,7 +75,10 @@ impl LocalnetHttpHost {
             address: address.to_owned(),
             cancelled: Mutex::new(HashSet::new()),
             submitted_message: Mutex::new(None),
+            submitted_boc_base64: Mutex::new(None),
             activity_requests: Mutex::new(Vec::new()),
+            request_gate: Mutex::new(None),
+            request_changed: Condvar::new(),
         })
     }
 
@@ -78,6 +92,100 @@ impl LocalnetHttpHost {
 
     pub(super) fn last_activity_request(&self) -> Option<String> {
         lock(&self.activity_requests).last().cloned()
+    }
+
+    pub(super) fn pause_next_request(&self, name: String, kind: RequestKind) {
+        *lock(&self.request_gate) = Some(RequestGate {
+            name,
+            kind,
+            request_id: None,
+            reached: false,
+            released: false,
+        });
+    }
+
+    pub(super) fn wait_for_request(&self, name: &str) -> Result<(), String> {
+        let mut gate = lock(&self.request_gate);
+        let deadline = Instant::now() + CONFIRMATION_TIMEOUT;
+        loop {
+            let checkpoint = gate
+                .as_ref()
+                .ok_or_else(|| format!("request checkpoint `{name}` does not exist"))?;
+            if checkpoint.name != name {
+                return Err(format!(
+                    "expected request checkpoint `{}`, got `{name}`",
+                    checkpoint.name
+                ));
+            }
+            if checkpoint.reached {
+                return Ok(());
+            }
+
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(format!(
+                    "request checkpoint `{name}` was not reached within {CONFIRMATION_TIMEOUT:?}"
+                ));
+            }
+            gate = match self.request_changed.wait_timeout(gate, remaining) {
+                Ok((guard, _)) => guard,
+                Err(poisoned) => poisoned.into_inner().0,
+            };
+        }
+    }
+
+    pub(super) fn release_request(&self, name: &str) -> Result<(), String> {
+        self.wait_for_request(name)?;
+        let mut gate = lock(&self.request_gate);
+        let checkpoint = gate
+            .as_mut()
+            .ok_or_else(|| format!("request checkpoint `{name}` disappeared"))?;
+        checkpoint.released = true;
+        self.request_changed.notify_all();
+        Ok(())
+    }
+
+    pub(super) fn request_was_cancelled(&self, name: &str) -> Result<bool, String> {
+        let gate = lock(&self.request_gate);
+        let checkpoint = gate
+            .as_ref()
+            .ok_or_else(|| format!("request checkpoint `{name}` does not exist"))?;
+        let request_id = checkpoint
+            .request_id
+            .ok_or_else(|| format!("request checkpoint `{name}` was not reached"))?;
+        Ok(lock(&self.cancelled).contains(&request_id))
+    }
+
+    fn wait_at_request_gate(
+        &self,
+        kind: RequestKind,
+        request_id: HttpRequestId,
+    ) -> Result<(), HttpHostError> {
+        let mut gate = lock(&self.request_gate);
+        if matches!(gate.as_ref(), Some(checkpoint) if checkpoint.kind == kind && checkpoint.request_id.is_none())
+        {
+            let checkpoint = gate.as_mut().expect("request checkpoint exists");
+            checkpoint.request_id = Some(request_id);
+            checkpoint.reached = true;
+            self.request_changed.notify_all();
+        }
+
+        loop {
+            let Some(checkpoint) = gate.as_ref() else {
+                return Ok(());
+            };
+            if checkpoint.request_id != Some(request_id) {
+                return Ok(());
+            }
+            if checkpoint.released {
+                *gate = None;
+                return Ok(());
+            }
+            gate = match self.request_changed.wait(gate) {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+        }
     }
 
     pub(super) fn assert_wallet(
@@ -151,6 +259,33 @@ impl LocalnetHttpHost {
         localnet.wait_for_state(&self.address, "active", Some(expected_seqno))
     }
 
+    pub(super) fn replay_last_submission(&self) -> Result<(), String> {
+        let boc = lock(&self.submitted_boc_base64)
+            .clone()
+            .ok_or_else(|| "no submitted BOC is available for replay".to_owned())?;
+        let localnet = lock(&self.localnet);
+        let (status, body) = request(
+            &localnet.client,
+            Method::POST,
+            &format!("{}/api/v2/jsonRPC", localnet.base_url),
+            Some(&json!({
+                "jsonrpc": "2.0",
+                "id": "wallet-engine-localnet-replay",
+                "method": "sendBoc",
+                "params": { "boc": boc }
+            })),
+        )?;
+        if !(200..300).contains(&status)
+            || body.pointer("/result/@type").and_then(Value::as_str) != Some("ok")
+        {
+            return Err(format!(
+                "localnet replay submission failed with HTTP {status}: {body}"
+            ));
+        }
+
+        localnet.mine()
+    }
+
     fn execute(&self, request: &HttpRequest) -> Result<HttpResponse, HttpHostError> {
         if lock(&self.cancelled).remove(&request.id) {
             return Err(host_error(
@@ -217,7 +352,7 @@ impl LocalnetHttpHost {
                 })
                 .ok_or_else(|| host_error(HttpHostErrorKind::Other, "sendBoc has no BOC"))?;
             let boc = STANDARD
-                .decode(encoded)
+                .decode(&encoded)
                 .map_err(|error| host_error(HttpHostErrorKind::Other, &error.to_string()))?;
             let cell = TonCell::from_boc(boc)
                 .map_err(|error| host_error(HttpHostErrorKind::Other, &error.to_string()))?;
@@ -226,6 +361,7 @@ impl LocalnetHttpHost {
             *lock(&self.submitted_message) = Some(SubmittedMessage {
                 contains_state_init: message.state_init().is_some(),
             });
+            *lock(&self.submitted_boc_base64) = Some(encoded);
             localnet
                 .mine()
                 .map_err(|error| host_error(HttpHostErrorKind::Other, &error))?;
@@ -243,6 +379,17 @@ impl LocalnetHttpHost {
 #[async_trait]
 impl WalletHttpHost for LocalnetHttpHost {
     async fn execute_http(&self, request: HttpRequest) -> Result<HttpResponse, HttpHostError> {
+        if request.url.contains("getAddressInformation") {
+            self.wait_at_request_gate(RequestKind::Account, request.id)?;
+        } else if request.url.contains("getTransactions") {
+            self.wait_at_request_gate(RequestKind::Activity, request.id)?;
+        } else if request
+            .body
+            .windows(b"runGetMethod".len())
+            .any(|window| window == b"runGetMethod")
+        {
+            self.wait_at_request_gate(RequestKind::Seqno, request.id)?;
+        }
         self.execute(&request)
     }
 

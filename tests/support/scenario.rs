@@ -51,12 +51,16 @@ pub(crate) const fn submission() -> SubmissionFixture {
 }
 
 pub(crate) const fn secret() -> SecretFixture {
-    SecretFixture { valid: true }
+    SecretFixture {
+        behavior: SecretBehavior::Valid,
+    }
 }
 
 pub(crate) const fn journal() -> JournalFixture {
     JournalFixture {
         conflict_next_write: false,
+        load_fails: false,
+        failing_write: None,
     }
 }
 
@@ -67,6 +71,12 @@ pub(crate) const fn provider() -> ProviderFixture {
         account_retry_after_seconds: None,
         activity_malformed: false,
         account_redirected: false,
+    }
+}
+
+pub(crate) const fn client() -> ClientFixture {
+    ClientFixture {
+        send_validity_seconds: 300,
     }
 }
 
@@ -125,6 +135,13 @@ pub(crate) fn pause_next_activity_request(name: impl Into<String>) -> ControlSte
     }
 }
 
+pub(crate) fn pause_next_seqno_request(name: impl Into<String>) -> ControlStep {
+    ControlStep::PauseRequest {
+        name: name.into(),
+        kind: RequestKind::Seqno,
+    }
+}
+
 pub(crate) fn wait_for_request(name: impl Into<String>) -> ControlStep {
     ControlStep::WaitForRequest { name: name.into() }
 }
@@ -135,6 +152,10 @@ pub(crate) fn release_request(name: impl Into<String>) -> ControlStep {
 
 pub(crate) const fn spam_transfers(count: u32) -> UserAction {
     UserAction::SpamTransfers { count }
+}
+
+pub(crate) const fn replay_last_submission() -> UserAction {
+    UserAction::ReplayLastSubmission
 }
 
 pub(crate) const fn own_address() -> Destination {
@@ -294,6 +315,10 @@ pub(crate) const fn submitted_message() -> SubmittedMessageExpectation {
     SubmittedMessageExpectation
 }
 
+pub(crate) const fn message_was_submitted() -> Expectation {
+    Expectation::SubmittedMessagePresent
+}
+
 pub(crate) const fn on_chain_wallet() -> OnChainWalletExpectation {
     OnChainWalletExpectation {
         active: false,
@@ -355,6 +380,12 @@ impl WalletFixture {
     }
 
     #[must_use]
+    pub(crate) const fn sync_time(mut self, sync_utime: u64) -> Self {
+        self.sync_utime = Some(sync_utime);
+        self
+    }
+
+    #[must_use]
     pub(crate) fn balance(mut self, amount: GramAmount) -> Self {
         self.balance_nanograms = amount.nanograms;
         self
@@ -392,19 +423,53 @@ pub(crate) struct SubmissionFixture {
 }
 
 pub(crate) struct SecretFixture {
-    valid: bool,
+    behavior: SecretBehavior,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SecretBehavior {
+    Valid,
+    Invalid,
+    AnotherWallet,
+    HostFailure,
 }
 
 impl SecretFixture {
     #[must_use]
     pub(crate) const fn invalid(mut self) -> Self {
-        self.valid = false;
+        self.behavior = SecretBehavior::Invalid;
+        self
+    }
+
+    #[must_use]
+    pub(crate) const fn belongs_to_another_wallet(mut self) -> Self {
+        self.behavior = SecretBehavior::AnotherWallet;
+        self
+    }
+
+    #[must_use]
+    pub(crate) const fn host_fails(mut self) -> Self {
+        self.behavior = SecretBehavior::HostFailure;
         self
     }
 }
 
 pub(crate) struct JournalFixture {
     conflict_next_write: bool,
+    load_fails: bool,
+    failing_write: Option<u64>,
+}
+
+pub(crate) struct ClientFixture {
+    send_validity_seconds: u32,
+}
+
+impl ClientFixture {
+    #[must_use]
+    pub(crate) const fn send_validity_seconds(mut self, seconds: u32) -> Self {
+        self.send_validity_seconds = seconds;
+        self
+    }
 }
 
 pub(crate) struct ProviderFixture {
@@ -456,6 +521,18 @@ impl JournalFixture {
     #[must_use]
     pub(crate) const fn conflicts_on_next_write(mut self) -> Self {
         self.conflict_next_write = true;
+        self
+    }
+
+    #[must_use]
+    pub(crate) const fn load_fails(mut self) -> Self {
+        self.load_fails = true;
+        self
+    }
+
+    #[must_use]
+    pub(crate) const fn write_fails(mut self, write_number: u64) -> Self {
+        self.failing_write = Some(write_number);
         self
     }
 }
@@ -526,6 +603,7 @@ pub(crate) enum UserAction {
     Shutdown,
     WaitForChange { after_revision: u64 },
     SpamTransfers { count: u32 },
+    ReplayLastSubmission,
 }
 
 impl From<SendAction> for UserAction {
@@ -568,6 +646,7 @@ pub(crate) enum Given {
     Provider(ProviderFixture),
     Activity(ActivityFixture),
     Network(NetworkFixture),
+    Client(ClientFixture),
 }
 
 impl From<WalletFixture> for Given {
@@ -609,6 +688,12 @@ impl From<ActivityFixture> for Given {
 impl From<NetworkFixture> for Given {
     fn from(value: NetworkFixture) -> Self {
         Self::Network(value)
+    }
+}
+
+impl From<ClientFixture> for Given {
+    fn from(value: ClientFixture) -> Self {
+        Self::Client(value)
     }
 }
 
@@ -673,6 +758,7 @@ pub(crate) enum Expectation {
     JournalIsEmpty,
     NoSubmittedMessage,
     SubmittedMessageContainsStateInit,
+    SubmittedMessagePresent,
     OnChainWallet(OnChainWalletExpectation),
 }
 
@@ -690,6 +776,10 @@ pub(crate) struct OnChainWalletExpectation {
 }
 
 impl OnChainWalletExpectation {
+    pub(crate) const fn uninitialized(self) -> Expectation {
+        Expectation::OnChainWallet(self)
+    }
+
     #[must_use]
     pub(crate) const fn active(mut self) -> Self {
         self.active = true;
@@ -927,10 +1017,13 @@ impl ScenarioRunner {
         let mut wallet = wallet();
         let mut paused_submission = None;
         let mut use_localnet = false;
-        let mut valid_secret = true;
+        let mut secret_behavior = SecretBehavior::Valid;
         let mut journal_conflict = false;
+        let mut journal_load_fails = false;
+        let mut failing_journal_write = None;
         let mut provider_fixture = provider();
         let mut pages = Vec::new();
+        let mut send_validity_seconds = 300;
 
         for step in steps {
             match step {
@@ -939,9 +1032,11 @@ impl ScenarioRunner {
                     paused_submission.clone_from(&fixture.paused);
                 }
                 Step::Given(Given::Network(NetworkFixture::Localnet)) => use_localnet = true,
-                Step::Given(Given::Secret(fixture)) => valid_secret = fixture.valid,
+                Step::Given(Given::Secret(fixture)) => secret_behavior = fixture.behavior,
                 Step::Given(Given::Journal(fixture)) => {
                     journal_conflict = fixture.conflict_next_write;
+                    journal_load_fails = fixture.load_fails;
+                    failing_journal_write = fixture.failing_write;
                 }
                 Step::Given(Given::Provider(fixture)) => {
                     provider_fixture = ProviderFixture {
@@ -953,6 +1048,9 @@ impl ScenarioRunner {
                     };
                 }
                 Step::Given(Given::Activity(fixture)) => pages.clone_from(&fixture.pages),
+                Step::Given(Given::Client(fixture)) => {
+                    send_validity_seconds = fixture.send_validity_seconds;
+                }
                 Step::When(_) | Step::Then(_) => break,
             }
         }
@@ -961,14 +1059,25 @@ impl ScenarioRunner {
         let secret_ref = ProtectedSecretRef {
             value: TEST_SECRET_REF.to_owned(),
         };
-        let secret = if valid_secret {
-            test_wallet().recovery_phrase_bytes()
-        } else {
-            b"invalid recovery phrase"
+        let secret = match secret_behavior {
+            SecretBehavior::Valid | SecretBehavior::HostFailure => {
+                test_wallet().recovery_phrase_bytes()
+            }
+            SecretBehavior::Invalid => b"invalid recovery phrase",
+            SecretBehavior::AnotherWallet => test_wallet().other_recovery_phrase_bytes(),
         };
         platform_host.store_test_secret(&secret_ref, secret);
+        if secret_behavior == SecretBehavior::HostFailure {
+            platform_host.fail_next_secret_read();
+        }
         if journal_conflict {
             platform_host.conflict_next_journal_write();
+        }
+        if journal_load_fails {
+            platform_host.fail_next_journal_load();
+        }
+        if let Some(write_number) = failing_journal_write {
+            platform_host.fail_journal_write(write_number);
         }
         let transport = if use_localnet {
             if wallet.status != "uninitialized" {
@@ -1011,7 +1120,7 @@ impl ScenarioRunner {
                 record_id: TEST_RECORD_ID.to_owned(),
                 address: test_wallet().testnet_v5_address().to_owned(),
                 network: Network::Testnet,
-                send_validity_seconds: 300,
+                send_validity_seconds,
                 providers: ProviderConfig {
                     toncenter_base_url: provider_base_url,
                 },
@@ -1083,18 +1192,29 @@ impl ScenarioRunner {
                 Ok(())
             }
             Given::Secret(secret) => {
-                let bytes = if secret.valid {
-                    test_wallet().recovery_phrase_bytes()
-                } else {
-                    b"invalid recovery phrase"
+                let bytes = match secret.behavior {
+                    SecretBehavior::Valid | SecretBehavior::HostFailure => {
+                        test_wallet().recovery_phrase_bytes()
+                    }
+                    SecretBehavior::Invalid => b"invalid recovery phrase",
+                    SecretBehavior::AnotherWallet => test_wallet().other_recovery_phrase_bytes(),
                 };
                 self.platform_host
                     .store_test_secret(&self.secret_ref, bytes);
+                if secret.behavior == SecretBehavior::HostFailure {
+                    self.platform_host.fail_next_secret_read();
+                }
                 Ok(())
             }
             Given::Journal(journal) => {
                 if journal.conflict_next_write {
                     self.platform_host.conflict_next_journal_write();
+                }
+                if journal.load_fails {
+                    self.platform_host.fail_next_journal_load();
+                }
+                if let Some(write_number) = journal.failing_write {
+                    self.platform_host.fail_journal_write(write_number);
                 }
                 Ok(())
             }
@@ -1112,7 +1232,7 @@ impl ScenarioRunner {
                     .set_activity_pages(activity.pages);
                 Ok(())
             }
-            Given::Network(NetworkFixture::Localnet) => Ok(()),
+            Given::Network(NetworkFixture::Localnet) | Given::Client(_) => Ok(()),
         }
     }
 
@@ -1183,6 +1303,18 @@ impl ScenarioRunner {
                             let _ = sender.send(OperationResult::Harness(result));
                         })
                     }
+                    UserAction::ReplayLastSubmission => {
+                        let localnet = self.localnet_http_host.clone();
+                        std::thread::spawn(move || {
+                            let result = localnet
+                                .ok_or_else(|| {
+                                    "submission replay requires `.given(network().localnet())`"
+                                        .to_owned()
+                                })
+                                .and_then(|host| host.replay_last_submission());
+                            let _ = sender.send(OperationResult::Harness(result));
+                        })
+                    }
                 };
                 self.operations.insert(
                     name.clone(),
@@ -1204,22 +1336,33 @@ impl ScenarioRunner {
                 .ok_or_else(|| "localnet scenarios cannot resume provider submission".to_owned())?
                 .resume_submission(&name, outcome),
             When::Control(ControlStep::PauseRequest { name, kind }) => {
-                self.scripted_http_host
-                    .as_ref()
-                    .ok_or_else(|| "localnet scenarios cannot pause HTTP requests".to_owned())?
-                    .pause_next_request(name, kind);
+                if let Some(host) = &self.scripted_http_host {
+                    host.pause_next_request(name, kind);
+                } else if let Some(host) = &self.localnet_http_host {
+                    host.pause_next_request(name, kind);
+                } else {
+                    return Err("scenario has no HTTP host".to_owned());
+                }
                 Ok(())
             }
-            When::Control(ControlStep::WaitForRequest { name }) => self
-                .scripted_http_host
-                .as_ref()
-                .ok_or_else(|| "localnet scenarios cannot pause HTTP requests".to_owned())?
-                .wait_for_request(&name),
-            When::Control(ControlStep::ReleaseRequest { name }) => self
-                .scripted_http_host
-                .as_ref()
-                .ok_or_else(|| "localnet scenarios cannot pause HTTP requests".to_owned())?
-                .release_request(&name),
+            When::Control(ControlStep::WaitForRequest { name }) => {
+                if let Some(host) = &self.scripted_http_host {
+                    host.wait_for_request(&name)
+                } else if let Some(host) = &self.localnet_http_host {
+                    host.wait_for_request(&name)
+                } else {
+                    Err("scenario has no HTTP host".to_owned())
+                }
+            }
+            When::Control(ControlStep::ReleaseRequest { name }) => {
+                if let Some(host) = &self.scripted_http_host {
+                    host.release_request(&name)
+                } else if let Some(host) = &self.localnet_http_host {
+                    host.release_request(&name)
+                } else {
+                    Err("scenario has no HTTP host".to_owned())
+                }
+            }
         }
     }
 
@@ -1471,13 +1614,13 @@ impl ScenarioRunner {
                 }
             }
             Expectation::RequestWasCancelled(name) => {
-                let cancelled = self
-                    .scripted_http_host
-                    .as_ref()
-                    .ok_or_else(|| {
-                        "localnet scenarios cannot inspect scripted HTTP cancellation".to_owned()
-                    })?
-                    .request_was_cancelled(&name)?;
+                let cancelled = if let Some(host) = &self.scripted_http_host {
+                    host.request_was_cancelled(&name)?
+                } else if let Some(host) = &self.localnet_http_host {
+                    host.request_was_cancelled(&name)?
+                } else {
+                    return Err("scenario has no HTTP host".to_owned());
+                };
                 if cancelled {
                     Ok(())
                 } else {
@@ -1545,6 +1688,13 @@ impl ScenarioRunner {
                 .map_err(|message| {
                     format!("expected submitted external message to contain StateInit\n{message}")
                 }),
+            Expectation::SubmittedMessagePresent => {
+                if self.submitted_message().is_some() {
+                    Ok(())
+                } else {
+                    Err("expected an external message submission".to_owned())
+                }
+            }
             Expectation::OnChainWallet(expectation) => self
                 .localnet_http_host
                 .as_ref()

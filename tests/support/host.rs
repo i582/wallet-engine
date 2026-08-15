@@ -11,10 +11,10 @@ use ton::ton_core::cell::TonCell;
 use ton::ton_core::traits::tlb::TLB;
 use wallet_engine::{
     HttpHeader, HttpHostError, HttpHostErrorKind, HttpRequest, HttpRequestId, HttpResponse,
-    JournalCompareExchange, JournalCompareExchangeResult, JournalHostError, JournalKey,
-    JournalRecord, ProtectedSecretHostError, ProtectedSecretHostErrorKind, ProtectedSecretRead,
-    ProtectedSecretRef, ProtectedSecretStore, SecretAccessReason, WalletHttpHost,
-    WalletPlatformHost,
+    JournalCompareExchange, JournalCompareExchangeResult, JournalHostError, JournalHostErrorKind,
+    JournalKey, JournalRecord, ProtectedSecretHostError, ProtectedSecretHostErrorKind,
+    ProtectedSecretRead, ProtectedSecretRef, ProtectedSecretStore, SecretAccessReason,
+    WalletHttpHost, WalletPlatformHost,
 };
 
 use super::scenario::{SubmissionOutcome, WalletFixture};
@@ -46,6 +46,7 @@ struct HttpState {
 pub(crate) enum RequestKind {
     Account,
     Activity,
+    Seqno,
 }
 
 struct RequestGate {
@@ -469,7 +470,11 @@ impl WalletHttpHost for ScenarioHttpHost {
         let body: Value = serde_json::from_slice(&request.body)
             .map_err(|error| host_error(HttpHostErrorKind::Other, error.to_string()))?;
         match body.get("method").and_then(Value::as_str) {
-            Some("runGetMethod") => Ok(self.seqno_response(&request)),
+            Some("runGetMethod") => {
+                let response = self.seqno_response(&request);
+                self.wait_at_request_gate(RequestKind::Seqno, request.id)?;
+                Ok(response)
+            }
             Some("sendBoc") => self.submit_response(&request, &body),
             method => Err(host_error(
                 HttpHostErrorKind::Other,
@@ -492,6 +497,10 @@ pub(super) struct MemoryPlatformHost {
     secret_read_reasons: Mutex<Vec<(String, SecretAccessReason)>>,
     journal: Mutex<HashMap<(String, String), JournalRecord>>,
     conflict_next_journal_write: Mutex<bool>,
+    secret_read_error: Mutex<Option<ProtectedSecretHostError>>,
+    journal_load_error: Mutex<Option<JournalHostError>>,
+    journal_write_error_on: Mutex<Option<u64>>,
+    journal_write_count: Mutex<u64>,
 }
 
 impl MemoryPlatformHost {
@@ -501,6 +510,24 @@ impl MemoryPlatformHost {
 
     pub(super) fn conflict_next_journal_write(&self) {
         *lock(&self.conflict_next_journal_write) = true;
+    }
+
+    pub(super) fn fail_next_secret_read(&self) {
+        *lock(&self.secret_read_error) = Some(ProtectedSecretHostError::Failed {
+            kind: ProtectedSecretHostErrorKind::Other,
+            diagnostic: "scripted protected secret failure".to_owned(),
+        });
+    }
+
+    pub(super) fn fail_next_journal_load(&self) {
+        *lock(&self.journal_load_error) = Some(JournalHostError::Failed {
+            kind: JournalHostErrorKind::Unavailable,
+            diagnostic: "scripted journal load failure".to_owned(),
+        });
+    }
+
+    pub(super) fn fail_journal_write(&self, write_number: u64) {
+        *lock(&self.journal_write_error_on) = Some(write_number);
     }
 
     pub(super) fn secret_read_count(&self) -> u64 {
@@ -561,6 +588,10 @@ impl WalletPlatformHost for MemoryPlatformHost {
     ) -> Result<Vec<u8>, ProtectedSecretHostError> {
         *lock(&self.secret_reads) += 1;
         lock(&self.secret_read_reasons).push((request.secret_ref.value.clone(), request.reason));
+        let secret_read_error = lock(&self.secret_read_error).take();
+        if let Some(error) = secret_read_error {
+            return Err(error);
+        }
         lock(&self.secrets)
             .get(&request.secret_ref.value)
             .cloned()
@@ -590,6 +621,10 @@ impl WalletPlatformHost for MemoryPlatformHost {
         &self,
         key: JournalKey,
     ) -> Result<Option<JournalRecord>, JournalHostError> {
+        let journal_load_error = lock(&self.journal_load_error).take();
+        if let Some(error) = journal_load_error {
+            return Err(error);
+        }
         Ok(lock(&self.journal).get(&(key.record_id, key.slot)).cloned())
     }
 
@@ -597,6 +632,17 @@ impl WalletPlatformHost for MemoryPlatformHost {
         &self,
         mutation: JournalCompareExchange,
     ) -> Result<JournalCompareExchangeResult, JournalHostError> {
+        let write_number = {
+            let mut count = lock(&self.journal_write_count);
+            *count = count.saturating_add(1);
+            *count
+        };
+        if lock(&self.journal_write_error_on).as_ref() == Some(&write_number) {
+            return Err(JournalHostError::Failed {
+                kind: JournalHostErrorKind::Unavailable,
+                diagnostic: format!("scripted journal write {write_number} failure"),
+            });
+        }
         let key = (mutation.key.record_id, mutation.key.slot);
         let mut journal = lock(&self.journal);
         let current = journal.get(&key).cloned();

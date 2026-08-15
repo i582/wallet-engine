@@ -143,6 +143,63 @@ fn loads_newly_confirmed_transactions_from_localnet() {
 }
 
 #[test]
+fn includes_transactions_confirmed_between_refresh_resource_requests() {
+    scenario("activity observes transactions confirmed while refresh is in flight")
+        .given(network().localnet())
+        .given(wallet().uninitialized().balance(grams(10)))
+        .when(call("deploy", send().to(own_address()).nanograms(1)))
+        .then(result("deploy").submitted())
+        .when(call("baseline", refresh_wallet()))
+        .then(update("baseline").completed())
+        .then(remember_activity_as("A"))
+        // The activity HTTP request exists, but the localnet has not served it.
+        .when(pause_next_activity_request("activity-head"))
+        .when(start("in-flight-refresh", refresh_wallet()))
+        .when(wait_for_request("activity-head"))
+        // Confirm real wallet transactions while refresh owns a Loading snapshot.
+        .when(call("new-transactions", spam_transfers(3)))
+        .then(succeeds("new-transactions"))
+        .then(on_chain_wallet().active().seqno(4))
+        .when(release_request("activity-head"))
+        .then(update("in-flight-refresh").completed())
+        .then(remember_new_activity_as("B"))
+        .then(activity_is(&["A", "B"]))
+        .run();
+}
+
+#[test]
+fn cancelled_refresh_discards_a_real_head_change_until_retry() {
+    scenario("cancelled refresh cannot publish localnet transactions from a late response")
+        .given(network().localnet())
+        .given(wallet().uninitialized().balance(grams(10)))
+        .when(call("deploy", send().to(own_address()).nanograms(1)))
+        .then(result("deploy").submitted())
+        .when(call("baseline", refresh_wallet()))
+        .then(update("baseline").completed())
+        .then(remember_activity_as("A"))
+        .when(pause_next_activity_request("late-head"))
+        .when(start("cancelled-refresh", refresh_wallet()))
+        .when(wait_for_request("late-head"))
+        .when(call("new-transactions", spam_transfers(3)))
+        .then(succeeds("new-transactions"))
+        .then(on_chain_wallet().active().seqno(4))
+        .when(call("cancel", cancel_refresh()))
+        .then(succeeds("cancel"))
+        .then(request_was_cancelled("late-head"))
+        .then(remember_revision("after-cancel"))
+        .when(release_request("late-head"))
+        .then(update("cancelled-refresh").superseded())
+        .then(revision_is("after-cancel"))
+        .then(activity_is(&["A"]))
+        // A new generation must load the chain change that the cancelled one ignored.
+        .when(call("retry", refresh_wallet()))
+        .then(update("retry").completed())
+        .then(remember_new_activity_as("B"))
+        .then(activity_is(&["A", "B"]))
+        .run();
+}
+
+#[test]
 fn preserves_provider_retry_advice_from_rate_limiting() {
     scenario("refresh exposes provider backoff as structured resource state")
         .given(provider().account_is_rate_limited(7))
