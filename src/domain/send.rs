@@ -102,10 +102,44 @@ pub enum SendPhase {
     SubmissionUnknown,
     /// The provider accepted the signed BOC.
     Submitted,
+    /// The external message was found as the inbound message of an on-chain transaction.
+    Confirmed,
+    /// Another external message consumed the sequence number reserved by this send.
+    Replaced,
+    /// Provider time passed the signed validity window and the message was not observed.
+    Expired,
+    /// An explicit same-sequence-number resend replaced this journal attempt.
+    Superseded,
     /// The send failed before an ambiguous submission result.
     Failed,
     /// The send was cancelled before its durable commit boundary.
     Cancelled,
+}
+
+/// Why a durable outgoing message cannot yet be resolved to a final outcome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Enum)]
+#[serde(rename_all = "camelCase")]
+pub enum PendingReason {
+    /// Toncenter still exposes an emulated pending transaction for the message.
+    InMempool,
+    /// No terminal evidence exists and the signed validity window is still open.
+    AwaitingWindow,
+}
+
+/// Chain evidence and retry guidance for a durable outgoing message.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolutionInfo {
+    /// The confirmed transaction hash, when the message was executed.
+    pub transaction_hash: Option<Base64Hash>,
+    /// The confirmed transaction logical time as a canonical decimal string.
+    pub transaction_lt: Option<String>,
+    /// Why the message remains unresolved, when no terminal evidence exists.
+    pub pending_reason: Option<PendingReason>,
+    /// Whether this engine version can build an explicit same-seqno replacement.
+    pub can_force_retry: bool,
+    /// A UI polling hint. This is not a correctness deadline.
+    pub retry_after_hint_ms: Option<u64>,
 }
 
 /// The observable state of the send workflow.
@@ -118,6 +152,9 @@ pub struct SendSnapshot {
     pub phase: SendPhase,
     /// A sanitized diagnostic for failed or unknown submission states.
     pub error_message: Option<String>,
+    /// Resolution evidence or pending guidance for the durable outgoing message.
+    #[serde(default)]
+    pub resolution: Option<ResolutionInfo>,
 }
 
 /// A bounded summary of the Toncenter trace emulated before authorization.

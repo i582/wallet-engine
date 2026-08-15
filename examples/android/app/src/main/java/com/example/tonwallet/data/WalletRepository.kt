@@ -142,6 +142,7 @@ class WalletRepository(private val store: SecureWalletStore) {
                     localSecretRef = wallet.descriptor().secretRef,
                     network = wallet.network,
                     sendValiditySeconds = SEND_VALIDITY_SECONDS,
+                    resolutionMarginSeconds = 60u,
                     providers = ProviderConfig(
                         toncenterBaseUrl = if (wallet.testnet) TESTNET_BASE_URL else MAINNET_BASE_URL,
                         requestTimeoutMs = PROVIDER_REQUEST_TIMEOUT_MILLIS.toULong(),

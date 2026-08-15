@@ -327,6 +327,7 @@ mod tests {
             local_secret_ref: None,
             network: Network::Testnet,
             send_validity_seconds: 300,
+            resolution_margin_seconds: 60,
             providers: ProviderConfig::standard(Network::Testnet),
         };
         State {
@@ -346,6 +347,7 @@ mod tests {
                     operation_id: None,
                     phase: SendPhase::Idle,
                     error_message: None,
+                    resolution: None,
                 },
             },
             config,
@@ -357,10 +359,12 @@ mod tests {
             pagination_generation: 0,
             preview_generation: 0,
             send_generation: 0,
+            resolution_generation: 0,
             active_refresh: None,
             active_pagination: None,
             active_preview: None,
             active_send: None,
+            active_resolution: None,
             send_commit_started: false,
             send_workflow: None,
             waiters: Vec::new(),

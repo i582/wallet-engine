@@ -16,6 +16,7 @@ pub(super) enum OperationFamily {
     Pagination,
     Preview,
     Send,
+    Resolution,
 }
 
 /// All mutable state for one wallet client.
@@ -67,6 +68,9 @@ pub(super) struct State {
     /// A send result can mutate state only while this generation is active.
     pub(super) send_generation: u64,
 
+    /// The generation of the newest standalone pending-send resolution.
+    pub(super) resolution_generation: u64,
+
     /// The active refresh as `(generation, request_ids)`.
     /// The request list contains the concurrent account and activity requests.
     /// A new refresh replaces this entry and cancels all request identifiers from the old entry.
@@ -84,6 +88,9 @@ pub(super) struct State {
     /// The list contains only HTTP requests that the host currently owns.
     /// Send steps are sequential, so the list usually contains zero or one identifier.
     pub(super) active_send: Option<(u64, Vec<HttpRequestId>)>,
+
+    /// The active standalone resolver as `(generation, active_request_ids)`.
+    pub(super) active_resolution: Option<(u64, Vec<HttpRequestId>)>,
 
     /// Marks the irreversible send boundary before the prepared journal CAS starts.
     /// Cancellation returns `SendCancellationTooLate` while this value is true.
@@ -173,6 +180,10 @@ impl State {
                 .is_some_and(|active| active.0 == generation),
             OperationFamily::Send => self
                 .active_send
+                .as_ref()
+                .is_some_and(|active| active.0 == generation),
+            OperationFamily::Resolution => self
+                .active_resolution
                 .as_ref()
                 .is_some_and(|active| active.0 == generation),
         }

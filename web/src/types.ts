@@ -21,6 +21,7 @@ export interface WalletClientConfig {
   readonly localSecretRef?: ProtectedSecretRef
   readonly network: Network
   readonly sendValiditySeconds: number
+  readonly resolutionMarginSeconds: number
   readonly providers: ProviderConfig
 }
 
@@ -102,13 +103,28 @@ export type SendPhase =
   | "submitting"
   | "submissionUnknown"
   | "submitted"
+  | "confirmed"
+  | "replaced"
+  | "expired"
+  | "superseded"
   | "failed"
   | "cancelled"
+
+export type PendingReason = "inMempool" | "awaitingWindow"
+
+export interface ResolutionInfo {
+  readonly transactionHash?: Base64Hash
+  readonly transactionLt?: string
+  readonly pendingReason?: PendingReason
+  readonly canForceRetry: boolean
+  readonly retryAfterHintMs?: number
+}
 
 export interface SendSnapshot {
   readonly operationId?: string
   readonly phase: SendPhase
   readonly errorMessage?: string
+  readonly resolution?: ResolutionInfo
 }
 
 export interface SendEmulationAction {

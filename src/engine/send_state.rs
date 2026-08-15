@@ -3,7 +3,8 @@
 use crate::domain::bounded_diagnostic;
 use crate::wallet::send::{SendWorkflow, SendWorkflowError};
 use crate::{
-    HttpHostError, HttpRequest, HttpRequestId, HttpResponse, SendPhase, WalletClientError,
+    HttpHostError, HttpRequest, HttpRequestId, HttpResponse, SendPhase, SendSnapshot,
+    WalletClientError,
 };
 use zeroize::Zeroizing;
 
@@ -23,6 +24,42 @@ impl SensitiveBytes {
 }
 
 impl WalletClient {
+    /// Publishes the recovered fate of the previous operation while the current
+    /// send still owns the single-flight slot.
+    pub(super) fn publish_prior_send_resolution(
+        &self,
+        generation: u64,
+        snapshot: SendSnapshot,
+    ) -> Result<(), WalletClientError> {
+        let mut state = self.lock()?;
+        if !state.is_current(OperationFamily::Send, generation) {
+            return Err(WalletClientError::StateUnavailable);
+        }
+        state.snapshot.send = snapshot;
+        state.next_revision()?;
+        Ok(())
+    }
+
+    /// Ends the current attempt without changing the previous operation to
+    /// `Failed`; the unresolved snapshot must remain visible to explain why a
+    /// replacement signature was refused.
+    pub(super) fn block_send_for_pending(
+        &self,
+        generation: u64,
+        snapshot: SendSnapshot,
+    ) -> Result<WalletClientError, WalletClientError> {
+        let mut state = self.lock()?;
+        if !state.is_current(OperationFamily::Send, generation) {
+            return Err(WalletClientError::StateUnavailable);
+        }
+        state.active_send = None;
+        state.send_commit_started = false;
+        state.send_workflow = None;
+        state.snapshot.send = snapshot;
+        state.next_revision()?;
+        Ok(WalletClientError::PreviousSubmissionUnresolved)
+    }
+
     pub(super) fn fail_send(
         &self,
         generation: u64,
@@ -64,7 +101,6 @@ impl WalletClient {
             SendWorkflowError::PreviousSubmissionUnresolved => {
                 WalletClientError::PreviousSubmissionUnresolved
             }
-            SendWorkflowError::WalletSeqnoNotAdvanced => WalletClientError::WalletSeqnoNotAdvanced,
             SendWorkflowError::AccountUnavailable { status } => {
                 WalletClientError::SendAccountUnavailable { status }
             }

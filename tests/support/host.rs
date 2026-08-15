@@ -44,6 +44,8 @@ struct HttpState {
     emulation_status: u16,
     emulation_host_error: Option<HttpHostErrorKind>,
     emulation_rejected: bool,
+    message_is_executed: bool,
+    message_is_pending: bool,
     activity_pages: Vec<usize>,
     activity_page_index: usize,
     next_activity_status: Option<u16>,
@@ -81,6 +83,7 @@ pub(super) struct SubmittedMessage {
     pub(super) contains_state_init: bool,
     pub(super) send_modes: Vec<u8>,
     pub(super) comment: Option<String>,
+    pub(super) message_hash: String,
 }
 
 pub(super) fn decode_submitted_comment(
@@ -135,6 +138,8 @@ impl ScenarioHttpHost {
                 emulation_status: 200,
                 emulation_host_error: None,
                 emulation_rejected: false,
+                message_is_executed: false,
+                message_is_pending: false,
                 activity_pages: Vec::new(),
                 activity_page_index: 0,
                 next_activity_status: None,
@@ -170,6 +175,8 @@ impl ScenarioHttpHost {
         state.emulation_status = fixture.emulation_status;
         state.emulation_host_error = fixture.emulation_host_error;
         state.emulation_rejected = fixture.emulation_rejected;
+        state.message_is_executed = fixture.message_is_executed;
+        state.message_is_pending = fixture.message_is_pending;
     }
 
     pub(super) fn set_activity_pages(&self, pages: Vec<usize>) {
@@ -525,6 +532,10 @@ impl ScenarioHttpHost {
             .map_err(|error| host_error(HttpHostErrorKind::Other, error.to_string()))?;
         let message = Msg::<TonCell>::from_cell(&cell)
             .map_err(|error| host_error(HttpHostErrorKind::Other, error.to_string()))?;
+        let message_hash = message
+            .cell_hash_normalized()
+            .map(|hash| STANDARD.encode(hash.as_slice()))
+            .map_err(|error| host_error(HttpHostErrorKind::Other, error.to_string()))?;
         let body = WalletV5ExtMsgBody::from_cell(&message.body)
             .map_err(|error| host_error(HttpHostErrorKind::Other, error.to_string()))?;
         let comment = decode_submitted_comment(&body)?;
@@ -534,6 +545,7 @@ impl ScenarioHttpHost {
             contains_state_init: message.state_init().is_some(),
             send_modes: body.msgs_modes,
             comment,
+            message_hash,
         });
 
         let outcome = if state.submission_gate.is_some() {
@@ -653,6 +665,50 @@ impl WalletHttpHost for ScenarioHttpHost {
         }
         if request.url.contains("/api/emulate/v1/emulateTrace") {
             return self.emulation_response(&request);
+        }
+        if request.url.contains("/api/v3/transactionsByMessage") {
+            let executed = lock(&self.state).message_is_executed;
+            let transactions = if executed {
+                vec![json!({
+                    "hash": STANDARD.encode([9_u8; 32]),
+                    "lt": "9001"
+                })]
+            } else {
+                Vec::new()
+            };
+            return Ok(response(
+                &request,
+                json!({ "transactions": transactions, "address_book": {} }),
+            ));
+        }
+        if request.url.contains("/api/v3/pendingTransactions") {
+            let state = lock(&self.state);
+            let transactions = if state.message_is_pending {
+                state
+                    .submitted_message
+                    .as_ref()
+                    .map(|submitted| {
+                        vec![json!({
+                            "hash": STANDARD.encode([8_u8; 32]),
+                            "lt": "8001",
+                            "in_msg": { "hash_norm": submitted.message_hash }
+                        })]
+                    })
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            return Ok(response(
+                &request,
+                json!({ "transactions": transactions, "address_book": {} }),
+            ));
+        }
+        if request.url.contains("/api/v3/walletStates") {
+            let seqno = lock(&self.state).wallet.seqno;
+            return Ok(response(
+                &request,
+                json!({ "wallets": [{ "seqno": seqno }], "address_book": {}, "metadata": {} }),
+            ));
         }
 
         let body: Value = serde_json::from_slice(&request.body)

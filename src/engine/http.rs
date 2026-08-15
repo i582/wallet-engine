@@ -72,6 +72,33 @@ pub(super) fn build_toncenter_v2_request(
     })
 }
 
+/// Builds a bounded GET request for a Toncenter v3 endpoint.
+///
+/// The caller supplies only the endpoint suffix. Keeping `/api/v3` here lets
+/// one configured deployment base serve both the existing v2 reads and the v3
+/// resolution evidence without rewriting or guessing the base URL.
+pub(super) fn build_toncenter_v3_request(
+    config: &WalletClientConfig,
+    id: HttpRequestId,
+    path: &str,
+    query: &[(&str, &str)],
+) -> Result<HttpRequest, WalletClientError> {
+    let path = ["api", "v3", path];
+    Ok(HttpRequest {
+        id,
+        method: HttpMethod::Get,
+        url: build_toncenter_url(config, &path, query)?,
+        headers: vec![HttpHeader {
+            name: "Accept".to_owned(),
+            value: "application/json".to_owned(),
+        }],
+        body: Vec::new(),
+        timeout_ms: config.providers.request_timeout_ms,
+        max_response_header_bytes: MAX_RESPONSE_HEADER_BYTES,
+        max_response_body_bytes: MAX_RESPONSE_BODY_BYTES,
+    })
+}
+
 /// Builds a Toncenter URL below the configured deployment base.
 ///
 /// Callers provide the complete API-specific path as individual segments. This
@@ -357,6 +384,7 @@ mod tests {
             local_secret_ref: None,
             network: Network::Testnet,
             send_validity_seconds: 300,
+            resolution_margin_seconds: 60,
             providers: ProviderConfig {
                 toncenter_base_url: "https://provider.example/custom/".to_owned(),
                 request_timeout_ms: 12_345,
@@ -399,6 +427,7 @@ mod tests {
             local_secret_ref: None,
             network: Network::Testnet,
             send_validity_seconds: 300,
+            resolution_margin_seconds: 60,
             providers: ProviderConfig {
                 toncenter_base_url: "mailto:provider@example.com".to_owned(),
                 request_timeout_ms: 15_000,

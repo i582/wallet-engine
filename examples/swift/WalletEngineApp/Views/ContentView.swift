@@ -1535,12 +1535,12 @@ private struct SendWalletView: View {
                     )
                 )
                 switch result.phase {
-                case .submitted:
+                case .submitted, .confirmed:
                     onSubmitted()
                     dismiss()
                 case .submissionUnknown:
                     errorMessage = "The transfer may have been submitted. Do not send it again. Message hash: \(result.messageHash)"
-                case .failed:
+                case .failed, .replaced, .expired, .superseded:
                     errorMessage = session.snapshot.send.errorMessage
                         ?? "The transfer was rejected and was not submitted."
                 case .cancelled:

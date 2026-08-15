@@ -51,10 +51,12 @@ impl WalletClient {
                 pagination_generation: 0,
                 preview_generation: 0,
                 send_generation: 0,
+                resolution_generation: 0,
                 active_refresh: None,
                 active_pagination: None,
                 active_preview: None,
                 active_send: None,
+                active_resolution: None,
                 send_commit_started: false,
                 send_workflow: None,
                 waiters: Vec::new(),
@@ -80,6 +82,11 @@ impl WalletClient {
         &self,
         after_revision: u64,
     ) -> Result<WalletSnapshot, WalletClientError> {
+        // Hosts commonly start their observation loop immediately after
+        // construction. Use that first async poll as the runtime-neutral
+        // startup sweep for a durable send left by a previous process.
+        let _ = self.resolve_pending().await;
+
         let receiver = {
             let mut state = self.lock()?;
             if state.closing || state.shutdown {
@@ -161,6 +168,7 @@ fn prepare_shutdown(
         || state.active_pagination.is_some()
         || state.active_preview.is_some()
         || state.active_send.is_some();
+    let has_active_work = has_active_work || state.active_resolution.is_some();
     if has_active_work && state.snapshot.revision == u64::MAX {
         return Err(WalletClientError::IdentifierExhausted);
     }
@@ -192,6 +200,10 @@ fn prepare_shutdown(
             state.send_workflow = Some(workflow);
         }
         state.snapshot.send.phase = SendPhase::Cancelled;
+    }
+
+    if let Some((_, resolution_request_ids)) = state.active_resolution.take() {
+        request_ids.extend(resolution_request_ids);
     }
 
     state.send_commit_started = false;

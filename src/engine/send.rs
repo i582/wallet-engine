@@ -16,6 +16,8 @@ use crate::wallet::transfer::{derive_source, prepare_transfer};
 use crate::{AccountStatus, SendAmount, SendPhase, SendRequest, SendResult, WalletClientError};
 
 use super::provider::parse_account;
+use super::resolution::ResolutionRequests;
+use crate::wallet::send::{SendResolution, pending_send_record};
 
 #[uniffi::export]
 impl WalletClient {
@@ -27,8 +29,9 @@ impl WalletClient {
     /// protected-secret authorization.
     ///
     /// A transport error after submission produces `SubmissionUnknown`. Do not
-    /// create a replacement transfer for the same funds. This crate does not
-    /// reconcile the result or stream chain confirmation.
+    /// create a replacement transfer for the same funds while it is unresolved.
+    /// A later [`Self::resolve_pending`] call, refresh, or send attempt can
+    /// reconcile the persisted message against provider evidence.
     ///
     /// Workflow failures return a typed send error. The same bounded diagnostic
     /// is published in `snapshot().send.error_message`.
@@ -44,6 +47,7 @@ impl WalletClient {
             expected_source,
             account_request,
             seqno_request,
+            resolution_request_ids,
             submit_request_id,
             journal_key,
             mut workflow,
@@ -56,7 +60,7 @@ impl WalletClient {
                 .clone()
                 .ok_or(WalletClientError::LocalSigningUnavailable)?;
 
-            if state.active_send.is_some() {
+            if state.active_send.is_some() || state.active_resolution.is_some() {
                 return Err(WalletClientError::SendAlreadyInProgress);
             }
 
@@ -75,6 +79,12 @@ impl WalletClient {
                 &[("address", config.address.as_str())],
             )?;
             let seqno_request = build_seqno_request(&config, state.allocate_request_id()?)?;
+            let resolution_request_ids = [
+                state.allocate_request_id()?,
+                state.allocate_request_id()?,
+                state.allocate_request_id()?,
+                state.allocate_request_id()?,
+            ];
             let submit_request_id = state.allocate_request_id()?;
             let mut workflow = SendWorkflow::new(
                 config.record_id.clone(),
@@ -99,6 +109,7 @@ impl WalletClient {
                 expected_source,
                 account_request,
                 seqno_request,
+                resolution_request_ids,
                 submit_request_id,
                 journal_key,
                 workflow,
@@ -113,13 +124,12 @@ impl WalletClient {
             .await
             .map_err(|error| self.send_failed_error(generation, error.to_string()))?;
         self.ensure_current_send(generation)?;
-        let directive = workflow
-            .journal_loaded(journal_record)
-            .map_err(|error| self.send_workflow_error(generation, error))?;
-        let SendDirective::FetchFreshAccount = directive else {
-            return Err(self.send_failed_error(generation, "invalid send journal transition"));
-        };
-        self.publish_send_workflow(generation, &workflow)?;
+        let pending = journal_record
+            .as_ref()
+            .map(|record| pending_send_record(record, &config.record_id, &expected_source))
+            .transpose()
+            .map_err(|error| self.send_workflow_error(generation, error))?
+            .flatten();
 
         // Fetch current account status before authorization. A stale cached status can produce
         // an invalid seqno or incorrectly include StateInit in the external message.
@@ -128,6 +138,47 @@ impl WalletClient {
             .await?;
         let account = evaluate_response(&account_request, account_response, parse_account)
             .map_err(|error| self.send_failed_error(generation, error.developer_message))?;
+
+        let provider_time = account.sync_utime.ok_or_else(|| {
+            self.send_failed_error(
+                generation,
+                "fresh account state did not include provider synchronization time",
+            )
+        })?;
+
+        let journal_record = if let Some(pending) = pending {
+            // Resolve the old signed message before authorizing a new one. Only
+            // durable terminal evidence unlocks the wallet-wide send slot;
+            // absence or a temporary provider failure must never become an
+            // implicit permission to sign a potentially duplicate payment.
+            let requests = ResolutionRequests::new(&config, &pending, resolution_request_ids)
+                .map_err(|error| self.send_failed_error(generation, error.to_string()))?;
+            let resolved = self
+                .resolve_pending_for_send(
+                    generation,
+                    &config,
+                    pending.clone(),
+                    provider_time,
+                    &requests,
+                )
+                .await?;
+            let snapshot = pending.snapshot(&resolved.resolution);
+            self.publish_prior_send_resolution(generation, snapshot.clone())?;
+            if matches!(resolved.resolution, SendResolution::StillPending(_)) {
+                return Err(self.block_send_for_pending(generation, snapshot)?);
+            }
+            Some(resolved.journal)
+        } else {
+            journal_record
+        };
+
+        let directive = workflow
+            .journal_loaded(journal_record)
+            .map_err(|error| self.send_workflow_error(generation, error))?;
+        let SendDirective::FetchFreshAccount = directive else {
+            return Err(self.send_failed_error(generation, "invalid send journal transition"));
+        };
+        self.publish_send_workflow(generation, &workflow)?;
 
         // Reject an impossible value before reading the mnemonic or creating a signed BOC.
         // Fees are intentionally not estimated here, so equality can still fail on-chain.
@@ -166,12 +217,6 @@ impl WalletClient {
 
         // Use synchronized provider time for the real signature. A UI preview
         // can be several blocks old by the time the user confirms it.
-        let provider_time = account.sync_utime.ok_or_else(|| {
-            self.send_failed_error(
-                generation,
-                "fresh account state did not include provider synchronization time",
-            )
-        })?;
         let provider_time = u32::try_from(provider_time).map_err(|_| {
             self.send_failed_error(
                 generation,

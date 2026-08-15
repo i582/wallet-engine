@@ -175,6 +175,7 @@ async function createClient(
       // This is application policy, not a hidden engine default. The engine
       // adds it to Toncenter's fresh synchronization timestamp.
       sendValiditySeconds: 300,
+      resolutionMarginSeconds: 60,
       providers: {
         toncenterBaseUrl: TESTNET_BASE_URL,
         requestTimeoutMs: 15_000,

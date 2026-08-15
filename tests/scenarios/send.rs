@@ -1,5 +1,5 @@
 use super::support::*;
-use wallet_engine::{AccountStatus, SendPhase, WalletClientError};
+use wallet_engine::{AccountStatus, PendingReason, SendPhase, WalletClientError};
 
 const EMPTY_DESTINATION: &str =
     "0:2222222222222222222222222222222222222222222222222222222222222222";
@@ -775,7 +775,97 @@ fn unknown_submission_blocks_a_replacement_send() {
             "replacement",
             WalletClientError::PreviousSubmissionUnresolved,
         ))
-        .then(snapshot().send_phase(SendPhase::Failed))
+        .then(snapshot().pending_reason(PendingReason::AwaitingWindow))
+        .run();
+}
+
+#[test]
+fn executed_unknown_submission_is_confirmed_before_replacement() {
+    scenario("an executed unknown submission is confirmed before replacement")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(submission().paused("first-submit"))
+        .when(start("first", send().to(own_address()).grams(1)))
+        .then(send_phase("first", SendPhase::Submitting))
+        .when(resume("first-submit", submission_timeout()))
+        .then(result("first").submission_unknown())
+        .given(provider().message_is_executed())
+        .given(submission().paused("replacement-submit"))
+        .when(start("replacement", send().to(own_address()).grams(2)))
+        .then(send_phase("replacement", SendPhase::Submitting))
+        .when(resume("replacement-submit", submission_accepted()))
+        .then(result("replacement").submitted())
+        .run();
+}
+
+#[test]
+fn restart_sweep_confirms_without_reading_the_secret_again() {
+    scenario("restart sweep confirms a durable unknown submission")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(submission().paused("first-submit"))
+        .when(start("first", send().to(own_address()).grams(1)))
+        .then(send_phase("first", SendPhase::Submitting))
+        .when(resume("first-submit", submission_timeout()))
+        .then(result("first").submission_unknown())
+        .then(protected_secret_read_count(1))
+        .given(provider().message_is_executed())
+        .when(crash_and_restart())
+        // refresh is the first host-driven async operation on the replacement
+        // client and therefore drives the runtime-neutral startup sweep.
+        .when(call("refresh", refresh_wallet()))
+        .then(update("refresh").completed())
+        .then(snapshot().send_phase(SendPhase::Confirmed))
+        .then(protected_secret_read_count(1))
+        .run();
+}
+
+#[test]
+fn unseen_unknown_submission_expires_by_provider_time() {
+    scenario("an unseen unknown submission expires by provider time")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(submission().paused("first-submit"))
+        .when(start("first", send().to(own_address()).grams(1)))
+        .then(send_phase("first", SendPhase::Submitting))
+        .when(resume("first-submit", submission_timeout()))
+        .then(result("first").submission_unknown())
+        // valid_until is 1_800_000_300 and the default resolution margin is 60.
+        .given(
+            wallet()
+                .active()
+                .balance(grams(10))
+                .seqno(7)
+                .sync_time(1_800_000_361),
+        )
+        .given(submission().paused("replacement-submit"))
+        .when(start("replacement", send().to(own_address()).grams(2)))
+        .then(send_phase("replacement", SendPhase::Submitting))
+        .when(resume("replacement-submit", submission_accepted()))
+        .then(result("replacement").submitted())
+        .run();
+}
+
+#[test]
+fn pending_evidence_prevents_expiration() {
+    scenario("mempool evidence keeps an expired-window submission unresolved")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(submission().paused("first-submit"))
+        .when(start("first", send().to(own_address()).grams(1)))
+        .then(send_phase("first", SendPhase::Submitting))
+        .when(resume("first-submit", submission_timeout()))
+        .then(result("first").submission_unknown())
+        .given(
+            wallet()
+                .active()
+                .balance(grams(10))
+                .seqno(7)
+                .sync_time(1_800_000_361),
+        )
+        .given(provider().message_is_pending())
+        .when(call("replacement", send().to(own_address()).grams(2)))
+        .then(error(
+            "replacement",
+            WalletClientError::PreviousSubmissionUnresolved,
+        ))
+        .then(snapshot().pending_reason(PendingReason::InMempool))
         .run();
 }
 
@@ -1061,8 +1151,8 @@ fn expired_external_message_is_rejected_before_authorization() {
 }
 
 #[test]
-fn submitted_send_blocks_replacement_until_seqno_advances() {
-    scenario("submitted send waits for the next wallet seqno")
+fn submitted_send_resolves_before_replacement() {
+    scenario("submitted send resolves before a replacement is signed")
         .given(wallet().active().balance(grams(10)).seqno(7))
         .given(submission().paused("first-submit"))
         .when(start("first", send().to(own_address()).grams(1)))
@@ -1072,8 +1162,9 @@ fn submitted_send_blocks_replacement_until_seqno_advances() {
         .when(call("too-early", send().to(own_address()).grams(2)))
         .then(error(
             "too-early",
-            WalletClientError::WalletSeqnoNotAdvanced,
+            WalletClientError::PreviousSubmissionUnresolved,
         ))
+        .then(snapshot().send_phase(SendPhase::Submitted))
         .given(wallet().active().balance(grams(9)).seqno(8))
         .given(submission().paused("next-submit"))
         .when(start("next", send().to(own_address()).grams(2)))

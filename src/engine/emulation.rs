@@ -481,6 +481,7 @@ mod tests {
             local_secret_ref: None,
             network: Network::Testnet,
             send_validity_seconds: 300,
+            resolution_margin_seconds: 60,
             providers: ProviderConfig {
                 toncenter_base_url: base.to_owned(),
                 request_timeout_ms: 15_000,

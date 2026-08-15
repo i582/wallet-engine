@@ -299,6 +299,7 @@ impl App {
             local_secret_ref: Some(descriptor.secret_ref.clone()),
             network: descriptor.network,
             send_validity_seconds: 300,
+            resolution_margin_seconds: 60,
             providers: ProviderConfig::standard(descriptor.network),
         };
         match WalletClient::new(config, self.http_host.clone(), self.store.clone()) {

@@ -231,6 +231,7 @@ mod tests {
             local_secret_ref: None,
             network: Network::Testnet,
             send_validity_seconds: 300,
+            resolution_margin_seconds: 60,
             providers: ProviderConfig::standard(Network::Testnet),
         }
     }

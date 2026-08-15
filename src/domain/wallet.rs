@@ -56,6 +56,7 @@ impl WalletSnapshot {
                 operation_id: None,
                 phase: SendPhase::Idle,
                 error_message: None,
+                resolution: None,
             },
         }
     }

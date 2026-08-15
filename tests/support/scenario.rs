@@ -13,10 +13,10 @@ use ton::block_tlb::{
 use ton::ton_core::cell::TonCell;
 use ton::ton_core::traits::tlb::TLB;
 use wallet_engine::{
-    AccountStatus, ActivityCursor, DomainError, HttpHostErrorKind, Network, ProtectedSecretRef,
-    ProviderConfig, ResourcePhase, SendAmount, SendPhase, SendPreview, SendPreviewRequest,
-    SendRequest, SendResult, WalletClient, WalletClientConfig, WalletClientError, WalletHttpHost,
-    WalletOperationOutcome, WalletUpdate,
+    AccountStatus, ActivityCursor, DomainError, HttpHostErrorKind, Network, PendingReason,
+    ProtectedSecretRef, ProviderConfig, ResourcePhase, SendAmount, SendPhase, SendPreview,
+    SendPreviewRequest, SendRequest, SendResult, WalletClient, WalletClientConfig,
+    WalletClientError, WalletHttpHost, WalletOperationOutcome, WalletUpdate,
 };
 
 use super::host::{MemoryPlatformHost, PlatformCallKind, RequestKind, ScenarioHttpHost};
@@ -90,6 +90,8 @@ pub(crate) const fn provider() -> ProviderFixture {
         emulation_status: 200,
         emulation_host_error: None,
         emulation_rejected: false,
+        message_is_executed: false,
+        message_is_pending: false,
     }
 }
 
@@ -404,6 +406,14 @@ pub(crate) const fn protected_secret_was_not_read() -> Expectation {
     Expectation::SecretReadCount(0)
 }
 
+pub(crate) const fn protected_secret_read_count(count: u64) -> Expectation {
+    Expectation::SecretReadCount(count)
+}
+
+pub(crate) const fn crash_and_restart() -> ControlStep {
+    ControlStep::CrashAndRestart
+}
+
 pub(crate) const fn journal_is_empty() -> Expectation {
     Expectation::JournalIsEmpty
 }
@@ -438,6 +448,7 @@ pub(crate) const fn snapshot() -> SnapshotExpectation {
         account_error: None,
         activity_error: None,
         send_error_message: None,
+        pending_reason: None,
     }
 }
 
@@ -594,6 +605,8 @@ pub(crate) struct ProviderFixture {
     pub(super) emulation_status: u16,
     pub(super) emulation_host_error: Option<HttpHostErrorKind>,
     pub(super) emulation_rejected: bool,
+    pub(super) message_is_executed: bool,
+    pub(super) message_is_pending: bool,
 }
 
 pub(crate) struct ActivityFixture {
@@ -601,6 +614,18 @@ pub(crate) struct ActivityFixture {
 }
 
 impl ProviderFixture {
+    #[must_use]
+    pub(crate) const fn message_is_executed(mut self) -> Self {
+        self.message_is_executed = true;
+        self
+    }
+
+    #[must_use]
+    pub(crate) const fn message_is_pending(mut self) -> Self {
+        self.message_is_pending = true;
+        self
+    }
+
     #[must_use]
     pub(crate) const fn account_fails(mut self, status: u16) -> Self {
         self.account_status = status;
@@ -795,6 +820,7 @@ pub(crate) enum SubmissionOutcome {
 }
 
 pub(crate) enum ControlStep {
+    CrashAndRestart,
     ResumeSubmission {
         name: String,
         outcome: SubmissionOutcome,
@@ -1114,6 +1140,7 @@ pub(crate) struct SnapshotExpectation {
     account_error: Option<DomainError>,
     activity_error: Option<DomainError>,
     send_error_message: Option<String>,
+    pending_reason: Option<PendingReason>,
 }
 
 impl SnapshotExpectation {
@@ -1164,6 +1191,11 @@ impl SnapshotExpectation {
 
     pub(crate) fn send_error_message(mut self, message: impl Into<String>) -> Expectation {
         self.send_error_message = Some(message.into());
+        Expectation::Snapshot(self)
+    }
+
+    pub(crate) const fn pending_reason(mut self, reason: PendingReason) -> Expectation {
+        self.pending_reason = Some(reason);
         Expectation::Snapshot(self)
     }
 }
@@ -1222,6 +1254,8 @@ struct ScenarioTransport {
 struct ScenarioRunner {
     name: String,
     client: Arc<WalletClient>,
+    client_config: WalletClientConfig,
+    client_http_host: Arc<dyn WalletHttpHost>,
     platform_host: Arc<MemoryPlatformHost>,
     scripted_http_host: Option<Arc<ScenarioHttpHost>>,
     localnet_http_host: Option<Arc<LocalnetHttpHost>>,
@@ -1299,6 +1333,8 @@ impl ScenarioRunner {
                         emulation_status: fixture.emulation_status,
                         emulation_host_error: fixture.emulation_host_error,
                         emulation_rejected: fixture.emulation_rejected,
+                        message_is_executed: fixture.message_is_executed,
+                        message_is_pending: fixture.message_is_pending,
                     };
                 }
                 Step::Given(Given::Activity(fixture)) => pages.clone_from(&fixture.pages),
@@ -1372,20 +1408,22 @@ impl ScenarioRunner {
             localnet_host,
             provider_base_url,
         } = transport;
-        let client = WalletClient::new(
-            WalletClientConfig {
-                record_id: TEST_RECORD_ID.to_owned(),
-                address: test_wallet().testnet_v5_address().to_owned(),
-                public_key: test_wallet().public_key(),
-                local_secret_ref,
-                network: Network::Testnet,
-                send_validity_seconds,
-                providers: ProviderConfig {
-                    toncenter_base_url: provider_base_url,
-                    request_timeout_ms: 15_000,
-                },
+        let client_config = WalletClientConfig {
+            record_id: TEST_RECORD_ID.to_owned(),
+            address: test_wallet().testnet_v5_address().to_owned(),
+            public_key: test_wallet().public_key(),
+            local_secret_ref,
+            network: Network::Testnet,
+            send_validity_seconds,
+            resolution_margin_seconds: 60,
+            providers: ProviderConfig {
+                toncenter_base_url: provider_base_url,
+                request_timeout_ms: 15_000,
             },
-            client_host,
+        };
+        let client = WalletClient::new(
+            client_config.clone(),
+            client_host.clone(),
             platform_host.clone(),
         )
         .map_err(|error| format!("scenario `{name}` could not create its client: {error}"))?;
@@ -1393,6 +1431,8 @@ impl ScenarioRunner {
         Ok(Self {
             name: name.to_owned(),
             client,
+            client_config,
+            client_http_host: client_host,
             platform_host,
             scripted_http_host: scripted_host,
             localnet_http_host: localnet_host,
@@ -1614,6 +1654,18 @@ impl ScenarioRunner {
                 .as_ref()
                 .ok_or_else(|| "localnet scenarios cannot resume provider submission".to_owned())?
                 .resume_submission(&name, outcome),
+            When::Control(ControlStep::CrashAndRestart) => {
+                if !self.operations.is_empty() {
+                    return Err("cannot restart while scenario operations are running".to_owned());
+                }
+                self.client = WalletClient::new(
+                    self.client_config.clone(),
+                    self.client_http_host.clone(),
+                    self.platform_host.clone(),
+                )
+                .map_err(|error| format!("could not restart wallet client: {error}"))?;
+                Ok(())
+            }
             When::Control(ControlStep::PauseRequest { name, kind }) => {
                 if let Some(host) = &self.scripted_http_host {
                     host.pause_next_request(name, kind);
@@ -1897,6 +1949,19 @@ impl ScenarioRunner {
                     return Err(format!(
                         "expected send error message `{expected}`\nactual: {:?}",
                         snapshot.send.error_message
+                    ));
+                }
+                if let Some(expected) = expectation.pending_reason
+                    && snapshot
+                        .send
+                        .resolution
+                        .as_ref()
+                        .and_then(|resolution| resolution.pending_reason)
+                        != Some(expected)
+                {
+                    return Err(format!(
+                        "expected pending reason {expected:?}\nactual: {:?}",
+                        snapshot.send.resolution
                     ));
                 }
                 Ok(())

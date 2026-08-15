@@ -61,6 +61,7 @@ nonisolated struct AppleWalletEnvironment: Sendable {
             localSecretRef: ProtectedSecretRef(value: wallet.secretRef),
             network: network,
             sendValiditySeconds: 300,
+            resolutionMarginSeconds: 60,
             providers: ProviderConfig(
                 toncenterBaseUrl: isMainnet
                     ? "https://toncenter.com"

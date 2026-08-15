@@ -49,6 +49,11 @@ export class WalletClient {
     return (await this.raw.refresh()) as WalletUpdate
   }
 
+  async resolvePending(): Promise<WalletSnapshot["send"]> {
+    this.assertOpen()
+    return (await this.raw.resolvePending()) as WalletSnapshot["send"]
+  }
+
   async cancelRefresh(): Promise<void> {
     this.assertOpen()
     await this.raw.cancelRefresh()

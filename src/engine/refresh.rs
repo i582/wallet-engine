@@ -23,6 +23,11 @@ impl WalletClient {
     /// the other fails, which produces [`WalletOperationOutcome::PartiallyCompleted`].
     /// A newer refresh supersedes the older refresh and cancels its host requests.
     pub async fn refresh(&self) -> Result<WalletUpdate, WalletClientError> {
+        // A client has no runtime of its own, so startup recovery is driven by
+        // the first host-polled async operation. Resolution failure must not
+        // prevent the independent read-only refresh from proceeding.
+        let _ = self.resolve_pending().await;
+
         let (generation, requests, previous_request_ids) = {
             let mut state = self.lock()?;
             ensure_running(&state)?;

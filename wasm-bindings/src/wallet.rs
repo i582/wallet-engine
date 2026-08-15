@@ -54,6 +54,16 @@ impl WalletClient {
         to_value(&update)
     }
 
+    #[wasm_bindgen(js_name = resolvePending)]
+    pub async fn resolve_pending(&self) -> Result<JsValue, JsValue> {
+        let snapshot = self
+            .inner
+            .resolve_pending()
+            .await
+            .map_err(|error| engine_error(&error))?;
+        to_value(&snapshot)
+    }
+
     #[wasm_bindgen(js_name = cancelRefresh)]
     pub async fn cancel_refresh(&self) -> Result<(), JsValue> {
         self.inner

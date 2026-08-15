@@ -366,6 +366,10 @@ impl LocalnetHttpHost {
                 .map_err(|error| host_error(HttpHostErrorKind::Other, &error.to_string()))?;
             let message = Msg::<TonCell>::from_cell(&cell)
                 .map_err(|error| host_error(HttpHostErrorKind::Other, &error.to_string()))?;
+            let message_hash = message
+                .cell_hash_normalized()
+                .map(|hash| STANDARD.encode(hash.as_slice()))
+                .map_err(|error| host_error(HttpHostErrorKind::Other, &error.to_string()))?;
             let body = WalletV5ExtMsgBody::from_cell(&message.body)
                 .map_err(|error| host_error(HttpHostErrorKind::Other, &error.to_string()))?;
             let comment = decode_submitted_comment(&body)?;
@@ -373,6 +377,7 @@ impl LocalnetHttpHost {
                 contains_state_init: message.state_init().is_some(),
                 send_modes: body.msgs_modes,
                 comment,
+                message_hash,
             });
             *lock(&self.submitted_boc_base64) = Some(encoded);
             localnet

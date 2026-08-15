@@ -208,6 +208,7 @@ function walletConfig(descriptor: {
     publicKey: descriptor.publicKey,
     network: "testnet",
     sendValiditySeconds: 300,
+    resolutionMarginSeconds: 60,
     providers: {
       toncenterBaseUrl: "https://testnet.toncenter.com",
       requestTimeoutMs: 15_000,

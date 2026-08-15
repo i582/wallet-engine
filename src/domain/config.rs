@@ -8,6 +8,9 @@ pub const DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS: u64 = 15_000;
 /// Largest provider timeout accepted by the engine.
 pub const MAX_PROVIDER_REQUEST_TIMEOUT_MS: u64 = 300_000;
 
+/// Default indexer-lag margin after a signed message validity window.
+pub const DEFAULT_RESOLUTION_MARGIN_SECONDS: u32 = 60;
+
 /// Selects the TON network used for addresses, providers, and wallet derivation.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, uniffi::Enum,
@@ -89,13 +92,26 @@ pub struct WalletClientConfig {
     /// A short value can expire before the network includes the message. A long
     /// value extends the period in which the signed message can be submitted.
     pub send_validity_seconds: u32,
+    /// Additional provider-time margin before an unseen message becomes expired.
+    ///
+    /// This protects against declaring expiration while the transaction index is
+    /// still catching up with the account state used by the resolver.
+    #[serde(default = "default_resolution_margin_seconds")]
+    pub resolution_margin_seconds: u32,
     /// The provider endpoint.
     pub providers: ProviderConfig,
 }
 
+const fn default_resolution_margin_seconds() -> u32 {
+    DEFAULT_RESOLUTION_MARGIN_SECONDS
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS, Network, ProviderConfig};
+    use super::{
+        DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS, DEFAULT_RESOLUTION_MARGIN_SECONDS, Network,
+        ProviderConfig, WalletClientConfig,
+    };
 
     #[test]
     fn standard_provider_matches_each_network() {
@@ -125,6 +141,26 @@ mod tests {
                 toncenter_base_url: "https://testnet.toncenter.com".to_owned(),
                 request_timeout_ms: DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS,
             }
+        );
+    }
+
+    #[test]
+    fn client_json_from_before_resolution_support_uses_the_default_margin() {
+        let config: WalletClientConfig = serde_json::from_str(
+            r#"{
+                "recordId":"record",
+                "address":"0:0000000000000000000000000000000000000000000000000000000000000000",
+                "publicKey":[],
+                "network":"testnet",
+                "sendValiditySeconds":300,
+                "providers":{"toncenterBaseUrl":"https://testnet.toncenter.com"}
+            }"#,
+        )
+        .expect("the previous wallet config JSON shape must remain readable");
+
+        assert_eq!(
+            config.resolution_margin_seconds,
+            DEFAULT_RESOLUTION_MARGIN_SECONDS
         );
     }
 }
