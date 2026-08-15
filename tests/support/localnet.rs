@@ -41,6 +41,7 @@ pub(super) struct LocalnetHttpHost {
     cancelled: Mutex<HashSet<HttpRequestId>>,
     submitted_message: Mutex<Option<SubmittedMessage>>,
     submitted_boc_base64: Mutex<Option<String>>,
+    lose_next_submission_response: Mutex<Option<bool>>,
     activity_requests: Mutex<Vec<String>>,
     request_gate: Mutex<Option<RequestGate>>,
     request_changed: Condvar,
@@ -78,6 +79,7 @@ impl LocalnetHttpHost {
             cancelled: Mutex::new(HashSet::new()),
             submitted_message: Mutex::new(None),
             submitted_boc_base64: Mutex::new(None),
+            lose_next_submission_response: Mutex::new(None),
             activity_requests: Mutex::new(Vec::new()),
             request_gate: Mutex::new(None),
             request_changed: Condvar::new(),
@@ -90,6 +92,12 @@ impl LocalnetHttpHost {
 
     pub(super) fn submitted_message(&self) -> Option<SubmittedMessage> {
         lock(&self.submitted_message).clone()
+    }
+
+    /// Makes the next sendBoc ambiguous. When `reaches_network` is true the
+    /// localnet receives the BOC but mining is deferred until a later submit.
+    pub(super) fn lose_next_submission_response(&self, reaches_network: bool) {
+        *lock(&self.lose_next_submission_response) = Some(reaches_network);
     }
 
     pub(super) fn last_activity_request(&self) -> Option<String> {
@@ -305,6 +313,30 @@ impl LocalnetHttpHost {
             lock(&self.activity_requests).push(request.url.clone());
         }
 
+        let is_send_boc = request.method == HttpMethod::Post
+            && serde_json::from_slice::<Value>(&request.body)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("method")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .as_deref()
+                == Some("sendBoc");
+        let lose_submission_response = is_send_boc
+            .then(|| lock(&self.lose_next_submission_response).take())
+            .flatten();
+        if is_send_boc {
+            self.record_submitted_message(request)?;
+        }
+        if lose_submission_response == Some(false) {
+            return Err(host_error(
+                HttpHostErrorKind::Timeout,
+                "localnet submission response was lost before sendBoc",
+            ));
+        }
+
         let method = match request.method {
             HttpMethod::Get => Method::GET,
             HttpMethod::Post => Method::POST,
@@ -338,48 +370,13 @@ impl LocalnetHttpHost {
             .map_err(|error| host_error(HttpHostErrorKind::ConnectionLost, &error.to_string()))?
             .to_vec();
 
-        if request.method == HttpMethod::Post
-            && serde_json::from_slice::<Value>(&request.body)
-                .ok()
-                .and_then(|value| {
-                    value
-                        .get("method")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
-                })
-                .as_deref()
-                == Some("sendBoc")
-        {
-            let encoded = serde_json::from_slice::<Value>(&request.body)
-                .ok()
-                .and_then(|value| {
-                    value
-                        .pointer("/params/boc")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
-                })
-                .ok_or_else(|| host_error(HttpHostErrorKind::Other, "sendBoc has no BOC"))?;
-            let boc = STANDARD
-                .decode(&encoded)
-                .map_err(|error| host_error(HttpHostErrorKind::Other, &error.to_string()))?;
-            let cell = TonCell::from_boc(boc)
-                .map_err(|error| host_error(HttpHostErrorKind::Other, &error.to_string()))?;
-            let message = Msg::<TonCell>::from_cell(&cell)
-                .map_err(|error| host_error(HttpHostErrorKind::Other, &error.to_string()))?;
-            let message_hash = message
-                .cell_hash_normalized()
-                .map(|hash| STANDARD.encode(hash.as_slice()))
-                .map_err(|error| host_error(HttpHostErrorKind::Other, &error.to_string()))?;
-            let body = WalletV5ExtMsgBody::from_cell(&message.body)
-                .map_err(|error| host_error(HttpHostErrorKind::Other, &error.to_string()))?;
-            let comment = decode_submitted_comment(&body)?;
-            *lock(&self.submitted_message) = Some(SubmittedMessage {
-                contains_state_init: message.state_init().is_some(),
-                send_modes: body.msgs_modes,
-                comment,
-                message_hash,
-            });
-            *lock(&self.submitted_boc_base64) = Some(encoded);
+        if is_send_boc {
+            if lose_submission_response == Some(true) {
+                return Err(host_error(
+                    HttpHostErrorKind::Timeout,
+                    "localnet submission response was lost after sendBoc",
+                ));
+            }
             localnet
                 .mine()
                 .map_err(|error| host_error(HttpHostErrorKind::Other, &error))?;
@@ -391,6 +388,40 @@ impl LocalnetHttpHost {
             body,
             final_url,
         })
+    }
+
+    fn record_submitted_message(&self, request: &HttpRequest) -> Result<(), HttpHostError> {
+        let encoded = serde_json::from_slice::<Value>(&request.body)
+            .ok()
+            .and_then(|value| {
+                value
+                    .pointer("/params/boc")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+            .ok_or_else(|| host_error(HttpHostErrorKind::Other, "sendBoc has no BOC"))?;
+        let boc = STANDARD
+            .decode(&encoded)
+            .map_err(|error| host_error(HttpHostErrorKind::Other, &error.to_string()))?;
+        let cell = TonCell::from_boc(boc)
+            .map_err(|error| host_error(HttpHostErrorKind::Other, &error.to_string()))?;
+        let message = Msg::<TonCell>::from_cell(&cell)
+            .map_err(|error| host_error(HttpHostErrorKind::Other, &error.to_string()))?;
+        let message_hash = message
+            .cell_hash_normalized()
+            .map(|hash| STANDARD.encode(hash.as_slice()))
+            .map_err(|error| host_error(HttpHostErrorKind::Other, &error.to_string()))?;
+        let body = WalletV5ExtMsgBody::from_cell(&message.body)
+            .map_err(|error| host_error(HttpHostErrorKind::Other, &error.to_string()))?;
+        let comment = decode_submitted_comment(&body)?;
+        *lock(&self.submitted_message) = Some(SubmittedMessage {
+            contains_state_init: message.state_init().is_some(),
+            send_modes: body.msgs_modes,
+            comment,
+            message_hash,
+        });
+        *lock(&self.submitted_boc_base64) = Some(encoded);
+        Ok(())
     }
 }
 

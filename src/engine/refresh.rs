@@ -13,6 +13,7 @@ use super::activity::{
 };
 use super::http::evaluate_response;
 use super::provider::{ActivityPage, parse_account, parse_activity};
+use super::resolution::ActivityResolution;
 use super::state::{OperationFamily, ensure_running, update};
 
 #[uniffi::export]
@@ -23,11 +24,6 @@ impl WalletClient {
     /// the other fails, which produces [`WalletOperationOutcome::PartiallyCompleted`].
     /// A newer refresh supersedes the older refresh and cancels its host requests.
     pub async fn refresh(&self) -> Result<WalletUpdate, WalletClientError> {
-        // A client has no runtime of its own, so startup recovery is driven by
-        // the first host-polled async operation. Resolution failure must not
-        // prevent the independent read-only refresh from proceeding.
-        let _ = self.resolve_pending().await;
-
         let (generation, requests, previous_request_ids) = {
             let mut state = self.lock()?;
             ensure_running(&state)?;
@@ -77,29 +73,50 @@ impl WalletClient {
         let activity = evaluate_response(&requests.1, activity, |body| {
             parse_activity(body, PAGE_SIZE)
         });
+        // Match the page before consuming it into public activity. A hit commits
+        // Confirmed from data refresh already paid for, with no v3 resolver HTTP.
+        let activity_resolution = match &activity {
+            Ok(page) => self
+                .resolve_pending_from_activity(generation, &page.inbound_evidence)
+                .await
+                .unwrap_or(ActivityResolution::PendingWithoutMatch),
+            Err(_) => ActivityResolution::PendingWithoutMatch,
+        };
         self.publish_refresh_component(generation, RefreshValue::Activity(activity))?;
 
-        let mut state = self.lock()?;
-        if !state.is_current(OperationFamily::Refresh, generation) {
-            return Ok(update(WalletOperationOutcome::Superseded, 0, &state));
-        }
+        let outcome = {
+            let mut state = self.lock()?;
+            if !state.is_current(OperationFamily::Refresh, generation) {
+                return Ok(update(WalletOperationOutcome::Superseded, 0, &state));
+            }
 
-        state.active_refresh = None;
+            state.active_refresh = None;
 
-        let failed = [
-            &state.snapshot.account_resource,
-            &state.snapshot.activity_resource,
-        ]
-        .into_iter()
-        .filter(|resource| resource.phase == ResourcePhase::Failed)
-        .count();
+            let failed = [
+                &state.snapshot.account_resource,
+                &state.snapshot.activity_resource,
+            ]
+            .into_iter()
+            .filter(|resource| resource.phase == ResourcePhase::Failed)
+            .count();
 
-        let outcome = match failed {
-            0 => WalletOperationOutcome::Completed,
-            2 => WalletOperationOutcome::Failed,
-            _ => WalletOperationOutcome::PartiallyCompleted,
+            match failed {
+                0 => WalletOperationOutcome::Completed,
+                2 => WalletOperationOutcome::Failed,
+                _ => WalletOperationOutcome::PartiallyCompleted,
+            }
         };
 
+        let resolve_after_refresh = activity_resolution == ActivityResolution::PendingWithoutMatch;
+
+        // A page miss is not evidence of absence: the transaction can be older
+        // than the first page or not indexed yet. Fall back to the full
+        // single-shot resolver after releasing the refresh generation.
+        if resolve_after_refresh {
+            let _ = self.resolve_pending().await;
+        }
+
+        let state = self.lock()?;
         Ok(update(outcome, 0, &state))
     }
 

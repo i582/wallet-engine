@@ -151,6 +151,11 @@ pub(super) fn parse_pending_message(
 
 /// Parses the indexed seqno while accepting Toncenter's observed numeric and
 /// decimal-string JSON shapes.
+///
+/// Uninitialized wallets are returned as a wallet row without `seqno`; their
+/// contract-level seqno is zero. Treating any missing value as zero is also
+/// conservative for malformed active rows: it can delay Replaced, but can
+/// never create a false seqno-consumed conclusion.
 pub(super) fn parse_wallet_seqno(body: &[u8]) -> Result<u32, DomainError> {
     let response: WalletStatesResponse =
         serde_json::from_slice(body).map_err(|error| invalid_response(error.to_string()))?;
@@ -159,10 +164,9 @@ pub(super) fn parse_wallet_seqno(body: &[u8]) -> Result<u32, DomainError> {
         .into_iter()
         .next()
         .ok_or_else(|| invalid_response("walletStates did not return the configured wallet"))?;
-    let seqno = wallet
+    wallet
         .seqno
-        .ok_or_else(|| invalid_response("walletStates did not include seqno"))?;
-    parse_u32(&seqno, "wallet seqno")
+        .map_or(Ok(0), |seqno| parse_u32(&seqno, "wallet seqno"))
 }
 
 /// Validates that provider evidence contains a canonical 256-bit hash.
@@ -258,5 +262,6 @@ mod tests {
     fn parses_wallet_seqno_from_supported_v3_shapes() {
         assert_eq!(parse_wallet_seqno(br#"{"wallets":[{"seqno":7}]}"#), Ok(7));
         assert_eq!(parse_wallet_seqno(br#"{"wallets":[{"seqno":"8"}]}"#), Ok(8));
+        assert_eq!(parse_wallet_seqno(br#"{"wallets":[{}]}"#), Ok(0));
     }
 }

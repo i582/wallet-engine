@@ -15,6 +15,8 @@ pub(super) fn validate_config(config: &WalletClientConfig) -> Result<(), WalletC
         || config.send_validity_seconds == 0
         || config.providers.request_timeout_ms == 0
         || config.providers.request_timeout_ms > MAX_PROVIDER_REQUEST_TIMEOUT_MS
+        || config.resolution_poll_interval_ms == 0
+        || config.resolution_active_budget_ms < config.resolution_poll_interval_ms
         || config
             .local_secret_ref
             .as_ref()
@@ -232,6 +234,8 @@ mod tests {
             network: Network::Testnet,
             send_validity_seconds: 300,
             resolution_margin_seconds: 60,
+            resolution_poll_interval_ms: 4_000,
+            resolution_active_budget_ms: 60_000,
             providers: ProviderConfig::standard(Network::Testnet),
         }
     }

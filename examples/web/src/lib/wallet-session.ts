@@ -176,6 +176,8 @@ async function createClient(
       // adds it to Toncenter's fresh synchronization timestamp.
       sendValiditySeconds: 300,
       resolutionMarginSeconds: 60,
+      resolutionPollIntervalMs: 4000,
+      resolutionActiveBudgetMs: 60_000,
       providers: {
         toncenterBaseUrl: TESTNET_BASE_URL,
         requestTimeoutMs: 15_000,

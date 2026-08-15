@@ -85,7 +85,7 @@ impl WalletClient {
         // Hosts commonly start their observation loop immediately after
         // construction. Use that first async poll as the runtime-neutral
         // startup sweep for a durable send left by a previous process.
-        let _ = self.resolve_pending().await;
+        let _ = self.start().await;
 
         let receiver = {
             let mut state = self.lock()?;

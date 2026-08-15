@@ -552,6 +552,9 @@ private struct WalletDashboard: View {
             let installedWallet = wallet
 
             let replacement = try environment.makeClient(wallet: installedWallet)
+            // Native construction is synchronous; explicitly complete durable
+            // send recovery before the replacement client becomes observable.
+            _ = try await replacement.start()
             guard !Task.isCancelled,
                   generation == activationGeneration,
                   activeWallet?.recordId == installedWallet.recordId else {
@@ -1540,7 +1543,7 @@ private struct SendWalletView: View {
                     dismiss()
                 case .submissionUnknown:
                     errorMessage = "The transfer may have been submitted. Do not send it again. Message hash: \(result.messageHash)"
-                case .failed, .replaced, .expired, .superseded:
+                case .failed, .replaced, .expired, .superseded, .lostRace:
                     errorMessage = session.snapshot.send.errorMessage
                         ?? "The transfer was rejected and was not submitted."
                 case .cancelled:

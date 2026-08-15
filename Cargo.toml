@@ -13,6 +13,7 @@ crate-type = ["rlib", "staticlib", "cdylib"]
 async-trait = "=0.1.89"
 base64 = "=0.22.1"
 futures = "=0.3.31"
+futures-timer = { version = "=3.0.3", features = ["wasm-bindgen"] }
 getrandom = { version = "=0.3.4", features = ["wasm_js"] }
 num-bigint = "=0.4.8"
 serde = { version = "=1.0.229", features = ["derive"] }

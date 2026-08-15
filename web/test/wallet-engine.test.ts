@@ -209,6 +209,8 @@ function walletConfig(descriptor: {
     network: "testnet",
     sendValiditySeconds: 300,
     resolutionMarginSeconds: 60,
+    resolutionPollIntervalMs: 4000,
+    resolutionActiveBudgetMs: 60_000,
     providers: {
       toncenterBaseUrl: "https://testnet.toncenter.com",
       requestTimeoutMs: 15_000,

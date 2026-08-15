@@ -1,6 +1,6 @@
 //! Resource state and errors exposed by wallet operations.
 
-use super::{AccountStatus, HttpHostErrorKind};
+use super::{AccountStatus, HttpHostErrorKind, PendingReason};
 
 /// Replaces control characters and bounds diagnostics stored in public errors.
 ///
@@ -185,8 +185,18 @@ pub enum WalletClientError {
     ///
     /// The caller must not create a replacement transfer because the stored
     /// signed message can already be on the network.
-    #[error("the previous submission outcome is unresolved")]
-    PreviousSubmissionUnresolved,
+    #[error("the previous submission outcome is unresolved: {pending_reason:?}")]
+    PreviousSubmissionUnresolved {
+        /// The strongest non-terminal evidence observed by the resolver.
+        pending_reason: PendingReason,
+        /// Whether a same-seqno replacement can be requested explicitly.
+        can_force_retry: bool,
+        /// Suggested delay before another single-shot lookup.
+        retry_after_hint_ms: u64,
+    },
+    /// No unresolved locally-signable attempt is eligible for same-seqno resend.
+    #[error("no pending send is eligible for force resend")]
+    ForceResendUnavailable,
     /// The provider still reports the sequence number used by the previous send.
     ///
     /// Refresh chain state and retry only after the wallet sequence number advances.

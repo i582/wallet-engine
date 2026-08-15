@@ -128,6 +128,8 @@ pub(crate) enum SendStage {
     Expired,
     /// An explicit same-sequence-number resend replaced this attempt.
     Superseded,
+    /// Another attempt stored in the same record won the same-seqno race.
+    LostRace,
     /// A definite error stopped the operation or Toncenter explicitly rejected the BOC.
     Failed,
     /// Cancellation completed before the durable send boundary.
@@ -135,7 +137,7 @@ pub(crate) enum SendStage {
 }
 
 impl SendStage {
-    const fn public_phase(self) -> SendPhase {
+    pub(crate) const fn public_phase(self) -> SendPhase {
         match self {
             Self::Validating | Self::LoadingJournal | Self::FetchingFreshAccount => {
                 SendPhase::Validating
@@ -151,6 +153,7 @@ impl SendStage {
             Self::Replaced => SendPhase::Replaced,
             Self::Expired => SendPhase::Expired,
             Self::Superseded => SendPhase::Superseded,
+            Self::LostRace => SendPhase::LostRace,
             Self::Failed => SendPhase::Failed,
             Self::Cancelled => SendPhase::Cancelled,
         }
@@ -165,6 +168,7 @@ impl SendStage {
                 | Self::Replaced
                 | Self::Expired
                 | Self::Superseded
+                | Self::LostRace
                 | Self::Failed
                 | Self::Cancelled
         )
@@ -177,6 +181,7 @@ impl SendStage {
                 | Self::Replaced
                 | Self::Expired
                 | Self::Superseded
+                | Self::LostRace
                 | Self::Failed
                 | Self::Cancelled
         )
@@ -272,6 +277,27 @@ struct DurableSendRecord {
     /// Confirmed transaction logical time retained as terminal evidence.
     #[serde(default)]
     confirmed_transaction_lt: Option<String>,
+    /// The winning message hash. Older confirmed records imply the current hash.
+    #[serde(default)]
+    confirmed_message_hash: Option<Base64Hash>,
+    /// The one previous attempt retained by an explicit same-seqno resend.
+    #[serde(default)]
+    superseded_attempt: Option<DurableSupersededAttempt>,
+}
+
+/// Previous signed attempt retained inside the wallet-wide record after a
+/// same-seqno force resend.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct DurableSupersededAttempt {
+    operation_id: String,
+    valid_until: u32,
+    signed_boc: Boc,
+    message_hash: Base64Hash,
+    stage: SendStage,
+    #[serde(default)]
+    confirmed_transaction_hash: Option<Base64Hash>,
+    #[serde(default)]
+    confirmed_transaction_lt: Option<String>,
 }
 
 /// Durable signed send that still needs chain evidence before replacement is safe.
@@ -284,6 +310,8 @@ pub(crate) struct PendingSendRecord {
     pub(crate) seqno: u32,
     pub(crate) valid_until: u32,
     pub(crate) message_hash: Base64Hash,
+    pub(crate) superseded_message_hash: Option<Base64Hash>,
+    pub(crate) superseded_valid_until: Option<u32>,
     stage: SendStage,
     durable: DurableSendRecord,
     journal: JournalRecord,
@@ -293,6 +321,7 @@ pub(crate) struct PendingSendRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SendResolution {
     Confirmed {
+        message_hash: Base64Hash,
         transaction_hash: Base64Hash,
         transaction_lt: String,
     },
@@ -302,6 +331,113 @@ pub(crate) enum SendResolution {
 }
 
 impl PendingSendRecord {
+    /// Reconstructs the immutable transfer intent for one explicit replacement.
+    pub(crate) fn force_resend_request(&self) -> Result<SendRequest, SendWorkflowError> {
+        if self.durable.superseded_attempt.is_some() {
+            return Err(SendWorkflowError::InvalidJournal(
+                "the pending send already has a same-seqno replacement".to_owned(),
+            ));
+        }
+        Ok(SendRequest {
+            operation_id: format!(
+                "{}:force:{}",
+                self.operation_id,
+                next_journal_version(Some(self.journal_version))?
+            ),
+            destination: self.durable.destination.to_string(),
+            amount: self.durable.amount.clone(),
+            comment: self.durable.comment.clone(),
+        })
+    }
+
+    /// Creates the atomic handoff from the old attempt to a newly signed
+    /// same-seqno attempt while retaining the complete old BOC.
+    pub(crate) fn force_resend_mutation(
+        &self,
+        prepared: &PreparedTransfer,
+    ) -> Result<JournalCompareExchange, SendWorkflowError> {
+        if self.durable.superseded_attempt.is_some()
+            || prepared.record_id != self.record_id
+            || prepared.source != self.source
+            || prepared.destination != self.durable.destination
+            || prepared.amount != self.durable.amount
+            || prepared.comment != self.durable.comment
+            || prepared.seqno != self.seqno
+        {
+            return Err(SendWorkflowError::PreparedTransferMismatch);
+        }
+        let durable = DurableSendRecord {
+            schema_version: JOURNAL_SCHEMA_VERSION,
+            operation_id: prepared.operation_id.clone(),
+            record_id: prepared.record_id.clone(),
+            source: prepared.source.clone(),
+            destination: prepared.destination.clone(),
+            amount: prepared.amount.clone(),
+            comment: prepared.comment.clone(),
+            seqno: prepared.seqno,
+            needs_state_init: prepared.needs_state_init,
+            valid_until: prepared.valid_until,
+            signed_boc: prepared.signed_boc.clone(),
+            message_hash: prepared.message_hash.clone(),
+            stage: SendStage::ReadyToSubmit,
+            provider_reference: None,
+            diagnostic: None,
+            confirmed_transaction_hash: None,
+            confirmed_transaction_lt: None,
+            confirmed_message_hash: None,
+            superseded_attempt: Some(DurableSupersededAttempt {
+                operation_id: self.durable.operation_id.clone(),
+                valid_until: self.durable.valid_until,
+                signed_boc: self.durable.signed_boc.clone(),
+                message_hash: self.durable.message_hash.clone(),
+                stage: SendStage::Superseded,
+                confirmed_transaction_hash: None,
+                confirmed_transaction_lt: None,
+            }),
+        };
+        Ok(JournalCompareExchange {
+            key: JournalKey {
+                record_id: self.record_id.clone(),
+                slot: SEND_SLOT.to_owned(),
+            },
+            expected_version: Some(self.journal_version),
+            replacement: JournalRecord {
+                version: next_journal_version(Some(self.journal_version))?,
+                payload: serde_json::to_vec(&durable)
+                    .map_err(|error| SendWorkflowError::InvalidJournal(error.to_string()))?,
+            },
+        })
+    }
+
+    /// Advances only the current force-resend submission classification.
+    pub(crate) fn force_submission_mutation(
+        &self,
+        stage: SendStage,
+        diagnostic: Option<String>,
+    ) -> Result<JournalCompareExchange, SendWorkflowError> {
+        if !matches!(stage, SendStage::Submitted | SendStage::SubmissionUnknown) {
+            return Err(SendWorkflowError::InvalidTransition {
+                from: self.stage,
+                event: "force_submission_classification",
+            });
+        }
+        let mut durable = self.durable.clone();
+        durable.stage = stage;
+        durable.diagnostic = diagnostic.map(bounded_diagnostic);
+        Ok(JournalCompareExchange {
+            key: JournalKey {
+                record_id: self.record_id.clone(),
+                slot: SEND_SLOT.to_owned(),
+            },
+            expected_version: Some(self.journal_version),
+            replacement: JournalRecord {
+                version: next_journal_version(Some(self.journal_version))?,
+                payload: serde_json::to_vec(&durable)
+                    .map_err(|error| SendWorkflowError::InvalidJournal(error.to_string()))?,
+            },
+        })
+    }
+
     /// Returns the exact journal version inspected by the resolver for a
     /// non-terminal result that must not mutate durable state.
     pub(crate) fn current_journal(&self) -> JournalRecord {
@@ -310,22 +446,57 @@ impl PendingSendRecord {
 
     /// Converts internal evidence into the public send snapshot while retaining
     /// the original operation identity and bounded submission diagnostic.
-    pub(crate) fn snapshot(&self, resolution: &SendResolution) -> SendSnapshot {
-        let (phase, transaction_hash, transaction_lt, pending_reason) = match resolution {
+    pub(crate) fn snapshot(
+        &self,
+        resolution: &SendResolution,
+        retry_after_hint_ms: u64,
+    ) -> SendSnapshot {
+        let (
+            phase,
+            transaction_hash,
+            transaction_lt,
+            winning_operation_id,
+            winning_message_hash,
+            pending_reason,
+        ) = match resolution {
             SendResolution::Confirmed {
+                message_hash,
                 transaction_hash,
                 transaction_lt,
-            } => (
-                SendPhase::Confirmed,
-                Some(transaction_hash.clone()),
-                Some(transaction_lt.clone()),
-                None,
-            ),
-            SendResolution::Replaced => (SendPhase::Replaced, None, None, None),
-            SendResolution::Expired => (SendPhase::Expired, None, None, None),
-            SendResolution::StillPending(reason) => {
-                (self.stage.public_phase(), None, None, Some(*reason))
+            } => {
+                let current_won = message_hash == &self.message_hash;
+                let winning_operation_id = if current_won {
+                    Some(self.operation_id.clone())
+                } else {
+                    self.durable
+                        .superseded_attempt
+                        .as_ref()
+                        .filter(|attempt| attempt.message_hash == *message_hash)
+                        .map(|attempt| attempt.operation_id.clone())
+                };
+                (
+                    if current_won {
+                        SendPhase::Confirmed
+                    } else {
+                        SendPhase::LostRace
+                    },
+                    Some(transaction_hash.clone()),
+                    Some(transaction_lt.clone()),
+                    winning_operation_id,
+                    Some(message_hash.clone()),
+                    None,
+                )
             }
+            SendResolution::Replaced => (SendPhase::Replaced, None, None, None, None, None),
+            SendResolution::Expired => (SendPhase::Expired, None, None, None, None, None),
+            SendResolution::StillPending(reason) => (
+                self.stage.public_phase(),
+                None,
+                None,
+                None,
+                None,
+                Some(*reason),
+            ),
         };
 
         SendSnapshot {
@@ -335,9 +506,12 @@ impl PendingSendRecord {
             resolution: Some(ResolutionInfo {
                 transaction_hash,
                 transaction_lt,
+                winning_operation_id,
+                winning_message_hash,
                 pending_reason,
-                can_force_retry: false,
-                retry_after_hint_ms: pending_reason.map(|_| 4_000),
+                can_force_retry: pending_reason.is_some()
+                    && self.durable.superseded_attempt.is_none(),
+                retry_after_hint_ms: pending_reason.map(|_| retry_after_hint_ms),
             }),
         }
     }
@@ -355,10 +529,15 @@ impl PendingSendRecord {
         // intent remain available after a crash or a future schema migration.
         let (stage, transaction_hash, transaction_lt) = match resolution {
             SendResolution::Confirmed {
+                message_hash,
                 transaction_hash,
                 transaction_lt,
             } => (
-                SendStage::Confirmed,
+                if message_hash == &self.message_hash {
+                    SendStage::Confirmed
+                } else {
+                    SendStage::LostRace
+                },
                 Some(transaction_hash.clone()),
                 Some(transaction_lt.clone()),
             ),
@@ -372,6 +551,29 @@ impl PendingSendRecord {
         durable.diagnostic = None;
         durable.confirmed_transaction_hash = transaction_hash;
         durable.confirmed_transaction_lt = transaction_lt;
+        durable.confirmed_message_hash = match resolution {
+            SendResolution::Confirmed { message_hash, .. } => Some(message_hash.clone()),
+            _ => None,
+        };
+        if let Some(attempt) = durable.superseded_attempt.as_mut() {
+            attempt.stage = match resolution {
+                SendResolution::Confirmed { message_hash, .. }
+                    if message_hash == &attempt.message_hash =>
+                {
+                    SendStage::Confirmed
+                }
+                SendResolution::Expired => SendStage::Expired,
+                _ => SendStage::LostRace,
+            };
+            if attempt.stage == SendStage::Confirmed {
+                attempt
+                    .confirmed_transaction_hash
+                    .clone_from(&durable.confirmed_transaction_hash);
+                attempt
+                    .confirmed_transaction_lt
+                    .clone_from(&durable.confirmed_transaction_lt);
+            }
+        }
         let replacement_version = next_journal_version(Some(self.journal_version))?;
 
         Ok(Some(JournalCompareExchange {
@@ -414,6 +616,14 @@ pub(crate) fn pending_send_record(
         seqno: durable.seqno,
         valid_until: durable.valid_until,
         message_hash: durable.message_hash.clone(),
+        superseded_message_hash: durable
+            .superseded_attempt
+            .as_ref()
+            .map(|attempt| attempt.message_hash.clone()),
+        superseded_valid_until: durable
+            .superseded_attempt
+            .as_ref()
+            .map(|attempt| attempt.valid_until),
         stage: durable.stage,
         durable,
         journal: record.clone(),
@@ -436,6 +646,9 @@ pub(crate) fn terminal_send_resolution(
 
     match durable.stage {
         SendStage::Confirmed => Ok(Some(SendResolution::Confirmed {
+            message_hash: durable
+                .confirmed_message_hash
+                .unwrap_or_else(|| durable.message_hash.clone()),
             transaction_hash: durable.confirmed_transaction_hash.ok_or_else(|| {
                 SendWorkflowError::InvalidJournal(
                     "confirmed record has no transaction hash".to_owned(),
@@ -449,6 +662,23 @@ pub(crate) fn terminal_send_resolution(
         })),
         SendStage::Replaced => Ok(Some(SendResolution::Replaced)),
         SendStage::Expired => Ok(Some(SendResolution::Expired)),
+        SendStage::LostRace => Ok(Some(SendResolution::Confirmed {
+            message_hash: durable.confirmed_message_hash.ok_or_else(|| {
+                SendWorkflowError::InvalidJournal(
+                    "lost-race record has no winning message hash".to_owned(),
+                )
+            })?,
+            transaction_hash: durable.confirmed_transaction_hash.ok_or_else(|| {
+                SendWorkflowError::InvalidJournal(
+                    "lost-race record has no transaction hash".to_owned(),
+                )
+            })?,
+            transaction_lt: durable.confirmed_transaction_lt.ok_or_else(|| {
+                SendWorkflowError::InvalidJournal(
+                    "lost-race record has no transaction logical time".to_owned(),
+                )
+            })?,
+        })),
         _ => Ok(None),
     }
 }
@@ -459,6 +689,7 @@ pub(crate) fn send_snapshot_from_journal(
     record: &JournalRecord,
     record_id: &str,
     source: &TonAddress,
+    retry_after_hint_ms: u64,
 ) -> Result<SendSnapshot, SendWorkflowError> {
     let durable = decode_durable_record(record)?;
     if durable.record_id != record_id || &durable.source != source {
@@ -471,6 +702,25 @@ pub(crate) fn send_snapshot_from_journal(
         SendStage::Confirmed => Some(ResolutionInfo {
             transaction_hash: durable.confirmed_transaction_hash,
             transaction_lt: durable.confirmed_transaction_lt,
+            winning_operation_id: Some(durable.operation_id.clone()),
+            winning_message_hash: durable
+                .confirmed_message_hash
+                .or_else(|| Some(durable.message_hash.clone())),
+            pending_reason: None,
+            can_force_retry: false,
+            retry_after_hint_ms: None,
+        }),
+        SendStage::LostRace => Some(ResolutionInfo {
+            transaction_hash: durable.confirmed_transaction_hash,
+            transaction_lt: durable.confirmed_transaction_lt,
+            winning_operation_id: durable
+                .superseded_attempt
+                .as_ref()
+                .filter(|attempt| {
+                    durable.confirmed_message_hash.as_ref() == Some(&attempt.message_hash)
+                })
+                .map(|attempt| attempt.operation_id.clone()),
+            winning_message_hash: durable.confirmed_message_hash,
             pending_reason: None,
             can_force_retry: false,
             retry_after_hint_ms: None,
@@ -478,6 +728,8 @@ pub(crate) fn send_snapshot_from_journal(
         SendStage::Replaced | SendStage::Expired | SendStage::Superseded => Some(ResolutionInfo {
             transaction_hash: None,
             transaction_lt: None,
+            winning_operation_id: None,
+            winning_message_hash: None,
             pending_reason: None,
             can_force_retry: false,
             retry_after_hint_ms: None,
@@ -485,9 +737,11 @@ pub(crate) fn send_snapshot_from_journal(
         stage if !stage.permits_replacement() => Some(ResolutionInfo {
             transaction_hash: None,
             transaction_lt: None,
+            winning_operation_id: None,
+            winning_message_hash: None,
             pending_reason: Some(PendingReason::AwaitingWindow),
-            can_force_retry: false,
-            retry_after_hint_ms: Some(4_000),
+            can_force_retry: durable.superseded_attempt.is_none(),
+            retry_after_hint_ms: Some(retry_after_hint_ms),
         }),
         _ => None,
     };
@@ -805,6 +1059,8 @@ impl SendWorkflow {
             diagnostic: self.diagnostic.clone(),
             confirmed_transaction_hash: None,
             confirmed_transaction_lt: None,
+            confirmed_message_hash: None,
+            superseded_attempt: None,
         })
     }
 
@@ -924,12 +1180,13 @@ fn decode_durable_record(record: &JournalRecord) -> Result<DurableSendRecord, Se
         ));
     }
 
-    if durable.stage == SendStage::Confirmed
+    if (matches!(durable.stage, SendStage::Confirmed | SendStage::LostRace)
         && (durable.confirmed_transaction_hash.is_none()
             || !durable.confirmed_transaction_lt.as_ref().is_some_and(|lt| {
                 lt.parse::<u64>()
                     .is_ok_and(|value| value.to_string() == *lt)
-            }))
+            })))
+        || (durable.stage == SendStage::LostRace && durable.confirmed_message_hash.is_none())
     {
         return Err(SendWorkflowError::InvalidJournal(
             "confirmed record evidence is invalid".to_owned(),
@@ -1062,7 +1319,7 @@ mod tests {
     }
 
     #[test]
-    fn durable_records_from_before_comment_support_remain_compatible() {
+    fn durable_records_from_before_resolution_support_remain_compatible() {
         let mut payload: serde_json::Value =
             serde_json::from_slice(&durable_payload(SendStage::Cancelled))
                 .expect("durable fixture is JSON");
@@ -1078,6 +1335,14 @@ mod tests {
             .as_object_mut()
             .expect("durable fixture is an object")
             .remove("confirmed_transaction_lt");
+        payload
+            .as_object_mut()
+            .expect("durable fixture is an object")
+            .remove("confirmed_message_hash");
+        payload
+            .as_object_mut()
+            .expect("durable fixture is an object")
+            .remove("superseded_attempt");
         let record = JournalRecord {
             version: 1,
             payload: serde_json::to_vec(&payload).expect("legacy durable fixture serializes"),
@@ -1085,6 +1350,61 @@ mod tests {
 
         let decoded = decode_durable_record(&record).expect("legacy durable record decodes");
         assert_eq!(decoded.comment, None);
+        assert_eq!(decoded.confirmed_message_hash, None);
+        assert_eq!(decoded.superseded_attempt, None);
+    }
+
+    #[test]
+    fn force_resend_retains_both_attempts_and_reports_the_actual_winner() {
+        let journal = JournalRecord {
+            version: 4,
+            payload: durable_payload(SendStage::SubmissionUnknown),
+        };
+        let original = pending_send_record(&journal, "record", &source())
+            .expect("durable record is valid")
+            .expect("unknown submission needs resolution");
+        let request = original
+            .force_resend_request()
+            .expect("the first force resend is available");
+        let original_hash = original.message_hash.clone();
+        let mut replacement = prepared_transfer();
+        replacement.operation_id = request.operation_id;
+        replacement.valid_until = replacement.valid_until.saturating_add(1);
+        replacement.message_hash =
+            Base64Hash::from_bytes(&[8; 32]).expect("the hash fixture has 32 bytes");
+
+        let handoff = original
+            .force_resend_mutation(&replacement)
+            .expect("same-seqno handoff is valid");
+        assert_eq!(handoff.expected_version, Some(4));
+        assert_eq!(handoff.replacement.version, 5);
+        let current = pending_send_record(&handoff.replacement, "record", &source())
+            .expect("replacement record is valid")
+            .expect("replacement still needs resolution");
+        assert_eq!(current.message_hash, replacement.message_hash);
+        assert_eq!(current.superseded_message_hash, Some(original_hash.clone()));
+        assert!(current.force_resend_request().is_err());
+
+        let old_winner = SendResolution::Confirmed {
+            message_hash: original_hash.clone(),
+            transaction_hash: Base64Hash::from_bytes(&[9; 32])
+                .expect("the transaction hash fixture has 32 bytes"),
+            transaction_lt: "42".to_owned(),
+        };
+        let terminal = current
+            .terminal_mutation(&old_winner)
+            .expect("winner evidence serializes")
+            .expect("confirmation is terminal");
+        let snapshot =
+            send_snapshot_from_journal(&terminal.replacement, "record", &source(), 4_000)
+                .expect("terminal replacement snapshot is valid");
+        assert_eq!(snapshot.phase, SendPhase::LostRace);
+        assert_eq!(
+            snapshot
+                .resolution
+                .and_then(|resolution| resolution.winning_message_hash),
+            Some(original_hash)
+        );
     }
 
     #[test]
@@ -1099,6 +1419,7 @@ mod tests {
         let transaction_hash =
             Base64Hash::from_bytes(&[9; 32]).expect("the hash fixture has 32 bytes");
         let resolution = SendResolution::Confirmed {
+            message_hash: pending.message_hash.clone(),
             transaction_hash: transaction_hash.clone(),
             transaction_lt: "42".to_owned(),
         };
@@ -1112,6 +1433,7 @@ mod tests {
         assert_eq!(
             terminal_send_resolution(&mutation.replacement, "record", &source()),
             Ok(Some(SendResolution::Confirmed {
+                message_hash: pending.message_hash,
                 transaction_hash,
                 transaction_lt: "42".to_owned(),
             }))
@@ -1390,6 +1712,8 @@ mod tests {
             diagnostic: None,
             confirmed_transaction_hash: None,
             confirmed_transaction_lt: None,
+            confirmed_message_hash: None,
+            superseded_attempt: None,
         };
         mutate(&mut record);
         serde_json::to_vec(&record).expect("durable record fixture serializes")

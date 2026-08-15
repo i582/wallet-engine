@@ -22,6 +22,8 @@ export interface WalletClientConfig {
   readonly network: Network
   readonly sendValiditySeconds: number
   readonly resolutionMarginSeconds: number
+  readonly resolutionPollIntervalMs: number
+  readonly resolutionActiveBudgetMs: number
   readonly providers: ProviderConfig
 }
 
@@ -107,6 +109,7 @@ export type SendPhase =
   | "replaced"
   | "expired"
   | "superseded"
+  | "lostRace"
   | "failed"
   | "cancelled"
 
@@ -115,6 +118,8 @@ export type PendingReason = "inMempool" | "awaitingWindow"
 export interface ResolutionInfo {
   readonly transactionHash?: Base64Hash
   readonly transactionLt?: string
+  readonly winningOperationId?: string
+  readonly winningMessageHash?: Base64Hash
   readonly pendingReason?: PendingReason
   readonly canForceRetry: boolean
   readonly retryAfterHintMs?: number

@@ -31,7 +31,9 @@ export class WalletClient {
   ): Promise<WalletClient> {
     await initializeWalletEngine()
     const httpHost = new BrowserHttpHost(config.providers.toncenterBaseUrl, options)
-    return new WalletClient(new RawWalletClient(config, httpHost, options.platformHost))
+    const raw = new RawWalletClient(config, httpHost, options.platformHost)
+    await raw.start()
+    return new WalletClient(raw)
   }
 
   snapshot(): WalletSnapshot {
@@ -72,6 +74,11 @@ export class WalletClient {
   async send(request: SendRequest): Promise<SendResult> {
     this.assertOpen()
     return (await this.raw.send(request)) as SendResult
+  }
+
+  async forceResend(): Promise<SendResult> {
+    this.assertOpen()
+    return (await this.raw.forceResend()) as SendResult
   }
 
   async previewSend(request: SendPreviewRequest): Promise<SendPreview> {

@@ -55,6 +55,9 @@ struct Message {
     /// The optional hash representation returned by Toncenter before normalization.
     #[serde(default)]
     hash: Option<String>,
+    /// Normalized external-in hash used by message lookup providers.
+    #[serde(default)]
+    hash_norm: Option<String>,
     #[serde(default)]
     created_lt: Option<Value>,
     #[serde(default)]
@@ -142,11 +145,22 @@ impl ActivityPageCursor {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct ActivityPage {
     pub items: Vec<ActivityRecord>,
     pub cursor: Option<ActivityPageCursor>,
     pub has_more: bool,
+    /// Inbound-message identities retained even for zero-value transactions.
+    /// They let refresh confirm a pending wallet send without another request.
+    pub inbound_evidence: Vec<ActivityMessageEvidence>,
+}
+
+/// One inbound message and the transaction that consumed it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ActivityMessageEvidence {
+    pub message_hash: Base64Hash,
+    pub transaction_hash: Base64Hash,
+    pub transaction_lt: String,
 }
 
 pub(crate) fn response_error(
@@ -229,8 +243,27 @@ pub(crate) fn parse_activity(body: &[u8], page_size: u32) -> Result<ActivityPage
 
     let raw_count = transactions.len();
     let mut items = Vec::new();
+    let mut inbound_evidence = Vec::new();
 
     for transaction in transactions {
+        if let Some(message) = &transaction.in_msg {
+            let transaction_hash =
+                parse_hash(&transaction.transaction_id.hash, "transaction hash")?;
+            let transaction_lt =
+                parse_unsigned_decimal(&transaction.transaction_id.lt, "transaction logical time")?
+                    .to_string();
+            for hash in [message.hash.as_deref(), message.hash_norm.as_deref()]
+                .into_iter()
+                .flatten()
+            {
+                inbound_evidence.push(ActivityMessageEvidence {
+                    message_hash: parse_hash(hash, "inbound message hash")?,
+                    transaction_hash: transaction_hash.clone(),
+                    transaction_lt: transaction_lt.clone(),
+                });
+            }
+        }
+
         if let Some(message) = &transaction.in_msg
             && let Some(item) =
                 activity_from_message(&transaction, message, ActivityDirection::Received, 0)?
@@ -257,6 +290,7 @@ pub(crate) fn parse_activity(body: &[u8], page_size: u32) -> Result<ActivityPage
         items,
         cursor,
         has_more: raw_count >= page_size as usize,
+        inbound_evidence,
     })
 }
 

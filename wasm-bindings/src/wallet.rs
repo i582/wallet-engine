@@ -35,6 +35,15 @@ impl WalletClient {
         to_value(&snapshot)
     }
 
+    pub async fn start(&self) -> Result<JsValue, JsValue> {
+        let snapshot = self
+            .inner
+            .start()
+            .await
+            .map_err(|error| engine_error(&error))?;
+        to_value(&snapshot)
+    }
+
     #[wasm_bindgen(js_name = waitForChange)]
     pub async fn wait_for_change(&self, after_revision: u64) -> Result<JsValue, JsValue> {
         let snapshot = self
@@ -95,6 +104,16 @@ impl WalletClient {
         let result = self
             .inner
             .send(request)
+            .await
+            .map_err(|error| engine_error(&error))?;
+        to_value(&result)
+    }
+
+    #[wasm_bindgen(js_name = forceResend)]
+    pub async fn force_resend(&self) -> Result<JsValue, JsValue> {
+        let result = self
+            .inner
+            .force_resend()
             .await
             .map_err(|error| engine_error(&error))?;
         to_value(&result)

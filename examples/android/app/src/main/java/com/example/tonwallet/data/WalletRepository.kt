@@ -143,6 +143,8 @@ class WalletRepository(private val store: SecureWalletStore) {
                     network = wallet.network,
                     sendValiditySeconds = SEND_VALIDITY_SECONDS,
                     resolutionMarginSeconds = 60u,
+                    resolutionPollIntervalMs = 4_000uL,
+                    resolutionActiveBudgetMs = 60_000uL,
                     providers = ProviderConfig(
                         toncenterBaseUrl = if (wallet.testnet) TESTNET_BASE_URL else MAINNET_BASE_URL,
                         requestTimeoutMs = PROVIDER_REQUEST_TIMEOUT_MILLIS.toULong(),
@@ -152,6 +154,10 @@ class WalletRepository(private val store: SecureWalletStore) {
                 platformHost = store,
             ),
         )
+        // Startup recovery is explicit because constructing the native object
+        // cannot launch portable async work. Resolve any durable prior send
+        // before exposing this session to commands.
+        candidate.client.start()
         sessionMutex.withLock { session = candidate }
         candidate.client
     }

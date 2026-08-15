@@ -62,6 +62,8 @@ nonisolated struct AppleWalletEnvironment: Sendable {
             network: network,
             sendValiditySeconds: 300,
             resolutionMarginSeconds: 60,
+            resolutionPollIntervalMs: 4_000,
+            resolutionActiveBudgetMs: 60_000,
             providers: ProviderConfig(
                 toncenterBaseUrl: isMainnet
                     ? "https://toncenter.com"

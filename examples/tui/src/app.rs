@@ -300,11 +300,19 @@ impl App {
             network: descriptor.network,
             send_validity_seconds: 300,
             resolution_margin_seconds: 60,
+            resolution_poll_interval_ms: 4_000,
+            resolution_active_budget_ms: 60_000,
             providers: ProviderConfig::standard(descriptor.network),
         };
         match WalletClient::new(config, self.http_host.clone(), self.store.clone()) {
             Ok(client) => {
-                self.snapshot = client.snapshot().ok();
+                self.snapshot = match client.start().await {
+                    Ok(_) => client.snapshot().ok(),
+                    Err(error) => {
+                        self.status = Some(format!("Wallet recovery failed: {error}"));
+                        client.snapshot().ok()
+                    }
+                };
                 self.client = Some(client);
                 self.descriptor = Some(descriptor);
                 self.screen = Screen::Dashboard;

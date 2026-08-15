@@ -385,6 +385,8 @@ mod tests {
             network: Network::Testnet,
             send_validity_seconds: 300,
             resolution_margin_seconds: 60,
+            resolution_poll_interval_ms: 4_000,
+            resolution_active_budget_ms: 60_000,
             providers: ProviderConfig {
                 toncenter_base_url: "https://provider.example/custom/".to_owned(),
                 request_timeout_ms: 12_345,
@@ -428,6 +430,8 @@ mod tests {
             network: Network::Testnet,
             send_validity_seconds: 300,
             resolution_margin_seconds: 60,
+            resolution_poll_interval_ms: 4_000,
+            resolution_active_budget_ms: 60_000,
             providers: ProviderConfig {
                 toncenter_base_url: "mailto:provider@example.com".to_owned(),
                 request_timeout_ms: 15_000,

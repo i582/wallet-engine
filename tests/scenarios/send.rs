@@ -773,7 +773,11 @@ fn unknown_submission_blocks_a_replacement_send() {
         .when(call("replacement", send().to(own_address()).grams(2)))
         .then(error(
             "replacement",
-            WalletClientError::PreviousSubmissionUnresolved,
+            WalletClientError::PreviousSubmissionUnresolved {
+                pending_reason: PendingReason::AwaitingWindow,
+                can_force_retry: true,
+                retry_after_hint_ms: 1,
+            },
         ))
         .then(snapshot().pending_reason(PendingReason::AwaitingWindow))
         .run();
@@ -788,12 +792,101 @@ fn executed_unknown_submission_is_confirmed_before_replacement() {
         .then(send_phase("first", SendPhase::Submitting))
         .when(resume("first-submit", submission_timeout()))
         .then(result("first").submission_unknown())
+        // Our own execution also increments seqno. Hash evidence must win over
+        // the weaker wallet-state signal or this would be mislabeled Replaced.
+        .given(wallet().active().balance(grams(10)).seqno(8))
         .given(provider().message_is_executed())
         .given(submission().paused("replacement-submit"))
         .when(start("replacement", send().to(own_address()).grams(2)))
         .then(send_phase("replacement", SendPhase::Submitting))
         .when(resume("replacement-submit", submission_accepted()))
         .then(result("replacement").submitted())
+        .run();
+}
+
+#[test]
+fn resolver_waits_for_fresh_indexer_seqno_before_marking_replaced() {
+    scenario("a stale indexed seqno stays pending until a later resolution")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(submission().paused("first-submit"))
+        .when(start("first", send().to(own_address()).grams(1)))
+        .then(send_phase("first", SendPhase::Submitting))
+        .when(resume("first-submit", submission_timeout()))
+        .then(result("first").submission_unknown())
+        .when(call("stale-resolution", resolve_pending()))
+        .then(succeeds("stale-resolution"))
+        .then(snapshot().pending_reason(PendingReason::AwaitingWindow))
+        .given(wallet().active().balance(grams(10)).seqno(8))
+        .when(call("fresh-resolution", resolve_pending()))
+        .then(succeeds("fresh-resolution"))
+        .then(snapshot().send_phase(SendPhase::Replaced))
+        .then(protected_secret_read_count(1))
+        .run();
+}
+
+#[test]
+fn terminal_resolution_is_idempotent_across_repeated_calls_and_restart() {
+    scenario("confirmed resolution remains stable across calls and restart")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(submission().paused("first-submit"))
+        .when(start("first", send().to(own_address()).grams(1)))
+        .then(send_phase("first", SendPhase::Submitting))
+        .when(resume("first-submit", submission_timeout()))
+        .then(result("first").submission_unknown())
+        .given(provider().message_is_executed())
+        .when(call("first-resolution", resolve_pending()))
+        .then(succeeds("first-resolution"))
+        .then(snapshot().send_phase(SendPhase::Confirmed))
+        .when(call("second-resolution", resolve_pending()))
+        .then(succeeds("second-resolution"))
+        .then(snapshot().send_phase(SendPhase::Confirmed))
+        .when(crash_and_restart())
+        .when(call("startup", start_client()))
+        .then(succeeds("startup"))
+        .then(snapshot().send_phase(SendPhase::Confirmed))
+        .then(protected_secret_read_count(1))
+        .run();
+}
+
+#[test]
+fn concurrent_resolvers_lose_the_terminal_cas_cleanly() {
+    scenario("two clients converge when one resolver wins the terminal CAS")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(submission().paused("first-submit"))
+        .when(start("first", send().to(own_address()).grams(1)))
+        .then(send_phase("first", SendPhase::Submitting))
+        .when(resume("first-submit", submission_timeout()))
+        .then(result("first").submission_unknown())
+        .given(provider().message_is_executed())
+        .when(create_secondary_client())
+        .when(pause_next_executed_message_request("primary-evidence"))
+        .when(start("primary", resolve_pending()))
+        .when(wait_for_request("primary-evidence"))
+        .when(call("secondary", resolve_pending_on_secondary_client()))
+        .then(succeeds("secondary"))
+        .when(release_request("primary-evidence"))
+        .then(succeeds("primary"))
+        .then(snapshot().send_phase(SendPhase::Confirmed))
+        .then(protected_secret_read_count(1))
+        .run();
+}
+
+#[test]
+fn resolver_confirms_after_the_protected_secret_is_deleted() {
+    scenario("pending resolution is independent of protected secret storage")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(submission().paused("first-submit"))
+        .when(start("first", send().to(own_address()).grams(1)))
+        .then(send_phase("first", SendPhase::Submitting))
+        .when(resume("first-submit", submission_timeout()))
+        .then(result("first").submission_unknown())
+        .then(protected_secret_read_count(1))
+        .when(delete_protected_secret())
+        .given(provider().message_is_executed())
+        .when(call("resolution", resolve_pending()))
+        .then(succeeds("resolution"))
+        .then(snapshot().send_phase(SendPhase::Confirmed))
+        .then(protected_secret_read_count(1))
         .run();
 }
 
@@ -809,12 +902,168 @@ fn restart_sweep_confirms_without_reading_the_secret_again() {
         .then(protected_secret_read_count(1))
         .given(provider().message_is_executed())
         .when(crash_and_restart())
-        // refresh is the first host-driven async operation on the replacement
-        // client and therefore drives the runtime-neutral startup sweep.
+        .when(call("startup", start_client()))
+        .then(succeeds("startup"))
+        .then(snapshot().send_phase(SendPhase::Confirmed))
+        .then(protected_secret_read_count(1))
+        .run();
+}
+
+#[test]
+fn startup_actively_polls_until_execution_evidence_appears() {
+    scenario("startup active resolution observes delayed execution evidence")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(client().resolution_timing(5, 1_000))
+        .given(submission().paused("first-submit"))
+        .when(start("first", send().to(own_address()).grams(1)))
+        .then(send_phase("first", SendPhase::Submitting))
+        .when(resume("first-submit", submission_timeout()))
+        .then(result("first").submission_unknown())
+        .given(provider().message_is_executed_after_misses(1))
+        .when(call("startup", start_client()))
+        .then(succeeds("startup"))
+        .then(snapshot().send_phase(SendPhase::Confirmed))
+        .then(protected_secret_read_count(1))
+        .run();
+}
+
+#[test]
+fn refresh_confirms_from_activity_without_resolver_requests() {
+    scenario("activity fast path confirms a durable submission without v3 lookup")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(submission().paused("first-submit"))
+        .when(start("first", send().to(own_address()).grams(1)))
+        .then(send_phase("first", SendPhase::Submitting))
+        .when(resume("first-submit", submission_timeout()))
+        .then(result("first").submission_unknown())
+        .given(activity_pages(&[1]))
+        .given(provider().activity_contains_submitted_message())
+        .when(reset_resolution_request_count())
         .when(call("refresh", refresh_wallet()))
         .then(update("refresh").completed())
         .then(snapshot().send_phase(SendPhase::Confirmed))
+        .then(no_resolution_requests())
         .then(protected_secret_read_count(1))
+        .run();
+}
+
+#[test]
+fn force_resend_reports_lost_race_when_the_original_message_wins() {
+    scenario("the original same-seqno message wins a force-resend race")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(submission().paused("first-submit"))
+        .when(start("first", send().to(own_address()).grams(1)))
+        .then(send_phase("first", SendPhase::Submitting))
+        .when(resume("first-submit", submission_timeout()))
+        .then(result("first").submission_unknown())
+        .given(submission().paused("force-submit"))
+        .when(start("force", force_resend()))
+        .then(submitted_message_count(2))
+        .given(provider().previous_message_is_executed())
+        .when(resume("force-submit", submission_accepted()))
+        .then(result("force").lost_race())
+        .then(snapshot().send_phase(SendPhase::LostRace))
+        .then(submitted_message_count(2))
+        .then(protected_secret_read_count(2))
+        .run();
+}
+
+#[test]
+fn force_resend_confirms_when_the_replacement_message_wins() {
+    scenario("the replacement same-seqno message wins a force-resend race")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(submission().paused("first-submit"))
+        .when(start("first", send().to(own_address()).grams(1)))
+        .then(send_phase("first", SendPhase::Submitting))
+        .when(resume("first-submit", submission_timeout()))
+        .then(result("first").submission_unknown())
+        .given(submission().paused("force-submit"))
+        .when(start("force", force_resend()))
+        .then(submitted_message_count(2))
+        .given(provider().message_is_executed())
+        .when(resume("force-submit", submission_accepted()))
+        .then(result("force").confirmed())
+        .then(snapshot().send_phase(SendPhase::Confirmed))
+        .then(submitted_message_count(2))
+        .then(protected_secret_read_count(2))
+        .run();
+}
+
+#[test]
+fn force_resend_is_available_only_once_for_an_unresolved_attempt() {
+    scenario("a pending same-seqno replacement cannot be force-resend again")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(submission().paused("first-submit"))
+        .when(start("first", send().to(own_address()).grams(1)))
+        .then(send_phase("first", SendPhase::Submitting))
+        .when(resume("first-submit", submission_timeout()))
+        .then(result("first").submission_unknown())
+        .given(submission().paused("force-submit"))
+        .when(start("force", force_resend()))
+        .then(submitted_message_count(2))
+        .when(resume("force-submit", submission_accepted()))
+        .then(result("force").submitted())
+        .when(call("second-force", force_resend()))
+        .then(error(
+            "second-force",
+            WalletClientError::ForceResendUnavailable,
+        ))
+        .then(submitted_message_count(2))
+        .run();
+}
+
+#[test]
+fn force_resend_old_message_wins_on_localnet() {
+    scenario("the original force-resend attempt wins on localnet")
+        .given(network().localnet())
+        .given(wallet().uninitialized().balance(grams(10)))
+        // The node receives the old BOC, but no block is mined and the host
+        // loses the response. The next submit puts both same-seqno messages in
+        // front of the validator; only one can execute.
+        .when(lose_next_localnet_submission_response(true))
+        .when(call("first", send().to(own_address()).grams(1)))
+        .then(result("first").submission_unknown())
+        .when(call("force", force_resend()))
+        .then(result("force").lost_race())
+        .then(snapshot().send_phase(SendPhase::LostRace))
+        .then(on_chain_wallet().active().seqno(1))
+        .run();
+}
+
+#[test]
+fn force_resend_new_message_wins_on_localnet() {
+    scenario("the replacement force-resend attempt wins on localnet")
+        .given(network().localnet())
+        .given(wallet().uninitialized().balance(grams(10)))
+        // The old BOC never reaches the node. The replacement is the only
+        // candidate that can consume seqno zero.
+        .when(lose_next_localnet_submission_response(false))
+        .when(call("first", send().to(own_address()).grams(1)))
+        .then(result("first").submission_unknown())
+        .when(call("force", force_resend()))
+        .then(result("force").confirmed())
+        .then(snapshot().send_phase(SendPhase::Confirmed))
+        .then(on_chain_wallet().active().seqno(1))
+        .run();
+}
+
+#[test]
+fn external_wallet_consuming_seqno_marks_pending_send_replaced_on_localnet() {
+    scenario("an external same-key transfer replaces an unseen localnet submission")
+        .given(network().localnet())
+        .given(wallet().uninitialized().balance(grams(10)))
+        .when(lose_next_localnet_submission_response(false))
+        .when(call("first", send().to(own_address()).grams(1)))
+        .then(result("first").submission_unknown())
+        .when(call("external", spam_transfers(1)))
+        .then(succeeds("external"))
+        .then(on_chain_wallet().active().seqno(1))
+        .when(call("resolution", resolve_pending()))
+        .then(succeeds("resolution"))
+        .then(snapshot().send_phase(SendPhase::Replaced))
+        .when(call("retry", send().to(own_address()).nanograms(1)))
+        .then(result("retry").submitted())
+        .then(on_chain_wallet().active().seqno(2))
         .run();
 }
 
@@ -844,6 +1093,42 @@ fn unseen_unknown_submission_expires_by_provider_time() {
 }
 
 #[test]
+fn restart_expires_a_commit_that_crashed_before_submission() {
+    scenario("restart recovers a durable message that never reached sendBoc")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        // The CAS is applied, but its response is lost before send() can start
+        // sendBoc. This is the observable state left by a process crash in the
+        // durable-commit-to-submission window.
+        .given(journal().loses_response_after_write(1))
+        .when(call("interrupted", send().to(own_address()).grams(1)))
+        .then(error(
+            "interrupted",
+            WalletClientError::SubmissionUnknown {
+                diagnostic:
+                    "journal host failure (Unavailable): scripted journal write 1 lost its response"
+                        .to_owned(),
+            },
+        ))
+        .then(no_message_was_submitted())
+        .when(crash_and_restart())
+        .given(
+            wallet()
+                .active()
+                .balance(grams(10))
+                .seqno(7)
+                .sync_time(1_800_000_361),
+        )
+        .when(call("startup", start_client()))
+        .then(succeeds("startup"))
+        .then(snapshot().send_phase(SendPhase::Expired))
+        .then(no_message_was_submitted())
+        .when(call("retry", send().to(own_address()).grams(1)))
+        .then(result("retry").submitted())
+        .then(submitted_message_count(1))
+        .run();
+}
+
+#[test]
 fn pending_evidence_prevents_expiration() {
     scenario("mempool evidence keeps an expired-window submission unresolved")
         .given(wallet().active().balance(grams(10)).seqno(7))
@@ -863,7 +1148,11 @@ fn pending_evidence_prevents_expiration() {
         .when(call("replacement", send().to(own_address()).grams(2)))
         .then(error(
             "replacement",
-            WalletClientError::PreviousSubmissionUnresolved,
+            WalletClientError::PreviousSubmissionUnresolved {
+                pending_reason: PendingReason::InMempool,
+                can_force_retry: true,
+                retry_after_hint_ms: 1,
+            },
         ))
         .then(snapshot().pending_reason(PendingReason::InMempool))
         .run();
@@ -1162,7 +1451,11 @@ fn submitted_send_resolves_before_replacement() {
         .when(call("too-early", send().to(own_address()).grams(2)))
         .then(error(
             "too-early",
-            WalletClientError::PreviousSubmissionUnresolved,
+            WalletClientError::PreviousSubmissionUnresolved {
+                pending_reason: PendingReason::AwaitingWindow,
+                can_force_retry: true,
+                retry_after_hint_ms: 1,
+            },
         ))
         .then(snapshot().send_phase(SendPhase::Submitted))
         .given(wallet().active().balance(grams(9)).seqno(8))
@@ -1413,6 +1706,30 @@ fn prepared_journal_write_failure_is_submission_unknown_without_http_submit() {
 }
 
 #[test]
+fn restart_before_a_durable_commit_allows_an_immediate_new_send() {
+    scenario("a pre-commit crash leaves no wallet-wide send lock")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(journal().write_fails(1))
+        .when(call("interrupted", send().to(own_address()).grams(1)))
+        .then(error(
+            "interrupted",
+            WalletClientError::SubmissionUnknown {
+                diagnostic: "journal host failure (Unavailable): scripted journal write 1 failure"
+                    .to_owned(),
+            },
+        ))
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .when(crash_and_restart())
+        .when(call("startup", start_client()))
+        .then(succeeds("startup"))
+        .when(call("retry", send().to(own_address()).grams(1)))
+        .then(result("retry").submitted())
+        .then(submitted_message_count(1))
+        .run();
+}
+
+#[test]
 fn terminal_journal_write_failure_is_unknown_after_http_submit() {
     scenario("provider acceptance without terminal persistence remains unknown")
         .given(wallet().active().balance(grams(10)).seqno(7))
@@ -1445,7 +1762,11 @@ fn malformed_success_response_is_submission_unknown() {
         .when(call("replacement", send().to(own_address()).grams(2)))
         .then(error(
             "replacement",
-            WalletClientError::PreviousSubmissionUnresolved,
+            WalletClientError::PreviousSubmissionUnresolved {
+                pending_reason: PendingReason::AwaitingWindow,
+                can_force_retry: true,
+                retry_after_hint_ms: 1,
+            },
         ))
         .run();
 }
@@ -1488,7 +1809,11 @@ fn provider_server_failure_is_submission_unknown() {
         .when(call("replacement", send().to(own_address()).grams(2)))
         .then(error(
             "replacement",
-            WalletClientError::PreviousSubmissionUnresolved,
+            WalletClientError::PreviousSubmissionUnresolved {
+                pending_reason: PendingReason::AwaitingWindow,
+                can_force_retry: true,
+                retry_after_hint_ms: 1,
+            },
         ))
         .run();
 }

@@ -110,6 +110,8 @@ pub enum SendPhase {
     Expired,
     /// An explicit same-sequence-number resend replaced this journal attempt.
     Superseded,
+    /// This same-seqno attempt lost to the other journaled attempt that executed.
+    LostRace,
     /// The send failed before an ambiguous submission result.
     Failed,
     /// The send was cancelled before its durable commit boundary.
@@ -134,6 +136,12 @@ pub struct ResolutionInfo {
     pub transaction_hash: Option<Base64Hash>,
     /// The confirmed transaction logical time as a canonical decimal string.
     pub transaction_lt: Option<String>,
+    /// The operation whose external message produced the confirmed transaction.
+    #[serde(default)]
+    pub winning_operation_id: Option<String>,
+    /// The external-message hash that won a same-seqno race.
+    #[serde(default)]
+    pub winning_message_hash: Option<Base64Hash>,
     /// Why the message remains unresolved, when no terminal evidence exists.
     pub pending_reason: Option<PendingReason>,
     /// Whether this engine version can build an explicit same-seqno replacement.

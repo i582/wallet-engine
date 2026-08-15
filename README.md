@@ -143,10 +143,16 @@ platforms. The engine does not own platform networking or protected storage.
 4. Store the returned wallet descriptor in your application storage.
 5. Show the recovery phrase only in the required user flow.
 6. Create `WalletClient` with the descriptor data and both host objects.
-7. Call `refresh()` to load the initial wallet state.
-8. Publish the returned snapshot in your user interface.
-9. Call `waitForChange` to receive later snapshot revisions.
-10. Call `shutdown()` before you discard the client.
+7. Call `start()` and wait for durable send recovery to complete.
+8. Call `refresh()` to load the initial wallet state.
+9. Publish the returned snapshot in your user interface.
+10. Call `waitForChange` to receive later snapshot revisions.
+11. Call `shutdown()` before you discard the client.
+
+`start()` is read-only: it does not access the protected secret or submit a
+message. It polls chain evidence for the configured resolution budget. The web
+`WalletClient.create()` wrapper calls it automatically; native integrations
+must call it explicitly because native construction is synchronous.
 
 The wallet descriptor contains the stable application record ID, address,
 Ed25519 public key, network, and protected-secret reference. Your application
@@ -222,6 +228,11 @@ Handle every send phase explicitly:
 | Phase | Meaning |
 | --- | --- |
 | `submitted` | The provider accepted the signed BoC. This is not an on-chain confirmation. |
+| `confirmed` | The external message was found in an on-chain transaction. |
+| `replaced` | The wallet seqno advanced and this message was not found. |
+| `expired` | Provider time passed the validity window and indexer margin. |
+| `superseded` | An explicit same-seqno resend replaced this attempt. |
+| `lostRace` | The other journaled same-seqno attempt was confirmed. |
 | `failed` | The provider rejected the request before an ambiguous result occurred. |
 | `submissionUnknown` | The provider can have received the BoC, but the engine cannot prove the result. |
 | `cancelled` | The operation stopped before the durable submission boundary. |
@@ -229,6 +240,11 @@ Handle every send phase explicitly:
 CAUTION: If the phase is `submissionUnknown`, do not create and submit a new
 transfer automatically. The first signed message can already be in the
 network.
+
+Use `resolvePending()` for a single read-only evidence check. If its resolution
+sets `canForceRetry`, UI can offer `forceResend()` as an explicit user action.
+The replacement keeps the original transfer intent and seqno, so only one of
+the two signed messages can execute. Never call it automatically.
 
 The journal uses compare-and-swap writes. The host implementation must make
 these writes durable before it reports success.

@@ -1,4 +1,6 @@
 //! V5R1 transfer orchestration.
+use std::time::Duration;
+
 use super::client::WalletClient;
 use super::http::{build_toncenter_v2_request, evaluate_response};
 use super::send_http::{
@@ -8,6 +10,7 @@ use super::send_http::{
 use super::send_state::SensitiveBytes;
 use super::state::{OperationFamily, ensure_running};
 use super::validation::validate_send;
+use futures_timer::Delay;
 
 use crate::domain::bounded_diagnostic;
 use crate::types::parse_positive_decimal;
@@ -16,7 +19,7 @@ use crate::wallet::transfer::{derive_source, prepare_transfer};
 use crate::{AccountStatus, SendAmount, SendPhase, SendRequest, SendResult, WalletClientError};
 
 use super::provider::parse_account;
-use super::resolution::ResolutionRequests;
+use super::resolution::{ResolutionRequests, ResolvedPending};
 use crate::wallet::send::{SendResolution, pending_send_record};
 
 #[uniffi::export]
@@ -80,6 +83,8 @@ impl WalletClient {
             )?;
             let seqno_request = build_seqno_request(&config, state.allocate_request_id()?)?;
             let resolution_request_ids = [
+                state.allocate_request_id()?,
+                state.allocate_request_id()?,
                 state.allocate_request_id()?,
                 state.allocate_request_id()?,
                 state.allocate_request_id()?,
@@ -154,15 +159,16 @@ impl WalletClient {
             let requests = ResolutionRequests::new(&config, &pending, resolution_request_ids)
                 .map_err(|error| self.send_failed_error(generation, error.to_string()))?;
             let resolved = self
-                .resolve_pending_for_send(
+                .resolve_pending_actively_for_send(
                     generation,
                     &config,
                     pending.clone(),
                     provider_time,
-                    &requests,
+                    requests,
                 )
                 .await?;
-            let snapshot = pending.snapshot(&resolved.resolution);
+            let snapshot =
+                pending.snapshot(&resolved.resolution, config.resolution_poll_interval_ms);
             self.publish_prior_send_resolution(generation, snapshot.clone())?;
             if matches!(resolved.resolution, SendResolution::StillPending(_)) {
                 return Err(self.block_send_for_pending(generation, snapshot)?);
@@ -386,6 +392,17 @@ impl WalletClient {
                 state.next_revision()?;
             }
         }
+        // An ambiguous provider response starts the bounded active resolver
+        // immediately. The send result is upgraded when chain evidence arrives
+        // within the budget, but remains SubmissionUnknown when it does not.
+        let phase = if phase == SendPhase::SubmissionUnknown {
+            self.resolve_pending_active()
+                .await
+                .map_or(phase, |snapshot| snapshot.phase)
+        } else {
+            phase
+        };
+
         Ok(SendResult {
             operation_id: request.operation_id,
             message_hash,
@@ -426,5 +443,107 @@ impl WalletClient {
         }
 
         Ok(())
+    }
+}
+
+impl WalletClient {
+    /// Actively follows the older durable message before a new send is allowed
+    /// to reach secret authorization.
+    async fn resolve_pending_actively_for_send(
+        &self,
+        generation: u64,
+        config: &crate::WalletClientConfig,
+        pending: crate::wallet::send::PendingSendRecord,
+        initial_provider_time: u64,
+        mut requests: ResolutionRequests,
+    ) -> Result<ResolvedPending, WalletClientError> {
+        let started_at = std::time::Instant::now();
+        let mut provider_time = initial_provider_time;
+        let mut latest = ResolvedPending {
+            resolution: SendResolution::StillPending(crate::PendingReason::AwaitingWindow),
+            journal: pending.current_journal(),
+        };
+
+        loop {
+            match self
+                .resolve_pending_for_send(
+                    generation,
+                    config,
+                    pending.clone(),
+                    provider_time,
+                    &requests,
+                )
+                .await
+            {
+                Ok(resolved) => {
+                    let terminal = !matches!(resolved.resolution, SendResolution::StillPending(_));
+                    latest = resolved;
+                    if terminal {
+                        return Ok(latest);
+                    }
+                }
+                Err(
+                    error @ (WalletClientError::Shutdown | WalletClientError::StateUnavailable),
+                ) => {
+                    return Err(error);
+                }
+                Err(_) => {
+                    // Missing provider evidence is not a terminal conclusion.
+                    // Keep the durable attempt pending and spend the remaining
+                    // polling budget on a fresh provider snapshot.
+                }
+            }
+
+            let elapsed_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+            if elapsed_ms >= config.resolution_active_budget_ms {
+                break;
+            }
+
+            let remaining_ms = config.resolution_active_budget_ms - elapsed_ms;
+            Delay::new(Duration::from_millis(
+                config.resolution_poll_interval_ms.min(remaining_ms),
+            ))
+            .await;
+            if u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX)
+                >= config.resolution_active_budget_ms
+            {
+                break;
+            }
+            let (account_request, resolution_ids) = {
+                let mut state = self.lock()?;
+                if !state.is_current(OperationFamily::Send, generation) {
+                    return Err(WalletClientError::StateUnavailable);
+                }
+                let account_request = build_toncenter_v2_request(
+                    config,
+                    state.allocate_request_id()?,
+                    "getAddressInformation",
+                    &[("address", config.address.as_str())],
+                )?;
+                let resolution_ids = [
+                    state.allocate_request_id()?,
+                    state.allocate_request_id()?,
+                    state.allocate_request_id()?,
+                    state.allocate_request_id()?,
+                    state.allocate_request_id()?,
+                    state.allocate_request_id()?,
+                ];
+                (account_request, resolution_ids)
+            };
+            let account_response = self
+                .execute_tracked_send_request(generation, &account_request)
+                .await?;
+            let Ok(account) = evaluate_response(&account_request, account_response, parse_account)
+            else {
+                continue;
+            };
+            let Some(sync_utime) = account.sync_utime else {
+                continue;
+            };
+            provider_time = sync_utime;
+            requests = ResolutionRequests::new(config, &pending, resolution_ids)?;
+        }
+
+        Ok(latest)
     }
 }

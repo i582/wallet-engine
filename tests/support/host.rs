@@ -45,7 +45,11 @@ struct HttpState {
     emulation_host_error: Option<HttpHostErrorKind>,
     emulation_rejected: bool,
     message_is_executed: bool,
+    message_is_executed_after_misses: Option<u64>,
+    executed_lookup_count: u64,
+    previous_message_is_executed: bool,
     message_is_pending: bool,
+    activity_contains_submitted_message: bool,
     activity_pages: Vec<usize>,
     activity_page_index: usize,
     next_activity_status: Option<u16>,
@@ -53,6 +57,8 @@ struct HttpState {
     submission_gate: Option<SubmissionGate>,
     request_gate: Option<RequestGate>,
     submitted_message: Option<SubmittedMessage>,
+    submitted_messages: Vec<SubmittedMessage>,
+    resolution_request_count: u64,
     cancelled: HashSet<HttpRequestId>,
 }
 
@@ -62,6 +68,7 @@ pub(crate) enum RequestKind {
     Activity,
     Seqno,
     Emulation,
+    ResolutionExecuted,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -139,7 +146,11 @@ impl ScenarioHttpHost {
                 emulation_host_error: None,
                 emulation_rejected: false,
                 message_is_executed: false,
+                message_is_executed_after_misses: None,
+                executed_lookup_count: 0,
+                previous_message_is_executed: false,
                 message_is_pending: false,
+                activity_contains_submitted_message: false,
                 activity_pages: Vec::new(),
                 activity_page_index: 0,
                 next_activity_status: None,
@@ -151,6 +162,8 @@ impl ScenarioHttpHost {
                 }),
                 request_gate: None,
                 submitted_message: None,
+                submitted_messages: Vec::new(),
+                resolution_request_count: 0,
                 cancelled: HashSet::new(),
             }),
             changed: Condvar::new(),
@@ -176,7 +189,11 @@ impl ScenarioHttpHost {
         state.emulation_host_error = fixture.emulation_host_error;
         state.emulation_rejected = fixture.emulation_rejected;
         state.message_is_executed = fixture.message_is_executed;
+        state.message_is_executed_after_misses = fixture.message_is_executed_after_misses;
+        state.executed_lookup_count = 0;
+        state.previous_message_is_executed = fixture.previous_message_is_executed;
         state.message_is_pending = fixture.message_is_pending;
+        state.activity_contains_submitted_message = fixture.activity_contains_submitted_message;
     }
 
     pub(super) fn set_activity_pages(&self, pages: Vec<usize>) {
@@ -311,6 +328,18 @@ impl ScenarioHttpHost {
         lock(&self.state).submitted_message.clone()
     }
 
+    pub(super) fn submitted_message_count(&self) -> usize {
+        lock(&self.state).submitted_messages.len()
+    }
+
+    pub(super) fn reset_resolution_request_count(&self) {
+        lock(&self.state).resolution_request_count = 0;
+    }
+
+    pub(super) fn resolution_request_count(&self) -> u64 {
+        lock(&self.state).resolution_request_count
+    }
+
     pub(super) fn resume_submission(
         &self,
         name: &str,
@@ -401,11 +430,19 @@ impl ScenarioHttpHost {
             .next_activity_status
             .take()
             .unwrap_or(state.activity_status);
+        let submitted_message_hash = state
+            .activity_contains_submitted_message
+            .then(|| state.submitted_message.as_ref())
+            .flatten()
+            .map(|message| message.message_hash.as_str());
         response_with_status(
             request,
             status,
             if status == 200 {
-                json!({ "ok": true, "result": activity_transactions(page_index, count) })
+                json!({
+                    "ok": true,
+                    "result": activity_transactions(page_index, count, submitted_message_hash)
+                })
             } else {
                 json!({ "ok": false, "error": "scripted activity failure" })
             },
@@ -541,12 +578,14 @@ impl ScenarioHttpHost {
         let comment = decode_submitted_comment(&body)?;
 
         let mut state = lock(&self.state);
-        state.submitted_message = Some(SubmittedMessage {
+        let submitted = SubmittedMessage {
             contains_state_init: message.state_init().is_some(),
             send_modes: body.msgs_modes,
             comment,
             message_hash,
-        });
+        };
+        state.submitted_message = Some(submitted.clone());
+        state.submitted_messages.push(submitted);
 
         let outcome = if state.submission_gate.is_some() {
             {
@@ -619,13 +658,17 @@ impl ScenarioHttpHost {
     }
 }
 
-fn activity_transactions(page: usize, count: usize) -> Vec<Value> {
+fn activity_transactions(
+    page: usize,
+    count: usize,
+    submitted_message_hash: Option<&str>,
+) -> Vec<Value> {
     let address = test_wallet().testnet_v5_address();
     (0..count)
         .map(|index| {
             let ordinal = page.saturating_mul(10).saturating_add(index);
             let lt = 10_000_u64.saturating_sub(ordinal as u64);
-            json!({
+            let mut transaction = json!({
                 "utime": 1_800_000_000_u64.saturating_sub(ordinal as u64),
                 "transaction_id": {
                     "lt": lt.to_string(),
@@ -633,7 +676,13 @@ fn activity_transactions(page: usize, count: usize) -> Vec<Value> {
                 },
                 "in_msg": { "source": address, "value": "1" },
                 "out_msgs": [],
-            })
+            });
+            if index == 0
+                && let Some(message_hash) = submitted_message_hash
+            {
+                transaction["in_msg"]["hash_norm"] = json!(message_hash);
+            }
+            transaction
         })
         .collect()
 }
@@ -667,7 +716,35 @@ impl WalletHttpHost for ScenarioHttpHost {
             return self.emulation_response(&request);
         }
         if request.url.contains("/api/v3/transactionsByMessage") {
-            let executed = lock(&self.state).message_is_executed;
+            self.wait_at_request_gate(RequestKind::ResolutionExecuted, request.id)?;
+            let mut state = lock(&self.state);
+            state.resolution_request_count = state.resolution_request_count.saturating_add(1);
+            state.executed_lookup_count = state.executed_lookup_count.saturating_add(1);
+            let requested_hash = url::Url::parse(&request.url).ok().and_then(|url| {
+                url.query_pairs()
+                    .find(|(key, _)| key == "msg_hash")
+                    .map(|(_, value)| value.into_owned())
+            });
+            let current_is_executed = state.message_is_executed
+                || state
+                    .message_is_executed_after_misses
+                    .is_some_and(|misses| state.executed_lookup_count > misses);
+            let executed_hash = if current_is_executed {
+                state
+                    .submitted_messages
+                    .last()
+                    .map(|message| &message.message_hash)
+            } else if state.previous_message_is_executed {
+                state
+                    .submitted_messages
+                    .len()
+                    .checked_sub(2)
+                    .and_then(|index| state.submitted_messages.get(index))
+                    .map(|message| &message.message_hash)
+            } else {
+                None
+            };
+            let executed = requested_hash.as_ref() == executed_hash;
             let transactions = if executed {
                 vec![json!({
                     "hash": STANDARD.encode([9_u8; 32]),
@@ -682,7 +759,8 @@ impl WalletHttpHost for ScenarioHttpHost {
             ));
         }
         if request.url.contains("/api/v3/pendingTransactions") {
-            let state = lock(&self.state);
+            let mut state = lock(&self.state);
+            state.resolution_request_count = state.resolution_request_count.saturating_add(1);
             let transactions = if state.message_is_pending {
                 state
                     .submitted_message
@@ -704,7 +782,9 @@ impl WalletHttpHost for ScenarioHttpHost {
             ));
         }
         if request.url.contains("/api/v3/walletStates") {
-            let seqno = lock(&self.state).wallet.seqno;
+            let mut state = lock(&self.state);
+            state.resolution_request_count = state.resolution_request_count.saturating_add(1);
+            let seqno = state.wallet.seqno;
             return Ok(response(
                 &request,
                 json!({ "wallets": [{ "seqno": seqno }], "address_book": {}, "metadata": {} }),
@@ -750,6 +830,7 @@ pub(super) struct MemoryPlatformHost {
     secret_delete_error: Mutex<Option<ProtectedSecretHostError>>,
     journal_load_error: Mutex<Option<JournalHostError>>,
     journal_write_error_on: Mutex<Option<u64>>,
+    journal_write_lost_response_on: Mutex<Option<u64>>,
     journal_write_count: Mutex<u64>,
     platform_gate: Mutex<Option<PlatformGate>>,
     platform_changed: Condvar,
@@ -835,6 +916,11 @@ impl MemoryPlatformHost {
         lock(&self.secrets).insert(secret_ref.value.clone(), bytes.to_vec());
     }
 
+    pub(super) fn delete_test_secret(&self, secret_ref: &ProtectedSecretRef) {
+        lock(&self.secrets).remove(&secret_ref.value);
+        lock(&self.secret_user_presence).remove(&secret_ref.value);
+    }
+
     pub(super) fn conflict_next_journal_write(&self) {
         *lock(&self.conflict_next_journal_write) = true;
     }
@@ -869,6 +955,10 @@ impl MemoryPlatformHost {
 
     pub(super) fn fail_journal_write(&self, write_number: u64) {
         *lock(&self.journal_write_error_on) = Some(write_number);
+    }
+
+    pub(super) fn lose_journal_write_response(&self, write_number: u64) {
+        *lock(&self.journal_write_lost_response_on) = Some(write_number);
     }
 
     pub(super) fn secret_read_count(&self) -> u64 {
@@ -1013,6 +1103,12 @@ impl WalletPlatformHost for MemoryPlatformHost {
         }
 
         journal.insert(key, mutation.replacement.clone());
+        if lock(&self.journal_write_lost_response_on).as_ref() == Some(&write_number) {
+            return Err(JournalHostError::Failed {
+                kind: JournalHostErrorKind::Unavailable,
+                diagnostic: format!("scripted journal write {write_number} lost its response"),
+            });
+        }
         Ok(JournalCompareExchangeResult {
             applied: true,
             current: Some(mutation.replacement),

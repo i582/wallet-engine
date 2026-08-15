@@ -7,6 +7,7 @@
 mod activity;
 mod client;
 mod emulation;
+mod force_resend;
 mod host;
 mod http;
 mod preview;

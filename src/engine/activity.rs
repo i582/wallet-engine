@@ -246,6 +246,7 @@ mod tests {
                 items: vec![record("unexpected", 11, 2)],
                 cursor: Some(cursor(11, 2)),
                 has_more: true,
+                inbound_evidence: Vec::new(),
             },
         );
 
@@ -274,6 +275,7 @@ mod tests {
                 items: vec![record("unexpected", 9, 2)],
                 cursor: Some(cursor(9, 2)),
                 has_more: true,
+                inbound_evidence: Vec::new(),
             },
         );
 
@@ -295,6 +297,7 @@ mod tests {
                 items: vec![record("first", 20, 3)],
                 cursor: Some(expected_cursor.clone()),
                 has_more: true,
+                inbound_evidence: Vec::new(),
             },
         );
 
@@ -328,6 +331,8 @@ mod tests {
             network: Network::Testnet,
             send_validity_seconds: 300,
             resolution_margin_seconds: 60,
+            resolution_poll_interval_ms: 4_000,
+            resolution_active_budget_ms: 60_000,
             providers: ProviderConfig::standard(Network::Testnet),
         };
         State {

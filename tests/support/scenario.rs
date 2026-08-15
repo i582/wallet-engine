@@ -73,6 +73,7 @@ pub(crate) const fn journal() -> JournalFixture {
         conflict_next_write: false,
         load_fails: false,
         failing_write: None,
+        lost_write_response: None,
     }
 }
 
@@ -91,13 +92,18 @@ pub(crate) const fn provider() -> ProviderFixture {
         emulation_host_error: None,
         emulation_rejected: false,
         message_is_executed: false,
+        message_is_executed_after_misses: None,
+        previous_message_is_executed: false,
         message_is_pending: false,
+        activity_contains_submitted_message: false,
     }
 }
 
 pub(crate) const fn client() -> ClientFixture {
     ClientFixture {
         send_validity_seconds: 300,
+        resolution_poll_interval_ms: 1,
+        resolution_active_budget_ms: 4,
     }
 }
 
@@ -147,6 +153,18 @@ pub(crate) const fn wait_for_change(after_revision: u64) -> UserAction {
     UserAction::WaitForChange { after_revision }
 }
 
+pub(crate) const fn start_client() -> UserAction {
+    UserAction::StartClient
+}
+
+pub(crate) const fn resolve_pending() -> UserAction {
+    UserAction::ResolvePending
+}
+
+pub(crate) const fn resolve_pending_on_secondary_client() -> UserAction {
+    UserAction::ResolvePendingOnSecondaryClient
+}
+
 pub(crate) fn pause_next_account_request(name: impl Into<String>) -> ControlStep {
     ControlStep::PauseRequest {
         name: name.into(),
@@ -172,6 +190,13 @@ pub(crate) fn pause_next_emulation_request(name: impl Into<String>) -> ControlSt
     ControlStep::PauseRequest {
         name: name.into(),
         kind: RequestKind::Emulation,
+    }
+}
+
+pub(crate) fn pause_next_executed_message_request(name: impl Into<String>) -> ControlStep {
+    ControlStep::PauseRequest {
+        name: name.into(),
+        kind: RequestKind::ResolutionExecuted,
     }
 }
 
@@ -219,6 +244,22 @@ pub(crate) const fn spam_transfers(count: u32) -> UserAction {
 
 pub(crate) const fn replay_last_submission() -> UserAction {
     UserAction::ReplayLastSubmission
+}
+
+pub(crate) const fn force_resend() -> UserAction {
+    UserAction::ForceResend
+}
+
+pub(crate) const fn reset_resolution_request_count() -> ControlStep {
+    ControlStep::ResetResolutionRequestCount
+}
+
+pub(crate) const fn delete_protected_secret() -> ControlStep {
+    ControlStep::DeleteProtectedSecret
+}
+
+pub(crate) const fn lose_next_localnet_submission_response(reaches_network: bool) -> ControlStep {
+    ControlStep::LoseNextLocalnetSubmissionResponse { reaches_network }
 }
 
 pub(crate) const fn own_address() -> Destination {
@@ -414,6 +455,10 @@ pub(crate) const fn crash_and_restart() -> ControlStep {
     ControlStep::CrashAndRestart
 }
 
+pub(crate) const fn create_secondary_client() -> ControlStep {
+    ControlStep::CreateSecondaryClient
+}
+
 pub(crate) const fn journal_is_empty() -> Expectation {
     Expectation::JournalIsEmpty
 }
@@ -428,6 +473,14 @@ pub(crate) const fn submitted_message() -> SubmittedMessageExpectation {
 
 pub(crate) const fn message_was_submitted() -> Expectation {
     Expectation::SubmittedMessagePresent
+}
+
+pub(crate) const fn submitted_message_count(count: usize) -> Expectation {
+    Expectation::SubmittedMessageCount(count)
+}
+
+pub(crate) const fn no_resolution_requests() -> Expectation {
+    Expectation::ResolutionRequestCount(0)
 }
 
 pub(crate) const fn on_chain_wallet() -> OnChainWalletExpectation {
@@ -578,16 +631,26 @@ pub(crate) struct JournalFixture {
     conflict_next_write: bool,
     load_fails: bool,
     failing_write: Option<u64>,
+    lost_write_response: Option<u64>,
 }
 
 pub(crate) struct ClientFixture {
     send_validity_seconds: u32,
+    resolution_poll_interval_ms: u64,
+    resolution_active_budget_ms: u64,
 }
 
 impl ClientFixture {
     #[must_use]
     pub(crate) const fn send_validity_seconds(mut self, seconds: u32) -> Self {
         self.send_validity_seconds = seconds;
+        self
+    }
+
+    #[must_use]
+    pub(crate) const fn resolution_timing(mut self, interval_ms: u64, budget_ms: u64) -> Self {
+        self.resolution_poll_interval_ms = interval_ms;
+        self.resolution_active_budget_ms = budget_ms;
         self
     }
 }
@@ -606,7 +669,10 @@ pub(crate) struct ProviderFixture {
     pub(super) emulation_host_error: Option<HttpHostErrorKind>,
     pub(super) emulation_rejected: bool,
     pub(super) message_is_executed: bool,
+    pub(super) message_is_executed_after_misses: Option<u64>,
+    pub(super) previous_message_is_executed: bool,
     pub(super) message_is_pending: bool,
+    pub(super) activity_contains_submitted_message: bool,
 }
 
 pub(crate) struct ActivityFixture {
@@ -621,8 +687,26 @@ impl ProviderFixture {
     }
 
     #[must_use]
+    pub(crate) const fn message_is_executed_after_misses(mut self, misses: u64) -> Self {
+        self.message_is_executed_after_misses = Some(misses);
+        self
+    }
+
+    #[must_use]
+    pub(crate) const fn previous_message_is_executed(mut self) -> Self {
+        self.previous_message_is_executed = true;
+        self
+    }
+
+    #[must_use]
     pub(crate) const fn message_is_pending(mut self) -> Self {
         self.message_is_pending = true;
+        self
+    }
+
+    #[must_use]
+    pub(crate) const fn activity_contains_submitted_message(mut self) -> Self {
+        self.activity_contains_submitted_message = true;
         self
     }
 
@@ -718,6 +802,12 @@ impl JournalFixture {
         self.failing_write = Some(write_number);
         self
     }
+
+    #[must_use]
+    pub(crate) const fn loses_response_after_write(mut self, write_number: u64) -> Self {
+        self.lost_write_response = Some(write_number);
+        self
+    }
 }
 
 pub(crate) struct NetworkFixtureBuilder;
@@ -800,8 +890,12 @@ pub(crate) enum UserAction {
     CancelLoadMoreActivity,
     Shutdown,
     WaitForChange { after_revision: u64 },
+    StartClient,
+    ResolvePending,
+    ResolvePendingOnSecondaryClient,
     SpamTransfers { count: u32 },
     ReplayLastSubmission,
+    ForceResend,
 }
 
 impl From<SendAction> for UserAction {
@@ -821,6 +915,7 @@ pub(crate) enum SubmissionOutcome {
 
 pub(crate) enum ControlStep {
     CrashAndRestart,
+    CreateSecondaryClient,
     ResumeSubmission {
         name: String,
         outcome: SubmissionOutcome,
@@ -849,6 +944,11 @@ pub(crate) enum ControlStep {
         status: u16,
     },
     CancelNextActivityRequestAtHost,
+    ResetResolutionRequestCount,
+    DeleteProtectedSecret,
+    LoseNextLocalnetSubmissionResponse {
+        reaches_network: bool,
+    },
 }
 
 pub(crate) enum Given {
@@ -995,6 +1095,8 @@ pub(crate) enum Expectation {
     SubmittedMessageUsesMode(u8),
     SubmittedMessageHasComment(String),
     SubmittedMessagePresent,
+    SubmittedMessageCount(usize),
+    ResolutionRequestCount(u64),
     OnChainWallet(OnChainWalletExpectation),
 }
 
@@ -1113,6 +1215,16 @@ impl ResultExpectation {
     #[must_use]
     pub(crate) fn submission_unknown(self) -> Expectation {
         self.phase(SendPhase::SubmissionUnknown)
+    }
+
+    #[must_use]
+    pub(crate) fn confirmed(self) -> Expectation {
+        self.phase(SendPhase::Confirmed)
+    }
+
+    #[must_use]
+    pub(crate) fn lost_race(self) -> Expectation {
+        self.phase(SendPhase::LostRace)
     }
 
     pub(crate) fn emulated_action(self, kind: impl Into<String>) -> Expectation {
@@ -1254,6 +1366,7 @@ struct ScenarioTransport {
 struct ScenarioRunner {
     name: String,
     client: Arc<WalletClient>,
+    secondary_client: Option<Arc<WalletClient>>,
     client_config: WalletClientConfig,
     client_http_host: Arc<dyn WalletHttpHost>,
     platform_host: Arc<MemoryPlatformHost>,
@@ -1302,9 +1415,12 @@ impl ScenarioRunner {
         let mut journal_conflict = false;
         let mut journal_load_fails = false;
         let mut failing_journal_write = None;
+        let mut lost_journal_write_response = None;
         let mut provider_fixture = provider();
         let mut pages = Vec::new();
         let mut send_validity_seconds = 300;
+        let mut resolution_poll_interval_ms = 1;
+        let mut resolution_active_budget_ms = 4;
 
         for step in steps {
             match step {
@@ -1318,6 +1434,7 @@ impl ScenarioRunner {
                     journal_conflict = fixture.conflict_next_write;
                     journal_load_fails = fixture.load_fails;
                     failing_journal_write = fixture.failing_write;
+                    lost_journal_write_response = fixture.lost_write_response;
                 }
                 Step::Given(Given::Provider(fixture)) => {
                     provider_fixture = ProviderFixture {
@@ -1334,12 +1451,18 @@ impl ScenarioRunner {
                         emulation_host_error: fixture.emulation_host_error,
                         emulation_rejected: fixture.emulation_rejected,
                         message_is_executed: fixture.message_is_executed,
+                        message_is_executed_after_misses: fixture.message_is_executed_after_misses,
+                        previous_message_is_executed: fixture.previous_message_is_executed,
                         message_is_pending: fixture.message_is_pending,
+                        activity_contains_submitted_message: fixture
+                            .activity_contains_submitted_message,
                     };
                 }
                 Step::Given(Given::Activity(fixture)) => pages.clone_from(&fixture.pages),
                 Step::Given(Given::Client(fixture)) => {
                     send_validity_seconds = fixture.send_validity_seconds;
+                    resolution_poll_interval_ms = fixture.resolution_poll_interval_ms;
+                    resolution_active_budget_ms = fixture.resolution_active_budget_ms;
                 }
                 Step::When(_) | Step::Then(_) => break,
             }
@@ -1371,6 +1494,9 @@ impl ScenarioRunner {
         }
         if let Some(write_number) = failing_journal_write {
             platform_host.fail_journal_write(write_number);
+        }
+        if let Some(write_number) = lost_journal_write_response {
+            platform_host.lose_journal_write_response(write_number);
         }
         let transport = if use_localnet {
             if wallet.status != "uninitialized" {
@@ -1416,6 +1542,8 @@ impl ScenarioRunner {
             network: Network::Testnet,
             send_validity_seconds,
             resolution_margin_seconds: 60,
+            resolution_poll_interval_ms,
+            resolution_active_budget_ms,
             providers: ProviderConfig {
                 toncenter_base_url: provider_base_url,
                 request_timeout_ms: 15_000,
@@ -1431,6 +1559,7 @@ impl ScenarioRunner {
         Ok(Self {
             name: name.to_owned(),
             client,
+            secondary_client: None,
             client_config,
             client_http_host: client_host,
             platform_host,
@@ -1516,6 +1645,9 @@ impl ScenarioRunner {
                 if let Some(write_number) = journal.failing_write {
                     self.platform_host.fail_journal_write(write_number);
                 }
+                if let Some(write_number) = journal.lost_write_response {
+                    self.platform_host.lose_journal_write_response(write_number);
+                }
                 Ok(())
             }
             Given::Provider(provider) => {
@@ -1544,7 +1676,14 @@ impl ScenarioRunner {
                     return Err(format!("operation `{name}` already exists"));
                 }
 
-                let client = self.client.clone();
+                let client = if matches!(&step.action, UserAction::ResolvePendingOnSecondaryClient)
+                {
+                    self.secondary_client
+                        .clone()
+                        .ok_or_else(|| "secondary client has not been created".to_owned())?
+                } else {
+                    self.client.clone()
+                };
                 let (sender, receiver) = channel();
                 let thread = match step.action {
                     UserAction::PreviewSend(action) => {
@@ -1610,6 +1749,18 @@ impl ScenarioRunner {
                         let result = block_on(client.wait_for_change(after_revision));
                         let _ = sender.send(OperationResult::Snapshot(Box::new(result)));
                     }),
+                    UserAction::StartClient => std::thread::spawn(move || {
+                        let result = block_on(client.start()).map(|_| ());
+                        let _ = sender.send(OperationResult::Unit(result));
+                    }),
+                    UserAction::ResolvePending => std::thread::spawn(move || {
+                        let result = block_on(client.resolve_pending()).map(|_| ());
+                        let _ = sender.send(OperationResult::Unit(result));
+                    }),
+                    UserAction::ResolvePendingOnSecondaryClient => std::thread::spawn(move || {
+                        let result = block_on(client.resolve_pending()).map(|_| ());
+                        let _ = sender.send(OperationResult::Unit(result));
+                    }),
                     UserAction::SpamTransfers { count } => {
                         let localnet = self.localnet_http_host.clone();
                         std::thread::spawn(move || {
@@ -1634,6 +1785,10 @@ impl ScenarioRunner {
                             let _ = sender.send(OperationResult::Harness(result));
                         })
                     }
+                    UserAction::ForceResend => std::thread::spawn(move || {
+                        let result = block_on(client.force_resend());
+                        let _ = sender.send(OperationResult::Send(result));
+                    }),
                 };
                 self.operations.insert(
                     name.clone(),
@@ -1664,6 +1819,19 @@ impl ScenarioRunner {
                     self.platform_host.clone(),
                 )
                 .map_err(|error| format!("could not restart wallet client: {error}"))?;
+                Ok(())
+            }
+            When::Control(ControlStep::CreateSecondaryClient) => {
+                self.secondary_client = Some(
+                    WalletClient::new(
+                        self.client_config.clone(),
+                        self.client_http_host.clone(),
+                        self.platform_host.clone(),
+                    )
+                    .map_err(|error| {
+                        format!("could not create secondary wallet client: {error}")
+                    })?,
+                );
                 Ok(())
             }
             When::Control(ControlStep::PauseRequest { name, kind }) => {
@@ -1716,6 +1884,24 @@ impl ScenarioRunner {
                     "localnet scenarios cannot script transport cancellation".to_owned()
                 })?;
                 host.cancel_next_activity_response();
+                Ok(())
+            }
+            When::Control(ControlStep::ResetResolutionRequestCount) => {
+                let host = self.scripted_http_host.as_ref().ok_or_else(|| {
+                    "localnet scenarios do not expose resolver request counters".to_owned()
+                })?;
+                host.reset_resolution_request_count();
+                Ok(())
+            }
+            When::Control(ControlStep::DeleteProtectedSecret) => {
+                self.platform_host.delete_test_secret(&self.secret_ref);
+                Ok(())
+            }
+            When::Control(ControlStep::LoseNextLocalnetSubmissionResponse { reaches_network }) => {
+                let host = self.localnet_http_host.as_ref().ok_or_else(|| {
+                    "submission-loss injection requires `.given(network().localnet())`".to_owned()
+                })?;
+                host.lose_next_submission_response(reaches_network);
                 Ok(())
             }
         }
@@ -2201,6 +2387,32 @@ impl ScenarioRunner {
                     Ok(())
                 } else {
                     Err("expected an external message submission".to_owned())
+                }
+            }
+            Expectation::SubmittedMessageCount(expected) => {
+                let host = self.scripted_http_host.clone().ok_or_else(|| {
+                    "submitted-message counts require the scripted host".to_owned()
+                })?;
+                self.eventually(|| Ok(host.submitted_message_count() == expected))
+                    .map_err(|message| {
+                        format!(
+                            "expected {expected} submitted messages, got {}\n{message}",
+                            host.submitted_message_count()
+                        )
+                    })
+            }
+            Expectation::ResolutionRequestCount(expected) => {
+                let actual = self
+                    .scripted_http_host
+                    .as_ref()
+                    .ok_or_else(|| "resolver request counts require the scripted host".to_owned())?
+                    .resolution_request_count();
+                if actual == expected {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "expected {expected} resolver requests, got {actual}"
+                    ))
                 }
             }
             Expectation::OnChainWallet(expectation) => self

@@ -55,9 +55,24 @@ impl WalletClient {
         state.active_send = None;
         state.send_commit_started = false;
         state.send_workflow = None;
+        let resolution = snapshot
+            .resolution
+            .as_ref()
+            .ok_or(WalletClientError::StateUnavailable)?;
+        let pending_reason = resolution
+            .pending_reason
+            .ok_or(WalletClientError::StateUnavailable)?;
+        let can_force_retry = resolution.can_force_retry;
+        let retry_after_hint_ms = resolution
+            .retry_after_hint_ms
+            .ok_or(WalletClientError::StateUnavailable)?;
         state.snapshot.send = snapshot;
         state.next_revision()?;
-        Ok(WalletClientError::PreviousSubmissionUnresolved)
+        Ok(WalletClientError::PreviousSubmissionUnresolved {
+            pending_reason,
+            can_force_retry,
+            retry_after_hint_ms,
+        })
     }
 
     pub(super) fn fail_send(
@@ -99,7 +114,11 @@ impl WalletClient {
         let public_error = match error {
             SendWorkflowError::JournalConflict => WalletClientError::SendAlreadyInProgress,
             SendWorkflowError::PreviousSubmissionUnresolved => {
-                WalletClientError::PreviousSubmissionUnresolved
+                WalletClientError::PreviousSubmissionUnresolved {
+                    pending_reason: crate::PendingReason::AwaitingWindow,
+                    can_force_retry: false,
+                    retry_after_hint_ms: 4_000,
+                }
             }
             SendWorkflowError::AccountUnavailable { status } => {
                 WalletClientError::SendAccountUnavailable { status }
