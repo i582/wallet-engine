@@ -101,4 +101,4 @@ jobs:
         run: acton --version
 
       - name: Run tests
-        run: just test
+        run: just test-rust
