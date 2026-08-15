@@ -105,6 +105,20 @@ send, persistence, and delete flows.
 This repository does not track generated bindings. Generate them from the same
 revision that you use to build the Rust library.
 
+### Rust tests
+
+Install a current Acton CLI that supports `acton localnet`.
+
+`cargo test` starts a temporary localnet on a free loopback port. The test sends
+a first transfer and makes sure that the uninitialized wallet becomes active.
+It also makes sure that the wallet sequence number becomes `1`.
+
+If Acton is not in `PATH`, set the path explicitly:
+
+```shell
+WALLET_ENGINE_ACTON_BIN=/path/to/acton cargo test --locked
+```
+
 ## Integration model
 
 Wallet Engine owns the wallet state machine. Your application implements two

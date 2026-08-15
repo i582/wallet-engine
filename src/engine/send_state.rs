@@ -70,6 +70,9 @@ impl WalletClient {
                 WalletClientError::PreviousSubmissionUnresolved
             }
             SendWorkflowError::WalletSeqnoNotAdvanced => WalletClientError::WalletSeqnoNotAdvanced,
+            SendWorkflowError::AccountUnavailable { status } => {
+                WalletClientError::SendAccountUnavailable { status }
+            }
             _ => WalletClientError::SendFailed {
                 diagnostic: diagnostic.clone(),
             },

@@ -16,7 +16,8 @@ pub enum Network {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderConfig {
-    /// The HTTPS base URL for Toncenter API v2 requests.
+    /// The HTTPS base URL for a Toncenter-compatible API v2 provider.
+    /// Loopback HTTP URLs are accepted for local development networks.
     pub toncenter_base_url: String,
 }
 

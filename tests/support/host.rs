@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Condvar, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use base64::Engine as _;
@@ -17,6 +18,8 @@ use wallet_engine::{
 
 use super::scenario::{SubmissionOutcome, WalletFixture};
 
+const CHECKPOINT_TIMEOUT: Duration = Duration::from_secs(15);
+
 pub(super) struct ScenarioHttpHost {
     state: Mutex<HttpState>,
     changed: Condvar,
@@ -29,7 +32,7 @@ struct HttpState {
     cancelled: HashSet<HttpRequestId>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(super) struct SubmittedMessage {
     pub(super) contains_state_init: bool,
 }
@@ -70,7 +73,7 @@ impl ScenarioHttpHost {
     }
 
     pub(super) fn submitted_message(&self) -> Option<SubmittedMessage> {
-        lock(&self.state).submitted_message
+        lock(&self.state).submitted_message.clone()
     }
 
     pub(super) fn resume_submission(
@@ -79,22 +82,39 @@ impl ScenarioHttpHost {
         outcome: SubmissionOutcome,
     ) -> Result<(), String> {
         let mut state = lock(&self.state);
-        let gate = state
+        let deadline = Instant::now() + CHECKPOINT_TIMEOUT;
+        loop {
+            let gate = state
+                .submission_gate
+                .as_ref()
+                .ok_or_else(|| format!("submission checkpoint `{name}` does not exist"))?;
+            if gate.name != name {
+                return Err(format!(
+                    "expected submission checkpoint `{}`, got `{name}`",
+                    gate.name
+                ));
+            }
+            if gate.reached {
+                break;
+            }
+
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(format!(
+                    "submission checkpoint `{name}` was not reached within {CHECKPOINT_TIMEOUT:?}"
+                ));
+            }
+            state = match self.changed.wait_timeout(state, remaining) {
+                Ok((guard, _)) => guard,
+                Err(poisoned) => poisoned.into_inner().0,
+            };
+        }
+
+        state
             .submission_gate
             .as_mut()
-            .ok_or_else(|| format!("submission checkpoint `{name}` does not exist"))?;
-
-        if gate.name != name {
-            return Err(format!(
-                "expected submission checkpoint `{}`, got `{name}`",
-                gate.name
-            ));
-        }
-        if !gate.reached {
-            return Err(format!("submission checkpoint `{name}` was not reached"));
-        }
-
-        gate.outcome = Some(outcome);
+            .ok_or_else(|| format!("submission checkpoint `{name}` disappeared"))?
+            .outcome = Some(outcome);
         self.changed.notify_all();
         Ok(())
     }
@@ -237,11 +257,16 @@ impl WalletHttpHost for ScenarioHttpHost {
 pub(super) struct MemoryPlatformHost {
     secrets: Mutex<HashMap<String, Vec<u8>>>,
     journal: Mutex<HashMap<(String, String), JournalRecord>>,
+    conflict_next_journal_write: Mutex<bool>,
 }
 
 impl MemoryPlatformHost {
     pub(super) fn store_test_secret(&self, secret_ref: &ProtectedSecretRef, bytes: &[u8]) {
         lock(&self.secrets).insert(secret_ref.value.clone(), bytes.to_vec());
+    }
+
+    pub(super) fn conflict_next_journal_write(&self) {
+        *lock(&self.conflict_next_journal_write) = true;
     }
 }
 
@@ -287,6 +312,12 @@ impl WalletPlatformHost for MemoryPlatformHost {
         let key = (mutation.key.record_id, mutation.key.slot);
         let mut journal = lock(&self.journal);
         let current = journal.get(&key).cloned();
+        if std::mem::take(&mut *lock(&self.conflict_next_journal_write)) {
+            return Ok(JournalCompareExchangeResult {
+                applied: false,
+                current,
+            });
+        }
         let current_version = current.as_ref().map(|record| record.version);
 
         if current_version != mutation.expected_version {

@@ -1,6 +1,6 @@
 //! Resource state and errors exposed by wallet operations.
 
-use super::HttpHostErrorKind;
+use super::{AccountStatus, HttpHostErrorKind};
 
 /// Replaces control characters and bounds diagnostics stored in public errors.
 ///
@@ -161,13 +161,16 @@ pub struct DomainError {
 /// An operational failure returned by [`crate::WalletClient`].
 pub enum WalletClientError {
     /// The client configuration or operation request is invalid.
-    #[error("invalid  wallet client configuration")]
+    #[error("invalid wallet client configuration")]
     InvalidConfig,
+    /// The transfer request has an invalid operation ID, destination, amount, or secret reference.
+    #[error("invalid send request")]
+    InvalidSendRequest,
     /// A client-local identifier or revision counter overflowed.
-    #[error(" wallet client identifier space is exhausted")]
+    #[error("wallet client identifier space is exhausted")]
     IdentifierExhausted,
     /// The internal state lock or active operation state is unavailable.
-    #[error(" wallet client state is unavailable")]
+    #[error("wallet client state is unavailable")]
     StateUnavailable,
     /// Another transfer is already being prepared or submitted by this client.
     #[error("another send operation is already in progress")]
@@ -183,6 +186,15 @@ pub enum WalletClientError {
     /// Refresh chain state and retry only after the wallet sequence number advances.
     #[error("the wallet sequence number has not advanced since the previous submission")]
     WalletSeqnoNotAdvanced,
+    /// The current on-chain account status does not permit a transfer.
+    #[error("wallet account state {status:?} does not permit sending")]
+    SendAccountUnavailable {
+        /// The fresh account status returned by the provider.
+        status: AccountStatus,
+    },
+    /// The protected secret cannot be decoded as a valid wallet recovery phrase.
+    #[error("the protected wallet secret is invalid")]
+    InvalidProtectedSecret,
     /// A send failed before submission became ambiguous.
     #[error("send failed: {diagnostic}")]
     SendFailed {
@@ -199,6 +211,6 @@ pub enum WalletClientError {
     #[error("the send has crossed its durable commit boundary and can no longer be cancelled")]
     SendCancellationTooLate,
     /// The client is shut down and accepts no new work.
-    #[error(" wallet client is shut down")]
+    #[error("wallet client is shut down")]
     Shutdown,
 }

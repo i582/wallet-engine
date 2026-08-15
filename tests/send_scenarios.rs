@@ -1,7 +1,7 @@
 mod support;
 
 use support::*;
-use wallet_engine::{SendPhase, WalletClientError};
+use wallet_engine::{AccountStatus, SendPhase, WalletClientError};
 
 #[test]
 fn second_send_is_rejected_while_first_is_in_progress() {
@@ -87,6 +87,22 @@ fn uninitialized_wallet_can_deploy_and_send() {
 }
 
 #[test]
+fn uninitialized_wallet_becomes_active_on_localnet() {
+    scenario("first transfer activates an uninitialized wallet on localnet")
+        .given(network().localnet())
+        .given(wallet().uninitialized().balance(grams(10)))
+        .when(call("send", send().to(own_address()).grams(1)))
+        .then(submitted_message().contains_state_init())
+        .then(result("send").submitted())
+        .then(on_chain_wallet().active().seqno(1))
+        .when(call("refresh", refresh_wallet()))
+        .then(update("refresh").completed())
+        .then(account_status(AccountStatus::Active))
+        .then(activity_present())
+        .run();
+}
+
+#[test]
 fn submitted_send_blocks_replacement_until_seqno_advances() {
     scenario("submitted send waits for the next wallet seqno")
         .given(wallet().active().balance(grams(10)).seqno(7))
@@ -106,5 +122,101 @@ fn submitted_send_blocks_replacement_until_seqno_advances() {
         .then(send_phase("next", SendPhase::Submitting))
         .when(resume("next-submit", submission_accepted()))
         .then(result("next").submitted())
+        .run();
+}
+
+#[test]
+fn zero_amount_is_rejected_before_send_state_changes() {
+    scenario("zero amount is not a valid transfer")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .when(call("send", send().to(own_address()).nanograms(0)))
+        .then(error("send", WalletClientError::InvalidSendRequest))
+        .then(snapshot().send_phase(SendPhase::Idle))
+        .run();
+}
+
+#[test]
+fn malformed_destination_is_rejected_before_send_state_changes() {
+    scenario("malformed destination is not a valid transfer")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .when(call("send", send().to(invalid_address()).grams(1)))
+        .then(error("send", WalletClientError::InvalidSendRequest))
+        .then(snapshot().send_phase(SendPhase::Idle))
+        .run();
+}
+
+#[test]
+fn frozen_wallet_stops_before_secret_authorization() {
+    scenario("a frozen wallet cannot send")
+        .given(wallet().frozen().balance(grams(10)))
+        .when(call("send", send().to(own_address()).grams(1)))
+        .then(error(
+            "send",
+            WalletClientError::SendAccountUnavailable {
+                status: AccountStatus::Frozen,
+            },
+        ))
+        .then(snapshot().send_phase(SendPhase::Failed))
+        .run();
+}
+
+#[test]
+fn unknown_wallet_state_stops_before_secret_authorization() {
+    scenario("an unknown wallet state cannot send")
+        .given(wallet().unknown().balance(grams(10)))
+        .when(call("send", send().to(own_address()).grams(1)))
+        .then(error(
+            "send",
+            WalletClientError::SendAccountUnavailable {
+                status: AccountStatus::Unknown,
+            },
+        ))
+        .then(snapshot().send_phase(SendPhase::Failed))
+        .run();
+}
+
+#[test]
+fn invalid_protected_secret_fails_without_submission() {
+    scenario("an invalid protected recovery phrase cannot sign")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(secret().invalid())
+        .when(call("send", send().to(own_address()).grams(1)))
+        .then(error("send", WalletClientError::InvalidProtectedSecret))
+        .then(snapshot().send_phase(SendPhase::Failed))
+        .run();
+}
+
+#[test]
+fn missing_provider_time_prevents_transfer_expiration() {
+    scenario("fresh account state must include provider time")
+        .given(
+            wallet()
+                .active()
+                .balance(grams(10))
+                .seqno(7)
+                .without_sync_time(),
+        )
+        .when(call("send", send().to(own_address()).grams(1)))
+        .then(error(
+            "send",
+            send_failed("fresh account state did not include provider synchronization time"),
+        ))
+        .then(snapshot().send_phase(SendPhase::Failed))
+        .run();
+}
+
+#[test]
+fn journal_conflict_releases_the_in_memory_send_slot() {
+    scenario("a journal CAS conflict does not leave the client busy")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(journal().conflicts_on_next_write())
+        .when(call("conflict", send().to(own_address()).grams(1)))
+        .then(error("conflict", WalletClientError::SendAlreadyInProgress))
+        .then(snapshot().send_phase(SendPhase::Failed))
+        .given(submission().paused("retry-submit"))
+        .when(start("retry", send().to(own_address()).grams(1)))
+        .then(send_phase("retry", SendPhase::Submitting))
+        .when(resume("retry-submit", submission_accepted()))
+        .then(result("retry").submitted())
         .run();
 }

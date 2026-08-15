@@ -198,8 +198,8 @@ pub(crate) enum SendWorkflowError {
     PreviousSubmissionUnresolved,
     #[error("the wallet sequence number has not advanced since the previous submission")]
     WalletSeqnoNotAdvanced,
-    #[error("wallet account state does not permit sending")]
-    AccountUnavailable,
+    #[error("wallet account state {status:?} does not permit sending")]
+    AccountUnavailable { status: AccountStatus },
     #[error("send journal record is invalid: {0}")]
     InvalidJournal(String),
 }
@@ -382,7 +382,9 @@ impl SendWorkflow {
             | AccountStatus::Uninitialized
             | AccountStatus::Frozen
             | AccountStatus::Unknown => {
-                return Err(SendWorkflowError::AccountUnavailable);
+                return Err(SendWorkflowError::AccountUnavailable {
+                    status: account.status,
+                });
             }
         }
 

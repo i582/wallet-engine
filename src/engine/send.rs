@@ -74,7 +74,7 @@ impl WalletClient {
             );
             let directive = workflow
                 .begin()
-                .map_err(|_| WalletClientError::InvalidConfig)?;
+                .map_err(|_| WalletClientError::InvalidSendRequest)?;
             let SendDirective::LoadJournal(journal_key) = directive else {
                 return Err(WalletClientError::StateUnavailable);
             };
@@ -157,8 +157,13 @@ impl WalletClient {
 
         // Derive the source again from the unlocked mnemonic. This prevents signing a transfer
         // for wallet A with a secret that belongs to wallet B.
-        let source = derive_source(secret.as_slice(), config.network)
-            .map_err(|_| self.send_failed_error(generation, "protected mnemonic is invalid"))?;
+        let source = derive_source(secret.as_slice(), config.network).map_err(|_| {
+            let diagnostic = "protected mnemonic is invalid".to_owned();
+            match self.fail_send(generation, diagnostic) {
+                Ok(()) => WalletClientError::InvalidProtectedSecret,
+                Err(error) => error,
+            }
+        })?;
 
         if source != expected_source {
             return Err(self.send_failed_error(
