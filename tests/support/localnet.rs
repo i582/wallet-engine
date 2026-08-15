@@ -33,6 +33,7 @@ pub(super) struct LocalnetHttpHost {
     address: String,
     cancelled: Mutex<HashSet<HttpRequestId>>,
     submitted_message: Mutex<Option<SubmittedMessage>>,
+    activity_requests: Mutex<Vec<String>>,
 }
 
 impl std::fmt::Debug for LocalnetHttpHost {
@@ -58,6 +59,7 @@ impl LocalnetHttpHost {
             address: address.to_owned(),
             cancelled: Mutex::new(HashSet::new()),
             submitted_message: Mutex::new(None),
+            activity_requests: Mutex::new(Vec::new()),
         })
     }
 
@@ -67,6 +69,10 @@ impl LocalnetHttpHost {
 
     pub(super) fn submitted_message(&self) -> Option<SubmittedMessage> {
         lock(&self.submitted_message).clone()
+    }
+
+    pub(super) fn last_activity_request(&self) -> Option<String> {
+        lock(&self.activity_requests).last().cloned()
     }
 
     pub(super) fn assert_wallet(
@@ -88,6 +94,9 @@ impl LocalnetHttpHost {
                 HttpHostErrorKind::Cancelled,
                 "localnet request was cancelled",
             ));
+        }
+        if request.url.contains("getTransactions") {
+            lock(&self.activity_requests).push(request.url.clone());
         }
 
         let method = match request.method {

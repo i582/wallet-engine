@@ -27,6 +27,10 @@ pub(super) struct ScenarioHttpHost {
 
 struct HttpState {
     wallet: WalletFixture,
+    account_status: u16,
+    activity_status: u16,
+    activity_pages: Vec<usize>,
+    activity_page_index: usize,
     submission_gate: Option<SubmissionGate>,
     submitted_message: Option<SubmittedMessage>,
     cancelled: HashSet<HttpRequestId>,
@@ -48,6 +52,10 @@ impl ScenarioHttpHost {
         Self {
             state: Mutex::new(HttpState {
                 wallet,
+                account_status: 200,
+                activity_status: 200,
+                activity_pages: Vec::new(),
+                activity_page_index: 0,
                 submission_gate: paused_submission.map(|name| SubmissionGate {
                     name,
                     reached: false,
@@ -62,6 +70,18 @@ impl ScenarioHttpHost {
 
     pub(super) fn set_wallet(&self, wallet: WalletFixture) {
         lock(&self.state).wallet = wallet;
+    }
+
+    pub(super) fn set_resource_statuses(&self, account_status: u16, activity_status: u16) {
+        let mut state = lock(&self.state);
+        state.account_status = account_status;
+        state.activity_status = activity_status;
+    }
+
+    pub(super) fn set_activity_pages(&self, pages: Vec<usize>) {
+        let mut state = lock(&self.state);
+        state.activity_pages = pages;
+        state.activity_page_index = 0;
     }
 
     pub(super) fn pause_submission(&self, name: String) {
@@ -121,8 +141,9 @@ impl ScenarioHttpHost {
 
     fn account_response(&self, request: &HttpRequest) -> HttpResponse {
         let state = lock(&self.state);
-        response(
+        response_with_status(
             request,
+            state.account_status,
             json!({
                 "ok": true,
                 "result": {
@@ -131,6 +152,22 @@ impl ScenarioHttpHost {
                     "sync_utime": state.wallet.sync_utime,
                 }
             }),
+        )
+    }
+
+    fn activity_response(&self, request: &HttpRequest) -> HttpResponse {
+        let mut state = lock(&self.state);
+        let page_index = state.activity_page_index;
+        state.activity_page_index = state.activity_page_index.saturating_add(1);
+        let count = state.activity_pages.get(page_index).copied().unwrap_or(0);
+        response_with_status(
+            request,
+            state.activity_status,
+            if state.activity_status == 200 {
+                json!({ "ok": true, "result": activity_transactions(page_index, count) })
+            } else {
+                json!({ "ok": false, "error": "scripted activity failure" })
+            },
         )
     }
 
@@ -228,11 +265,33 @@ impl ScenarioHttpHost {
     }
 }
 
+fn activity_transactions(page: usize, count: usize) -> Vec<Value> {
+    const ADDRESS: &str = "0QA_6fh0aRAkD7n1MNfAUx8TvyCUw2iTQfzVM-0isMze2anN";
+    (0..count)
+        .map(|index| {
+            let ordinal = page.saturating_mul(10).saturating_add(index);
+            let lt = 10_000_u64.saturating_sub(ordinal as u64);
+            json!({
+                "utime": 1_800_000_000_u64.saturating_sub(ordinal as u64),
+                "transaction_id": {
+                    "lt": lt.to_string(),
+                    "hash": STANDARD.encode([ordinal as u8; 32]),
+                },
+                "in_msg": { "source": ADDRESS, "value": "1" },
+                "out_msgs": [],
+            })
+        })
+        .collect()
+}
+
 #[async_trait]
 impl WalletHttpHost for ScenarioHttpHost {
     async fn execute_http(&self, request: HttpRequest) -> Result<HttpResponse, HttpHostError> {
         if request.url.contains("getAddressInformation") {
             return Ok(self.account_response(&request));
+        }
+        if request.url.contains("getTransactions") {
+            return Ok(self.activity_response(&request));
         }
 
         let body: Value = serde_json::from_slice(&request.body)
@@ -336,13 +395,17 @@ impl WalletPlatformHost for MemoryPlatformHost {
 }
 
 fn response(request: &HttpRequest, body: Value) -> HttpResponse {
+    response_with_status(request, 200, body)
+}
+
+fn response_with_status(request: &HttpRequest, status: u16, body: Value) -> HttpResponse {
     let body = match serde_json::to_vec(&body) {
         Ok(body) => body,
         Err(error) => panic!("test response serialization failed: {error}"),
     };
 
     HttpResponse {
-        status: 200,
+        status,
         headers: Vec::new(),
         body,
         final_url: request.url.clone(),

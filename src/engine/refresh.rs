@@ -8,7 +8,9 @@ use crate::{
 };
 
 use super::WalletClient;
-use super::activity::{PAGE_SIZE, build_refresh_requests, mark_loading_cancelled};
+use super::activity::{
+    PAGE_SIZE, apply_refreshed_activity_page, build_refresh_requests, mark_loading_cancelled,
+};
 use super::http::evaluate_response;
 use super::provider::{ActivityPage, parse_account, parse_activity};
 use super::state::{OperationFamily, ensure_running, update};
@@ -145,10 +147,7 @@ impl WalletClient {
             },
             RefreshValue::Activity(result) => match result {
                 Ok(page) => {
-                    state.activity = page.items;
-                    state.activity_cursor = page.cursor;
-                    state.activity_has_more = page.has_more;
-                    state.sync_activity_snapshot();
+                    apply_refreshed_activity_page(&mut state, page);
                     state.snapshot.activity_resource = ResourceState::ready();
                 }
                 Err(error) => state.snapshot.activity_resource = ResourceState::failed(error),

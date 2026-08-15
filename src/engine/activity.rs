@@ -149,6 +149,31 @@ pub(super) fn apply_activity_page(state: &mut State, page: ActivityPage) -> u64 
     u64::try_from(state.activity.len().saturating_sub(previous_len)).unwrap_or(u64::MAX)
 }
 
+pub(super) fn apply_refreshed_activity_page(state: &mut State, page: ActivityPage) {
+    if state.activity.is_empty() {
+        state.activity = page.items;
+        state.activity_cursor = page.cursor;
+        state.activity_has_more = page.has_more;
+        state.sync_activity_snapshot();
+        return;
+    }
+
+    // A refresh replaces the provider head, but it must not discard older pages
+    // that the user already loaded. New rows replace matching IDs; the deepest
+    // pagination cursor continues to describe the retained tail.
+    let mut by_id: HashMap<_, _> = state
+        .activity
+        .drain(..)
+        .map(|item| (item.id.clone(), item))
+        .collect();
+    for item in page.items {
+        by_id.insert(item.id.clone(), item);
+    }
+    state.activity = by_id.into_values().collect();
+    state.activity.sort_by(activity_record_order);
+    state.sync_activity_snapshot();
+}
+
 pub(super) fn build_refresh_requests(
     config: &WalletClientConfig,
     account_id: HttpRequestId,

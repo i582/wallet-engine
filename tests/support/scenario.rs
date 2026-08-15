@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::thread::JoinHandle;
@@ -6,9 +6,9 @@ use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
 use wallet_engine::{
-    AccountStatus, Network, ProtectedSecretRef, ProviderConfig, SendPhase, SendRequest, SendResult,
-    WalletClient, WalletClientConfig, WalletClientError, WalletHttpHost, WalletOperationOutcome,
-    WalletUpdate,
+    AccountStatus, ActivityCursor, Network, ProtectedSecretRef, ProviderConfig, ResourcePhase,
+    SendPhase, SendRequest, SendResult, WalletClient, WalletClientConfig, WalletClientError,
+    WalletHttpHost, WalletOperationOutcome, WalletUpdate,
 };
 
 use super::host::{MemoryPlatformHost, ScenarioHttpHost};
@@ -16,7 +16,7 @@ use super::localnet::LocalnetHttpHost;
 
 // Signing is CPU-heavy in debug builds. Parallel scenarios can legitimately
 // take longer than a single isolated test without indicating a deadlock.
-const STEP_TIMEOUT: Duration = Duration::from_secs(15);
+const STEP_TIMEOUT: Duration = Duration::from_secs(60);
 const NANOGRAMS_PER_GRAM: u64 = 1_000_000_000;
 const TEST_RECORD_ID: &str = "scenario-wallet";
 const TEST_SECRET_REF: &str = "wallet:scenario-wallet:mnemonic";
@@ -53,6 +53,19 @@ pub(crate) const fn journal() -> JournalFixture {
     }
 }
 
+pub(crate) const fn provider() -> ProviderFixture {
+    ProviderFixture {
+        account_status: 200,
+        activity_status: 200,
+    }
+}
+
+pub(crate) fn activity_pages(pages: &[usize]) -> ActivityFixture {
+    ActivityFixture {
+        pages: pages.to_vec(),
+    }
+}
+
 pub(crate) const fn network() -> NetworkFixtureBuilder {
     NetworkFixtureBuilder
 }
@@ -66,6 +79,14 @@ pub(crate) fn send() -> SendAction {
 
 pub(crate) const fn refresh_wallet() -> UserAction {
     UserAction::Refresh
+}
+
+pub(crate) const fn load_more_activity() -> UserAction {
+    UserAction::LoadMoreActivity
+}
+
+pub(crate) const fn spam_transfers(count: u32) -> UserAction {
+    UserAction::SpamTransfers { count }
 }
 
 pub(crate) const fn own_address() -> Destination {
@@ -129,6 +150,12 @@ pub(crate) fn error(name: impl Into<String>, expected: WalletClientError) -> Exp
     }
 }
 
+pub(crate) fn succeeds(name: impl Into<String>) -> Expectation {
+    Expectation::Success {
+        operation: name.into(),
+    }
+}
+
 pub(crate) fn send_failed(diagnostic: impl Into<String>) -> WalletClientError {
     WalletClientError::SendFailed {
         diagnostic: diagnostic.into(),
@@ -151,6 +178,32 @@ pub(crate) const fn activity_present() -> Expectation {
     Expectation::ActivityPresent
 }
 
+pub(crate) fn remember_activity_cursor(name: impl Into<String>) -> Expectation {
+    Expectation::RememberActivityCursor(name.into())
+}
+
+pub(crate) fn pagination_used_cursor(name: impl Into<String>) -> Expectation {
+    Expectation::PaginationUsedCursor(name.into())
+}
+
+pub(crate) fn remember_activity_as(name: impl Into<String>) -> Expectation {
+    Expectation::RememberActivity {
+        name: name.into(),
+        only_new: false,
+    }
+}
+
+pub(crate) fn remember_new_activity_as(name: impl Into<String>) -> Expectation {
+    Expectation::RememberActivity {
+        name: name.into(),
+        only_new: true,
+    }
+}
+
+pub(crate) fn activity_is(names: &[&str]) -> Expectation {
+    Expectation::ActivityIs(names.iter().map(|name| (*name).to_owned()).collect())
+}
+
 pub(crate) const fn submitted_message() -> SubmittedMessageExpectation {
     SubmittedMessageExpectation
 }
@@ -163,7 +216,13 @@ pub(crate) const fn on_chain_wallet() -> OnChainWalletExpectation {
 }
 
 pub(crate) const fn snapshot() -> SnapshotExpectation {
-    SnapshotExpectation { send_phase: None }
+    SnapshotExpectation {
+        send_phase: None,
+        account_phase: None,
+        activity_phase: None,
+        activity_count: None,
+        has_more: None,
+    }
 }
 
 #[derive(Clone)]
@@ -253,6 +312,29 @@ pub(crate) struct JournalFixture {
     conflict_next_write: bool,
 }
 
+pub(crate) struct ProviderFixture {
+    account_status: u16,
+    activity_status: u16,
+}
+
+pub(crate) struct ActivityFixture {
+    pages: Vec<usize>,
+}
+
+impl ProviderFixture {
+    #[must_use]
+    pub(crate) const fn account_fails(mut self, status: u16) -> Self {
+        self.account_status = status;
+        self
+    }
+
+    #[must_use]
+    pub(crate) const fn activity_fails(mut self, status: u16) -> Self {
+        self.activity_status = status;
+        self
+    }
+}
+
 impl JournalFixture {
     #[must_use]
     pub(crate) const fn conflicts_on_next_write(mut self) -> Self {
@@ -321,6 +403,8 @@ pub(crate) enum UserAction {
     Send(SendAction),
     CancelSend,
     Refresh,
+    LoadMoreActivity,
+    SpamTransfers { count: u32 },
 }
 
 impl From<SendAction> for UserAction {
@@ -348,6 +432,8 @@ pub(crate) enum Given {
     Submission(SubmissionFixture),
     Secret(SecretFixture),
     Journal(JournalFixture),
+    Provider(ProviderFixture),
+    Activity(ActivityFixture),
     Network(NetworkFixture),
 }
 
@@ -372,6 +458,18 @@ impl From<SecretFixture> for Given {
 impl From<JournalFixture> for Given {
     fn from(value: JournalFixture) -> Self {
         Self::Journal(value)
+    }
+}
+
+impl From<ProviderFixture> for Given {
+    fn from(value: ProviderFixture) -> Self {
+        Self::Provider(value)
+    }
+}
+
+impl From<ActivityFixture> for Given {
+    fn from(value: ActivityFixture) -> Self {
+        Self::Activity(value)
     }
 }
 
@@ -407,6 +505,9 @@ pub(crate) enum Expectation {
         operation: String,
         expected: WalletClientError,
     },
+    Success {
+        operation: String,
+    },
     ResultPhase {
         operation: String,
         phase: SendPhase,
@@ -415,9 +516,23 @@ pub(crate) enum Expectation {
         operation: String,
         outcome: WalletOperationOutcome,
     },
+    UpdateAddedItems {
+        operation: String,
+        count: u64,
+    },
+    UpdateAddedAnyItems {
+        operation: String,
+    },
     Snapshot(SnapshotExpectation),
     AccountStatus(AccountStatus),
     ActivityPresent,
+    RememberActivityCursor(String),
+    PaginationUsedCursor(String),
+    RememberActivity {
+        name: String,
+        only_new: bool,
+    },
+    ActivityIs(Vec<String>),
     SubmittedMessageContainsStateInit,
     OnChainWallet(OnChainWalletExpectation),
 }
@@ -463,6 +578,38 @@ impl UpdateExpectation {
             outcome: WalletOperationOutcome::Completed,
         }
     }
+
+    pub(crate) fn partially_completed(self) -> Expectation {
+        self.outcome(WalletOperationOutcome::PartiallyCompleted)
+    }
+
+    pub(crate) fn failed(self) -> Expectation {
+        self.outcome(WalletOperationOutcome::Failed)
+    }
+
+    pub(crate) fn skipped(self) -> Expectation {
+        self.outcome(WalletOperationOutcome::Skipped)
+    }
+
+    pub(crate) fn added_items(self, count: u64) -> Expectation {
+        Expectation::UpdateAddedItems {
+            operation: self.name,
+            count,
+        }
+    }
+
+    pub(crate) fn added_any_items(self) -> Expectation {
+        Expectation::UpdateAddedAnyItems {
+            operation: self.name,
+        }
+    }
+
+    fn outcome(self, outcome: WalletOperationOutcome) -> Expectation {
+        Expectation::UpdateOutcome {
+            operation: self.name,
+            outcome,
+        }
+    }
 }
 
 impl ResultExpectation {
@@ -491,12 +638,38 @@ impl ResultExpectation {
 
 pub(crate) struct SnapshotExpectation {
     send_phase: Option<SendPhase>,
+    account_phase: Option<ResourcePhase>,
+    activity_phase: Option<ResourcePhase>,
+    activity_count: Option<usize>,
+    has_more: Option<bool>,
 }
 
 impl SnapshotExpectation {
     #[must_use]
     pub(crate) const fn send_phase(mut self, phase: SendPhase) -> Expectation {
         self.send_phase = Some(phase);
+        Expectation::Snapshot(self)
+    }
+
+    #[must_use]
+    pub(crate) const fn account_phase(mut self, phase: ResourcePhase) -> Self {
+        self.account_phase = Some(phase);
+        self
+    }
+
+    pub(crate) const fn activity_phase(mut self, phase: ResourcePhase) -> Expectation {
+        self.activity_phase = Some(phase);
+        Expectation::Snapshot(self)
+    }
+
+    #[must_use]
+    pub(crate) const fn activity_count(mut self, count: usize) -> Self {
+        self.activity_count = Some(count);
+        self
+    }
+
+    pub(crate) const fn has_more(mut self, has_more: bool) -> Expectation {
+        self.has_more = Some(has_more);
         Expectation::Snapshot(self)
     }
 }
@@ -562,6 +735,8 @@ struct ScenarioRunner {
     address: String,
     operations: HashMap<String, RunningOperation>,
     results: HashMap<String, OperationResult>,
+    activity_cursors: HashMap<String, ActivityCursor>,
+    named_activity: HashMap<String, HashSet<String>>,
 }
 
 #[derive(Debug)]
@@ -578,6 +753,8 @@ impl ScenarioRunner {
         let mut use_localnet = false;
         let mut valid_secret = true;
         let mut journal_conflict = false;
+        let mut resource_statuses = (200, 200);
+        let mut pages = Vec::new();
 
         for step in steps {
             match step {
@@ -590,6 +767,10 @@ impl ScenarioRunner {
                 Step::Given(Given::Journal(fixture)) => {
                     journal_conflict = fixture.conflict_next_write;
                 }
+                Step::Given(Given::Provider(fixture)) => {
+                    resource_statuses = (fixture.account_status, fixture.activity_status);
+                }
+                Step::Given(Given::Activity(fixture)) => pages.clone_from(&fixture.pages),
                 Step::When(_) | Step::Then(_) => break,
             }
         }
@@ -628,6 +809,8 @@ impl ScenarioRunner {
             }
         } else {
             let host = Arc::new(ScenarioHttpHost::new(wallet, paused_submission));
+            host.set_resource_statuses(resource_statuses.0, resource_statuses.1);
+            host.set_activity_pages(pages);
             ScenarioTransport {
                 client_host: host.clone(),
                 scripted_host: Some(host),
@@ -666,6 +849,8 @@ impl ScenarioRunner {
             address: TESTNET_V5_ADDRESS.to_owned(),
             operations: HashMap::new(),
             results: HashMap::new(),
+            activity_cursors: HashMap::new(),
+            named_activity: HashMap::new(),
         })
     }
 
@@ -730,6 +915,20 @@ impl ScenarioRunner {
                 }
                 Ok(())
             }
+            Given::Provider(provider) => {
+                let host = self.scripted_http_host.as_ref().ok_or_else(|| {
+                    "localnet scenarios cannot script provider failures".to_owned()
+                })?;
+                host.set_resource_statuses(provider.account_status, provider.activity_status);
+                Ok(())
+            }
+            Given::Activity(activity) => {
+                self.scripted_http_host
+                    .as_ref()
+                    .ok_or_else(|| "localnet scenarios cannot script activity".to_owned())?
+                    .set_activity_pages(activity.pages);
+                Ok(())
+            }
             Given::Network(NetworkFixture::Localnet) => Ok(()),
         }
     }
@@ -769,6 +968,27 @@ impl ScenarioRunner {
                         let result = block_on(client.refresh());
                         let _ = sender.send(OperationResult::Update(Box::new(result)));
                     }),
+                    UserAction::LoadMoreActivity => std::thread::spawn(move || {
+                        let result = block_on(client.load_more_activity());
+                        let _ = sender.send(OperationResult::Update(Box::new(result)));
+                    }),
+                    UserAction::SpamTransfers { count } => {
+                        let address = self.address.clone();
+                        let secret_ref = self.secret_ref.clone();
+                        let operation_prefix = name.clone();
+                        std::thread::spawn(move || {
+                            let result = (0..count).try_for_each(|index| {
+                                let request = SendRequest {
+                                    operation_id: format!("{operation_prefix}-operation-{index}"),
+                                    destination: address.clone(),
+                                    amount_nanograms: "1".to_owned(),
+                                    secret_ref: secret_ref.clone(),
+                                };
+                                block_on(client.send(request)).map(|_| ())
+                            });
+                            let _ = sender.send(OperationResult::Unit(result));
+                        })
+                    }
                 };
                 self.operations.insert(
                     name.clone(),
@@ -824,6 +1044,15 @@ impl ScenarioRunner {
                     )),
                 }
             }
+            Expectation::Success { operation } => {
+                self.finish_operation(&operation)?;
+                match self.results.get(&operation) {
+                    Some(OperationResult::Unit(Ok(()))) => Ok(()),
+                    actual => Err(format!(
+                        "expected `{operation}` to succeed\nactual: {actual:?}"
+                    )),
+                }
+            }
             Expectation::ResultPhase { operation, phase } => {
                 self.finish_operation(&operation)?;
                 match self.results.get(&operation) {
@@ -844,6 +1073,28 @@ impl ScenarioRunner {
                     )),
                 }
             }
+            Expectation::UpdateAddedItems { operation, count } => {
+                self.finish_operation(&operation)?;
+                match self.results.get(&operation) {
+                    Some(OperationResult::Update(result)) if matches!(result.as_ref(), Ok(update) if update.activity_items_added == count) => {
+                        Ok(())
+                    }
+                    actual => Err(format!(
+                        "expected `{operation}` to add {count} activity items\nactual: {actual:?}"
+                    )),
+                }
+            }
+            Expectation::UpdateAddedAnyItems { operation } => {
+                self.finish_operation(&operation)?;
+                match self.results.get(&operation) {
+                    Some(OperationResult::Update(result)) if matches!(result.as_ref(), Ok(update) if update.activity_items_added > 0) => {
+                        Ok(())
+                    }
+                    actual => Err(format!(
+                        "expected `{operation}` to add activity items\nactual: {actual:?}"
+                    )),
+                }
+            }
             Expectation::Snapshot(expectation) => {
                 let snapshot = self.client.snapshot().map_err(|error| error.to_string())?;
                 if let Some(expected) = expectation.send_phase
@@ -852,6 +1103,38 @@ impl ScenarioRunner {
                     return Err(format!(
                         "expected snapshot send phase {expected:?}\nactual: {:?}",
                         snapshot.send.phase
+                    ));
+                }
+                if let Some(expected) = expectation.account_phase
+                    && snapshot.account_resource.phase != expected
+                {
+                    return Err(format!(
+                        "expected account phase {expected:?}\nactual: {:?}",
+                        snapshot.account_resource.phase
+                    ));
+                }
+                if let Some(expected) = expectation.activity_phase
+                    && snapshot.activity_resource.phase != expected
+                {
+                    return Err(format!(
+                        "expected activity phase {expected:?}\nactual: {:?}",
+                        snapshot.activity_resource.phase
+                    ));
+                }
+                if let Some(expected) = expectation.activity_count
+                    && snapshot.activity.len() != expected
+                {
+                    return Err(format!(
+                        "expected {expected} activity items\nactual: {}",
+                        snapshot.activity.len()
+                    ));
+                }
+                if let Some(expected) = expectation.has_more
+                    && snapshot.activity_has_more != expected
+                {
+                    return Err(format!(
+                        "expected activity_has_more={expected}\nactual: {}",
+                        snapshot.activity_has_more
                     ));
                 }
                 Ok(())
@@ -873,6 +1156,83 @@ impl ScenarioRunner {
                     Err("expected refreshed activity to contain an item".to_owned())
                 } else {
                     Ok(())
+                }
+            }
+            Expectation::RememberActivityCursor(name) => {
+                let cursor = self
+                    .client
+                    .snapshot()
+                    .map_err(|error| error.to_string())?
+                    .activity_cursor
+                    .ok_or_else(|| "expected an activity cursor".to_owned())?;
+                self.activity_cursors.insert(name, cursor);
+                Ok(())
+            }
+            Expectation::PaginationUsedCursor(name) => {
+                let cursor = self
+                    .activity_cursors
+                    .get(&name)
+                    .ok_or_else(|| format!("activity cursor `{name}` was not remembered"))?;
+                let request = self
+                    .localnet_http_host
+                    .as_ref()
+                    .and_then(|host| host.last_activity_request())
+                    .ok_or_else(|| "expected a localnet activity request".to_owned())?;
+                let parsed = url::Url::parse(&request).map_err(|error| error.to_string())?;
+                let query: HashMap<_, _> = parsed.query_pairs().into_owned().collect();
+                if query.get("lt") == Some(&cursor.logical_time)
+                    && query.get("hash").map(String::as_str) == Some(cursor.hash.as_str())
+                {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "expected pagination cursor {cursor:?}\nrequest: {request}"
+                    ))
+                }
+            }
+            Expectation::RememberActivity { name, only_new } => {
+                let mut ids: HashSet<_> = self
+                    .client
+                    .snapshot()
+                    .map_err(|error| error.to_string())?
+                    .activity
+                    .into_iter()
+                    .map(|item| item.id)
+                    .collect();
+                if only_new {
+                    for known in self.named_activity.values() {
+                        ids.retain(|id| !known.contains(id));
+                    }
+                }
+                if ids.is_empty() {
+                    return Err(format!("activity set `{name}` is empty"));
+                }
+                self.named_activity.insert(name, ids);
+                Ok(())
+            }
+            Expectation::ActivityIs(names) => {
+                let mut expected = HashSet::new();
+                for name in names {
+                    let ids = self
+                        .named_activity
+                        .get(&name)
+                        .ok_or_else(|| format!("activity set `{name}` was not remembered"))?;
+                    expected.extend(ids.iter().cloned());
+                }
+                let actual: HashSet<_> = self
+                    .client
+                    .snapshot()
+                    .map_err(|error| error.to_string())?
+                    .activity
+                    .into_iter()
+                    .map(|item| item.id)
+                    .collect();
+                if actual == expected {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "expected activity sets to match\nexpected: {expected:?}\nactual: {actual:?}"
+                    ))
                 }
             }
             Expectation::SubmittedMessageContainsStateInit => self

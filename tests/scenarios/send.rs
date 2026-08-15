@@ -1,6 +1,4 @@
-mod support;
-
-use support::*;
+use super::support::*;
 use wallet_engine::{AccountStatus, SendPhase, WalletClientError};
 
 #[test]
@@ -87,7 +85,7 @@ fn uninitialized_wallet_can_deploy_and_send() {
 }
 
 #[test]
-fn uninitialized_wallet_becomes_active_on_localnet() {
+fn first_transfer_deploys_the_wallet_on_localnet_and_appears_in_history() {
     scenario("first transfer activates an uninitialized wallet on localnet")
         .given(network().localnet())
         .given(wallet().uninitialized().balance(grams(10)))
@@ -98,6 +96,25 @@ fn uninitialized_wallet_becomes_active_on_localnet() {
         .when(call("refresh", refresh_wallet()))
         .then(update("refresh").completed())
         .then(account_status(AccountStatus::Active))
+        .then(activity_present())
+        .run();
+}
+
+#[test]
+fn second_transfer_uses_the_advanced_wallet_seqno_on_localnet() {
+    scenario("confirmed transfer advances seqno for the next send")
+        .given(network().localnet())
+        .given(wallet().uninitialized().balance(grams(10)))
+        .when(call("first", send().to(own_address()).grams(1)))
+        .then(result("first").submitted())
+        .then(on_chain_wallet().active().seqno(1))
+        .when(call("refresh", refresh_wallet()))
+        .then(update("refresh").completed())
+        .when(call("second", send().to(own_address()).grams(1)))
+        .then(result("second").submitted())
+        .then(on_chain_wallet().active().seqno(2))
+        .when(call("final-refresh", refresh_wallet()))
+        .then(update("final-refresh").completed())
         .then(activity_present())
         .run();
 }
