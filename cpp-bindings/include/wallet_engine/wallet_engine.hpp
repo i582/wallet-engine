@@ -1,5 +1,7 @@
 #pragma once
 
+// Idiomatic C++ ownership layer over the stable Wallet Engine C ABI.
+
 #include <cstdint>
 #include <functional>
 #include <future>

@@ -43,7 +43,7 @@ clippy:
     cargo clippy --locked --manifest-path wasm-bindings/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
     cargo clippy --locked --manifest-path xtask/Cargo.toml --all-targets -- -D warnings
 
-test: test-c
+test: test-c test-cpp
     cargo nextest run --locked {{ NEXTEST_PROFILE_ARGS }}
     cargo nextest run --locked --manifest-path c-bindings/Cargo.toml {{ NEXTEST_PROFILE_ARGS }}
     cargo nextest run --locked --manifest-path xtask/Cargo.toml {{ NEXTEST_PROFILE_ARGS }}
@@ -99,6 +99,20 @@ test-c: bindings-c build-c
     cmake -S c-bindings/tests/c -B target/c-tests
     cmake --build target/c-tests
     ctest --test-dir target/c-tests --output-on-failure
+
+build-cpp: bindings-c
+    cmake -S cpp-bindings -B target/cpp-bindings -DBUILD_TESTING=OFF
+    cmake --build target/cpp-bindings
+
+test-cpp: bindings-c
+    cmake -S cpp-bindings -B target/cpp-bindings -DBUILD_TESTING=ON
+    cmake --build target/cpp-bindings
+    ctest --test-dir target/cpp-bindings --output-on-failure
+
+test-cpp-sanitized: bindings-c
+    cmake -S cpp-bindings -B target/cpp-bindings-sanitized -DBUILD_TESTING=ON -DWALLET_ENGINE_CPP_ENABLE_SANITIZERS=ON
+    cmake --build target/cpp-bindings-sanitized
+    ctest --test-dir target/cpp-bindings-sanitized --output-on-failure
 
 web-install:
     bun install --cwd web --frozen-lockfile
