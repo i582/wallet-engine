@@ -1,3 +1,5 @@
+NEXTEST_PROFILE_ARGS := if env_var_or_default("CI", "") != "" { "-P ci" } else { "" }
+
 all: check
 
 build:
@@ -42,19 +44,20 @@ clippy:
     cargo clippy --locked --manifest-path xtask/Cargo.toml --all-targets -- -D warnings
 
 test: test-c
-    cargo test --locked
-    cargo test --locked --manifest-path c-bindings/Cargo.toml
-    cargo test --locked --manifest-path xtask/Cargo.toml
+    cargo nextest run --locked {{ NEXTEST_PROFILE_ARGS }}
+    cargo nextest run --locked --manifest-path c-bindings/Cargo.toml {{ NEXTEST_PROFILE_ARGS }}
+    cargo nextest run --locked --manifest-path xtask/Cargo.toml {{ NEXTEST_PROFILE_ARGS }}
+    cargo test --locked --doc
 
 coverage-setup:
     cargo install cargo-llvm-cov --locked
     rustup component add llvm-tools-preview
 
 coverage:
-    env WALLET_ENGINE_SCENARIO_TIMEOUT_SECS=300 cargo llvm-cov --locked --all-features --all-targets --ignore-filename-regex '(^|/)vendor/' --lcov --output-path lcov.info
+    env WALLET_ENGINE_SCENARIO_TIMEOUT_SECS=300 cargo llvm-cov nextest --locked --all-features --all-targets --ignore-filename-regex '(^|/)vendor/|(^|/)src/engine/host\.rs$' --lcov --output-path lcov.info {{ NEXTEST_PROFILE_ARGS }}
 
 coverage-html:
-    env WALLET_ENGINE_SCENARIO_TIMEOUT_SECS=300 cargo llvm-cov --locked --all-features --all-targets --ignore-filename-regex '(^|/)vendor/' --html --output-dir coverage/html
+    env WALLET_ENGINE_SCENARIO_TIMEOUT_SECS=300 cargo llvm-cov nextest --locked --all-features --all-targets --ignore-filename-regex '(^|/)vendor/|(^|/)src/engine/host\.rs$' --html --output-dir coverage/html {{ NEXTEST_PROFILE_ARGS }}
 
 coverage-clean:
     cargo llvm-cov clean
@@ -159,7 +162,7 @@ example-tui-clippy:
     cargo clippy --locked --manifest-path examples/tui/Cargo.toml --all-targets -- -D warnings
 
 example-tui-test:
-    cargo test --locked --manifest-path examples/tui/Cargo.toml
+    cargo nextest run --locked --manifest-path examples/tui/Cargo.toml {{ NEXTEST_PROFILE_ARGS }}
 
 example-swift-build-macos: bindings-swift
     xcodebuild -project examples/swift/WalletEngineApp.xcodeproj -scheme WalletEngineApp -configuration Debug -destination 'platform=macOS,arch=arm64' -derivedDataPath target/swift-example CODE_SIGNING_ALLOWED=NO build

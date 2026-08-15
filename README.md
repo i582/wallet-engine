@@ -109,15 +109,18 @@ revision that you use to build the Rust library.
 
 Install a current Acton CLI that supports `acton localnet`.
 
-`cargo test` starts a temporary localnet on a free loopback port. The test sends
-a first transfer and makes sure that the uninitialized wallet becomes active.
-It also makes sure that the wallet sequence number becomes `1`.
+`cargo nextest run` executes unit and scenario tests in parallel. Localnet
+scenarios start temporary Acton nodes on free loopback ports. The scenarios
+cover wallet deployment, transfers, refresh, pagination, cancellation, and
+concurrent chain changes.
 
 If Acton is not in `PATH`, set the path explicitly:
 
 ```shell
-WALLET_ENGINE_ACTON_BIN=/path/to/acton cargo test --locked
+WALLET_ENGINE_ACTON_BIN=/path/to/acton cargo nextest run --locked
 ```
+
+Use `just test` to also run C boundary tests and Rust documentation tests.
 
 ## Integration model
 
