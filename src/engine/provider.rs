@@ -197,7 +197,7 @@ pub(crate) fn parse_account(body: &[u8]) -> Result<AccountSnapshot, DomainError>
     let balance_nanograms =
         parse_unsigned_decimal(&account.balance, "account balance")?.to_string();
 
-    let status = match account.state.to_ascii_lowercase().as_str() {
+    let status = match account.state.as_str() {
         "nonexist" | "nonexistent" => AccountStatus::Nonexistent,
         "uninit" | "uninitialized" => AccountStatus::Uninitialized,
         "active" => AccountStatus::Active,
@@ -485,4 +485,203 @@ fn parse_retry_after_ms(headers: &[HttpHeader]) -> Option<u64> {
         .ok()?;
 
     seconds.checked_mul(1_000)
+}
+
+#[cfg(test)]
+mod tests {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
+    use serde_json::{Value, json};
+
+    use super::{parse_account, parse_activity, response_error};
+    use crate::{
+        AccountStatus, ActivityDirection, ErrorCategory, ErrorCode, HttpHeader, RetryAdvice,
+    };
+
+    const ADDRESS: &str = "0:0000000000000000000000000000000000000000000000000000000000000001";
+
+    #[test]
+    fn parses_every_account_status_and_numeric_balance_shape() {
+        let cases = [
+            ("nonexist", AccountStatus::Nonexistent),
+            ("nonexistent", AccountStatus::Nonexistent),
+            ("uninit", AccountStatus::Uninitialized),
+            ("uninitialized", AccountStatus::Uninitialized),
+            ("active", AccountStatus::Active),
+            ("frozen", AccountStatus::Frozen),
+            ("future-state", AccountStatus::Unknown),
+        ];
+
+        for (state, expected) in cases {
+            let body = json!({
+                "ok": true,
+                "result": { "balance": 42, "state": state, "sync_utime": 123 }
+            });
+            let account = parse_account(&encode(body)).expect("account must parse");
+            assert_eq!(account.balance_nanograms, "42");
+            assert_eq!(account.status, expected);
+            assert_eq!(account.sync_utime, Some(123));
+        }
+    }
+
+    #[test]
+    fn account_status_is_case_sensitive() {
+        let body = json!({
+            "ok": true,
+            "result": { "balance": "42", "state": "FROZEN", "sync_utime": 123 }
+        });
+
+        let account = parse_account(&encode(body)).expect("the account envelope must parse");
+
+        assert_eq!(account.status, AccountStatus::Unknown);
+    }
+
+    #[test]
+    fn normalizes_http_and_envelope_rejections() {
+        let limited =
+            response_error(429, &[], br#"{"message":"slow down"}"#).expect("429 must be an error");
+        assert_eq!(limited.code, ErrorCode::RateLimited);
+        assert_eq!(limited.retry, RetryAdvice::Safe);
+        assert_eq!(limited.retry_after_ms, None);
+
+        let rejected = response_error(400, &[], b"not-json").expect("400 must be an error");
+        assert_eq!(rejected.code, ErrorCode::HttpRejected);
+        assert_eq!(rejected.retry, RetryAdvice::None);
+        assert_eq!(rejected.developer_message, "HTTP 400");
+
+        let server = response_error(
+            503,
+            &[HttpHeader {
+                name: "Retry-After".to_owned(),
+                value: "invalid".to_owned(),
+            }],
+            br#"{"description":"temporarily unavailable"}"#,
+        )
+        .expect("503 must be an error");
+        assert_eq!(server.retry, RetryAdvice::Safe);
+        assert_eq!(server.developer_message, "temporarily unavailable");
+
+        let envelope = parse_account(&encode(json!({
+            "ok": false,
+            "error": -32005,
+            "code": "429"
+        })))
+        .expect_err("provider envelope must fail");
+        assert_eq!(envelope.code, ErrorCode::RateLimited);
+        assert_eq!(envelope.category, ErrorCategory::RateLimit);
+        assert_eq!(envelope.developer_message, "-32005");
+
+        let fallback = parse_account(&encode(json!({ "ok": false })))
+            .expect_err("empty provider envelope must fail");
+        assert_eq!(fallback.developer_message, "provider rejected request");
+    }
+
+    #[test]
+    fn activity_uses_bigints_and_stable_outgoing_order() {
+        let transaction_hash = hash(9);
+        let body = json!({
+            "ok": true,
+            "result": [{
+                "utime": 123,
+                "transaction_id": {
+                    "lt": "340282366920938463463374607431768211456",
+                    "hash": transaction_hash,
+                },
+                "in_msg": { "source": ADDRESS, "value": "0" },
+                "out_msgs": [
+                    {
+                        "hash": hash(3),
+                        "created_lt": "30",
+                        "destination": { "account_address": ADDRESS },
+                        "value": "300000000000000000000000000000000000000"
+                    },
+                    {
+                        "hash": hash(1),
+                        "created_lt": "10",
+                        "destination": ADDRESS,
+                        "value": 100
+                    },
+                    {
+                        "hash": hash(2),
+                        "created_lt": "20",
+                        "destination": ADDRESS,
+                        "value": "200"
+                    }
+                ]
+            }]
+        });
+
+        let page = parse_activity(&encode(body), 1).expect("activity must parse");
+        assert!(page.has_more);
+        assert_eq!(page.items.len(), 3);
+        assert_eq!(
+            page.items
+                .iter()
+                .map(|item| item.direction)
+                .collect::<Vec<_>>(),
+            vec![ActivityDirection::Sent; 3]
+        );
+        assert_eq!(
+            page.items
+                .iter()
+                .map(|item| item.amount_nanograms.to_string())
+                .collect::<Vec<_>>(),
+            ["100", "200", "300000000000000000000000000000000000000"]
+        );
+        assert_eq!(
+            page.cursor
+                .expect("cursor must exist")
+                .logical_time
+                .to_string(),
+            "340282366920938463463374607431768211456"
+        );
+    }
+
+    #[test]
+    fn rejects_missing_results_and_invalid_transfer_fields() {
+        let missing =
+            parse_account(&encode(json!({ "ok": true }))).expect_err("missing result must fail");
+        assert_eq!(missing.code, ErrorCode::InvalidProviderResponse);
+
+        for transaction in [
+            json!({
+                "utime": 1,
+                "transaction_id": { "lt": "1", "hash": "not-a-hash" },
+                "in_msg": { "source": ADDRESS, "value": "1" }
+            }),
+            json!({
+                "utime": 1,
+                "transaction_id": { "lt": "1", "hash": hash(1) },
+                "in_msg": { "source": null, "value": "1" }
+            }),
+            json!({
+                "utime": 1,
+                "transaction_id": { "lt": "1", "hash": hash(1) },
+                "in_msg": { "source": ADDRESS, "value": -1 }
+            }),
+            json!({
+                "utime": 1,
+                "transaction_id": { "lt": "1", "hash": hash(1) },
+                "out_msgs": [{
+                    "hash": "bad",
+                    "created_lt": "1",
+                    "destination": ADDRESS,
+                    "value": "1"
+                }]
+            }),
+        ] {
+            let error = parse_activity(&encode(json!({ "ok": true, "result": [transaction] })), 10)
+                .expect_err("invalid transfer field must fail");
+            assert_eq!(error.code, ErrorCode::InvalidProviderResponse);
+            assert_eq!(error.retry, RetryAdvice::None);
+        }
+    }
+
+    fn hash(byte: u8) -> String {
+        STANDARD.encode([byte; 32])
+    }
+
+    fn encode(value: Value) -> Vec<u8> {
+        serde_json::to_vec(&value).expect("test JSON must serialize")
+    }
 }

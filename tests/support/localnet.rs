@@ -4,6 +4,7 @@ use std::fs::File;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::str::FromStr;
 use std::sync::{Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -15,15 +16,19 @@ use reqwest::Method;
 use reqwest::blocking::Client;
 use serde_json::{Value, json};
 use tempfile::TempDir;
-use ton::block_tlb::Msg;
+use ton::block_tlb::{CommonMsgInfoInt, Msg};
 use ton::ton_core::cell::TonCell;
 use ton::ton_core::traits::tlb::TLB;
+use ton::ton_core::types::TonAddress;
+use ton::ton_core::types::tlb_core::TLBCoins;
+use ton::ton_wallet::{Mnemonic, TonWallet, WALLET_V5R1_ID_DEFAULT_TESTNET, WalletVersion};
 use wallet_engine::{
     HttpHeader, HttpHostError, HttpHostErrorKind, HttpMethod, HttpRequest, HttpRequestId,
     HttpResponse, WalletHttpHost,
 };
 
 use super::host::SubmittedMessage;
+use super::test_wallet;
 
 const READY_TIMEOUT: Duration = Duration::from_secs(45);
 const CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(15);
@@ -86,6 +91,64 @@ impl LocalnetHttpHost {
             "uninitialized"
         };
         lock(&self.localnet).wait_for_state(&self.address, expected_state, expected_seqno)
+    }
+
+    pub(super) fn spam_transfers(&self, count: u32) -> Result<(), String> {
+        let localnet = lock(&self.localnet);
+        let mnemonic = std::str::from_utf8(test_wallet().recovery_phrase_bytes())
+            .map_err(|error| error.to_string())?;
+        let key_pair = Mnemonic::from_str(mnemonic, None)
+            .and_then(|mnemonic| mnemonic.to_key_pair())
+            .map_err(|error| error.to_string())?;
+        let wallet = TonWallet::new_with_params(
+            WalletVersion::V5R1,
+            key_pair,
+            0,
+            WALLET_V5R1_ID_DEFAULT_TESTNET,
+        )
+        .map_err(|error| error.to_string())?;
+        let destination = TonAddress::from_str(&self.address).map_err(|error| error.to_string())?;
+        let initial_seqno = localnet.seqno(&self.address)?;
+
+        for offset in 0..count {
+            let mut info = CommonMsgInfoInt::new(destination.to_msg_address(), TLBCoins::new(1));
+            info.bounce = false;
+            let internal = Msg::new(info, TonCell::empty().to_owned())
+                .to_cell()
+                .map_err(|error| error.to_string())?;
+            let seqno = initial_seqno
+                .checked_add(offset)
+                .ok_or_else(|| "localnet spam seqno overflowed".to_owned())?;
+            let external = wallet
+                .create_ext_in_msg(vec![internal], seqno, u32::MAX, false)
+                .map_err(|error| error.to_string())?;
+            let boc = STANDARD.encode(external.to_boc().map_err(|error| error.to_string())?);
+            let (status, body) = request(
+                &localnet.client,
+                Method::POST,
+                &format!("{}/api/v2/jsonRPC", localnet.base_url),
+                Some(&json!({
+                    "jsonrpc": "2.0",
+                    "id": format!("wallet-engine-localnet-spam-{offset}"),
+                    "method": "sendBoc",
+                    "params": { "boc": boc }
+                })),
+            )?;
+            if !(200..300).contains(&status)
+                || body.pointer("/result/@type").and_then(Value::as_str) != Some("ok")
+            {
+                return Err(format!(
+                    "localnet spam submission failed with HTTP {status}: {body}"
+                ));
+            }
+
+            localnet.mine()?;
+        }
+
+        let expected_seqno = initial_seqno
+            .checked_add(count)
+            .ok_or_else(|| "localnet spam seqno overflowed".to_owned())?;
+        localnet.wait_for_state(&self.address, "active", Some(expected_seqno))
     }
 
     fn execute(&self, request: &HttpRequest) -> Result<HttpResponse, HttpHostError> {
@@ -233,6 +296,11 @@ impl Localnet {
             .arg("--no-mining")
             .current_dir(directory.path())
             .env("NO_COLOR", "1")
+            // Acton builds a multi-thread Tokio runtime for each localnet process.
+            // Its default is one worker per CPU, although these tests use one small
+            // HTTP client and a separate single-threaded node loop. Keep one server
+            // worker so parallel scenarios do not multiply the machine's CPU count.
+            .env("TOKIO_WORKER_THREADS", "1")
             .stdout(Stdio::from(stdout))
             .stderr(Stdio::from(stderr))
             .spawn()

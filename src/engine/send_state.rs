@@ -5,25 +5,20 @@ use crate::wallet::send::{SendWorkflow, SendWorkflowError};
 use crate::{
     HttpHostError, HttpRequest, HttpRequestId, HttpResponse, SendPhase, WalletClientError,
 };
+use zeroize::Zeroizing;
 
 use super::WalletClient;
 use super::state::OperationFamily;
 
-pub(super) struct SensitiveBytes(Vec<u8>);
+pub(super) struct SensitiveBytes(Zeroizing<Vec<u8>>);
 
 impl SensitiveBytes {
-    pub(super) const fn new(bytes: Vec<u8>) -> Self {
-        Self(bytes)
+    pub(super) fn new(bytes: Vec<u8>) -> Self {
+        Self(Zeroizing::new(bytes))
     }
 
     pub(super) fn as_slice(&self) -> &[u8] {
         &self.0
-    }
-}
-
-impl Drop for SensitiveBytes {
-    fn drop(&mut self) {
-        self.0.fill(0);
     }
 }
 

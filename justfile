@@ -51,10 +51,10 @@ coverage-setup:
     rustup component add llvm-tools-preview
 
 coverage:
-    cargo llvm-cov --locked --all-features --all-targets --ignore-filename-regex '(^|/)vendor/' --lcov --output-path lcov.info -- --test-threads 1
+    env WALLET_ENGINE_SCENARIO_TIMEOUT_SECS=300 cargo llvm-cov --locked --all-features --all-targets --ignore-filename-regex '(^|/)vendor/' --lcov --output-path lcov.info
 
 coverage-html:
-    cargo llvm-cov --locked --all-features --all-targets --ignore-filename-regex '(^|/)vendor/' --html --output-dir coverage/html -- --test-threads 1
+    env WALLET_ENGINE_SCENARIO_TIMEOUT_SECS=300 cargo llvm-cov --locked --all-features --all-targets --ignore-filename-regex '(^|/)vendor/' --html --output-dir coverage/html
 
 coverage-clean:
     cargo llvm-cov clean

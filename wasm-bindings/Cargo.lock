@@ -1741,6 +1741,7 @@ dependencies = [
  "ton",
  "uniffi",
  "url",
+ "zeroize",
 ]
 
 [[package]]

@@ -116,5 +116,5 @@ pub(crate) fn derive_source(
 ) -> Result<TonAddress, TransferError> {
     let mnemonic = std::str::from_utf8(mnemonic_bytes).map_err(TransferError::MnemonicEncoding)?;
     let wallet = derive_v5r1_wallet(mnemonic, network).map_err(TransferError::WalletDerivation)?;
-    Ok(wallet.address)
+    Ok(wallet.address.clone())
 }

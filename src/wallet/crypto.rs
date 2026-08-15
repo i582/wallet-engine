@@ -3,10 +3,13 @@
 //! Lifecycle and signing code share this private module so both paths derive
 //! the same key pair, contract wallet ID, and address for a selected network.
 
+use std::ops::Deref;
+
 use ton::ton_wallet::{
     Mnemonic, TonWallet, WALLET_V5R1_ID_DEFAULT, WALLET_V5R1_ID_DEFAULT_TESTNET, WORDLIST_EN_SET,
     WalletVersion,
 };
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::Network;
 
@@ -28,7 +31,24 @@ pub(crate) enum WalletCryptoError {
 /// Platform and FFI boundaries can still create transient copies. This type
 /// wipes the buffer retained by the wallet engine when it is dropped.
 pub(crate) struct SensitiveMnemonic {
-    bytes: Vec<u8>,
+    bytes: Zeroizing<Vec<u8>>,
+}
+
+/// A derived wallet whose Rust-owned private key is wiped on drop.
+pub(crate) struct SensitiveWallet(TonWallet);
+
+impl Deref for SensitiveWallet {
+    type Target = TonWallet;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Drop for SensitiveWallet {
+    fn drop(&mut self) {
+        self.0.key_pair.secret_key.zeroize();
+    }
 }
 
 impl SensitiveMnemonic {
@@ -43,10 +63,14 @@ impl SensitiveMnemonic {
             bytes.extend_from_slice(word.as_bytes());
         }
 
-        Self { bytes }
+        Self {
+            bytes: Zeroizing::new(bytes),
+        }
     }
 
     pub(crate) fn from_words(words: Vec<String>) -> Result<Self, WalletCryptoError> {
+        let words = Zeroizing::new(words);
+
         if words.len() != MNEMONIC_WORD_COUNT {
             return Err(WalletCryptoError::InvalidMnemonic);
         }
@@ -59,7 +83,9 @@ impl SensitiveMnemonic {
     }
 
     pub(crate) fn from_bytes(bytes: Vec<u8>) -> Result<Self, WalletCryptoError> {
-        let candidate = Self { bytes };
+        let candidate = Self {
+            bytes: Zeroizing::new(bytes),
+        };
         candidate.validate()?;
 
         Ok(candidate)
@@ -85,12 +111,6 @@ impl SensitiveMnemonic {
     }
 }
 
-impl Drop for SensitiveMnemonic {
-    fn drop(&mut self) {
-        self.bytes.fill(0);
-    }
-}
-
 /// Generates a passwordless 24-word TON mnemonic using system randomness.
 ///
 /// TON mnemonics are not BIP-39 checksummed phrases. Candidate words are
@@ -105,8 +125,8 @@ pub(crate) fn generate_mnemonic() -> Result<SensitiveMnemonic, WalletCryptoError
     }
 
     loop {
-        let mut entropy = [0_u8; MNEMONIC_ENTROPY_BYTES];
-        getrandom::fill(&mut entropy).map_err(|_| WalletCryptoError::RandomGeneration)?;
+        let mut entropy = Zeroizing::new([0_u8; MNEMONIC_ENTROPY_BYTES]);
+        getrandom::fill(entropy.as_mut()).map_err(|_| WalletCryptoError::RandomGeneration)?;
 
         let words = entropy
             .chunks_exact(2)
@@ -131,7 +151,7 @@ pub(crate) fn generate_mnemonic() -> Result<SensitiveMnemonic, WalletCryptoError
 pub(crate) fn derive_v5r1_wallet(
     mnemonic: &str,
     network: Network,
-) -> Result<TonWallet, WalletCryptoError> {
+) -> Result<SensitiveWallet, WalletCryptoError> {
     let mnemonic =
         Mnemonic::from_str(mnemonic, None).map_err(|_| WalletCryptoError::InvalidMnemonic)?;
     let key_pair = mnemonic
@@ -141,6 +161,7 @@ pub(crate) fn derive_v5r1_wallet(
     let contract_wallet_id = v5r1_contract_wallet_id(network);
 
     TonWallet::new_with_params(WalletVersion::V5R1, key_pair, 0, contract_wallet_id)
+        .map(SensitiveWallet)
         .map_err(|_| WalletCryptoError::WalletConstruction)
 }
 

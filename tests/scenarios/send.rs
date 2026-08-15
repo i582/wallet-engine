@@ -264,3 +264,66 @@ fn journal_conflict_releases_the_in_memory_send_slot() {
         .then(result("retry").submitted())
         .run();
 }
+
+#[test]
+fn malformed_success_response_is_submission_unknown() {
+    scenario("a malformed success response cannot prove whether submission happened")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(submission().paused("submit"))
+        .when(start("send", send().to(own_address()).grams(1)))
+        .then(send_phase("send", SendPhase::Submitting))
+        .when(resume("submit", submission_malformed()))
+        .then(result("send").submission_unknown())
+        .then(snapshot().send_error_message("invalid sendBoc success response"))
+        // The exact BOC is already durable. A new signature could double-spend
+        // if the provider accepted the malformed-response submission.
+        .when(call("replacement", send().to(own_address()).grams(2)))
+        .then(error(
+            "replacement",
+            WalletClientError::PreviousSubmissionUnresolved,
+        ))
+        .run();
+}
+
+#[test]
+fn provider_rate_limit_is_a_definite_rejection_and_allows_retry() {
+    scenario("an HTTP 429 means the provider definitely rejected sendBoc")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(submission().paused("rate-limited-submit"))
+        .when(start("rate-limited", send().to(own_address()).grams(1)))
+        .then(send_phase("rate-limited", SendPhase::Submitting))
+        .when(resume(
+            "rate-limited-submit",
+            submission_http_failure(429, "send rate limited"),
+        ))
+        .then(result("rate-limited").failed())
+        .then(snapshot().send_error_message("send rate limited"))
+        // A definite rejection releases both the in-memory and durable slots.
+        .given(submission().paused("retry-submit"))
+        .when(start("retry", send().to(own_address()).grams(2)))
+        .then(send_phase("retry", SendPhase::Submitting))
+        .when(resume("retry-submit", submission_accepted()))
+        .then(result("retry").submitted())
+        .run();
+}
+
+#[test]
+fn provider_server_failure_is_submission_unknown() {
+    scenario("a provider server failure after POST has an ambiguous outcome")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(submission().paused("submit"))
+        .when(start("send", send().to(own_address()).grams(1)))
+        .then(send_phase("send", SendPhase::Submitting))
+        .when(resume(
+            "submit",
+            submission_http_failure(503, "provider unavailable"),
+        ))
+        .then(result("send").submission_unknown())
+        .then(snapshot().send_error_message("provider unavailable"))
+        .when(call("replacement", send().to(own_address()).grams(2)))
+        .then(error(
+            "replacement",
+            WalletClientError::PreviousSubmissionUnresolved,
+        ))
+        .run();
+}

@@ -17,10 +17,18 @@ use super::test_wallet;
 
 // Signing is CPU-heavy in debug builds. Parallel scenarios can legitimately
 // take longer than a single isolated test without indicating a deadlock.
-const STEP_TIMEOUT: Duration = Duration::from_secs(60);
+const DEFAULT_STEP_TIMEOUT: Duration = Duration::from_secs(60);
 const NANOGRAMS_PER_GRAM: u64 = 1_000_000_000;
 const TEST_RECORD_ID: &str = "scenario-wallet";
 const TEST_SECRET_REF: &str = "wallet:scenario-wallet:mnemonic";
+
+fn step_timeout() -> Duration {
+    std::env::var("WALLET_ENGINE_SCENARIO_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|seconds| *seconds > 0)
+        .map_or(DEFAULT_STEP_TIMEOUT, Duration::from_secs)
+}
 
 pub(crate) fn scenario(name: impl Into<String>) -> Scenario {
     Scenario {
@@ -172,6 +180,20 @@ pub(crate) const fn submission_timeout() -> SubmissionOutcome {
     SubmissionOutcome::Timeout
 }
 
+pub(crate) const fn submission_malformed() -> SubmissionOutcome {
+    SubmissionOutcome::MalformedSuccess
+}
+
+pub(crate) fn submission_http_failure(
+    status: u16,
+    diagnostic: impl Into<String>,
+) -> SubmissionOutcome {
+    SubmissionOutcome::HttpFailure {
+        status,
+        diagnostic: diagnostic.into(),
+    }
+}
+
 pub(crate) fn submission_rejected(diagnostic: impl Into<String>) -> SubmissionOutcome {
     SubmissionOutcome::Rejected(diagnostic.into())
 }
@@ -288,6 +310,7 @@ pub(crate) const fn snapshot() -> SnapshotExpectation {
         has_more: None,
         account_error: None,
         activity_error: None,
+        send_error_message: None,
     }
 }
 
@@ -516,6 +539,8 @@ pub(crate) enum SubmissionOutcome {
     Accepted,
     Rejected(String),
     Timeout,
+    MalformedSuccess,
+    HttpFailure { status: u16, diagnostic: String },
 }
 
 pub(crate) enum ControlStep {
@@ -762,6 +787,7 @@ pub(crate) struct SnapshotExpectation {
     has_more: Option<bool>,
     account_error: Option<DomainError>,
     activity_error: Option<DomainError>,
+    send_error_message: Option<String>,
 }
 
 impl SnapshotExpectation {
@@ -801,6 +827,11 @@ impl SnapshotExpectation {
 
     pub(crate) fn activity_error(mut self, error: DomainError) -> Expectation {
         self.activity_error = Some(error);
+        Expectation::Snapshot(self)
+    }
+
+    pub(crate) fn send_error_message(mut self, message: impl Into<String>) -> Expectation {
+        self.send_error_message = Some(message.into());
         Expectation::Snapshot(self)
     }
 }
@@ -877,6 +908,7 @@ enum OperationResult {
     Update(Box<Result<WalletUpdate, WalletClientError>>),
     Snapshot(Box<Result<wallet_engine::WalletSnapshot, WalletClientError>>),
     Unit(Result<(), WalletClientError>),
+    Harness(Result<(), String>),
 }
 
 impl OperationResult {
@@ -885,7 +917,7 @@ impl OperationResult {
             Self::Send(Err(error)) | Self::Unit(Err(error)) => Some(error),
             Self::Update(result) => result.as_ref().as_ref().err(),
             Self::Snapshot(result) => result.as_ref().as_ref().err(),
-            Self::Send(Ok(_)) | Self::Unit(Ok(())) => None,
+            Self::Send(Ok(_)) | Self::Unit(Ok(())) | Self::Harness(_) => None,
         }
     }
 }
@@ -1140,20 +1172,15 @@ impl ScenarioRunner {
                         let _ = sender.send(OperationResult::Snapshot(Box::new(result)));
                     }),
                     UserAction::SpamTransfers { count } => {
-                        let address = self.address.clone();
-                        let secret_ref = self.secret_ref.clone();
-                        let operation_prefix = name.clone();
+                        let localnet = self.localnet_http_host.clone();
                         std::thread::spawn(move || {
-                            let result = (0..count).try_for_each(|index| {
-                                let request = SendRequest {
-                                    operation_id: format!("{operation_prefix}-operation-{index}"),
-                                    destination: address.clone(),
-                                    amount_nanograms: "1".to_owned(),
-                                    secret_ref: secret_ref.clone(),
-                                };
-                                block_on(client.send(request)).map(|_| ())
-                            });
-                            let _ = sender.send(OperationResult::Unit(result));
+                            let result = localnet
+                                .ok_or_else(|| {
+                                    "spam transfers require `.given(network().localnet())`"
+                                        .to_owned()
+                                })
+                                .and_then(|host| host.spam_transfers(count));
+                            let _ = sender.send(OperationResult::Harness(result));
                         })
                     }
                 };
@@ -1229,7 +1256,9 @@ impl ScenarioRunner {
             Expectation::Success { operation } => {
                 self.finish_operation(&operation)?;
                 match self.results.get(&operation) {
-                    Some(OperationResult::Unit(Ok(()))) => Ok(()),
+                    Some(OperationResult::Unit(Ok(())) | OperationResult::Harness(Ok(()))) => {
+                        Ok(())
+                    }
                     actual => Err(format!(
                         "expected `{operation}` to succeed\nactual: {actual:?}"
                     )),
@@ -1333,6 +1362,14 @@ impl ScenarioRunner {
                     return Err(format!(
                         "expected activity error {expected:#?}\nactual: {:#?}",
                         snapshot.activity_resource.error
+                    ));
+                }
+                if let Some(expected) = expectation.send_error_message
+                    && snapshot.send.error_message.as_deref() != Some(expected.as_str())
+                {
+                    return Err(format!(
+                        "expected send error message `{expected}`\nactual: {:?}",
+                        snapshot.send.error_message
                     ));
                 }
                 Ok(())
@@ -1538,12 +1575,13 @@ impl ScenarioRunner {
             .operations
             .remove(name)
             .ok_or_else(|| format!("operation `{name}` does not exist"))?;
-        let result = match running.receiver.recv_timeout(STEP_TIMEOUT) {
+        let timeout = step_timeout();
+        let result = match running.receiver.recv_timeout(timeout) {
             Ok(result) => result,
             Err(RecvTimeoutError::Timeout) => {
                 self.operations.insert(name.to_owned(), running);
                 return Err(format!(
-                    "operation `{name}` did not finish within {STEP_TIMEOUT:?}"
+                    "operation `{name}` did not finish within {timeout:?}"
                 ));
             }
             Err(RecvTimeoutError::Disconnected) => {
@@ -1564,7 +1602,7 @@ impl ScenarioRunner {
         &self,
         mut predicate: impl FnMut() -> Result<bool, String>,
     ) -> Result<(), String> {
-        let deadline = Instant::now() + STEP_TIMEOUT;
+        let deadline = Instant::now() + step_timeout();
         while Instant::now() < deadline {
             if predicate()? {
                 return Ok(());

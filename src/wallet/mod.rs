@@ -288,7 +288,7 @@ fn derive_address(
     let wallet = derive_v5r1_wallet(phrase, network)
         .map_err(|_| WalletLifecycleError::AddressDerivationFailed)?;
 
-    Ok(wallet.address)
+    Ok(wallet.address.clone())
 }
 
 fn recovery_phrase(secret: &SensitiveMnemonic) -> Result<RecoveryPhrase, WalletLifecycleError> {

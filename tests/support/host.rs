@@ -416,6 +416,19 @@ impl ScenarioHttpHost {
                 HttpHostErrorKind::Timeout,
                 "submission timed out",
             )),
+            SubmissionOutcome::MalformedSuccess => Ok(response(
+                request,
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": request.id.value.to_string(),
+                    "result": null
+                }),
+            )),
+            SubmissionOutcome::HttpFailure { status, diagnostic } => Ok(response_with_status(
+                request,
+                status,
+                json!({ "error": diagnostic }),
+            )),
         }
     }
 }

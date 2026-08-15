@@ -148,3 +148,85 @@ fn invalid_json(message: impl Into<String>) -> DomainError {
         host_kind: None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{SendBocResponse, is_explicit_send_rejection, parse_send_response, parse_seqno};
+    use crate::{DomainError, ErrorCategory, ErrorCode, RetryAdvice};
+
+    #[test]
+    fn parses_supported_seqno_stack_shapes_and_radices() {
+        let cases = [
+            (r#"{"result":{"stack":[["num","0x2a"]]}}"#, 42),
+            (r#"{"result":{"stack":[["num","42"]]}}"#, 42),
+            (
+                r#"{"result":{"stack":[{"type":"num","value":"0x2a"}]}}"#,
+                42,
+            ),
+        ];
+
+        for (body, expected) in cases {
+            assert_eq!(parse_seqno(body.as_bytes()), Ok(expected));
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_seqno_responses() {
+        for body in [
+            r#"{"error":{"message":"method failed"}}"#,
+            r#"{"result":{"stack":[]}}"#,
+            r#"{"result":{"stack":[["cell","1"]]}}"#,
+            r#"{"result":{"stack":[["num","not-a-number"]]}}"#,
+        ] {
+            let error = parse_seqno(body.as_bytes()).expect_err("seqno response must fail");
+            assert_eq!(error.code, ErrorCode::InvalidProviderResponse);
+            assert_eq!(error.category, ErrorCategory::ProviderProtocol);
+            assert_eq!(error.retry, RetryAdvice::None);
+        }
+    }
+
+    #[test]
+    fn parses_every_supported_send_boc_outcome() {
+        assert!(matches!(
+            parse_send_response(br#"{"result":{"@type":"ok"}}"#),
+            Ok(SendBocResponse::Accepted)
+        ));
+
+        for body in [
+            br#"{"error":{"message":"rejected"}}"#.as_slice(),
+            br#"{"ok":false,"description":"rejected"}"#.as_slice(),
+        ] {
+            assert!(matches!(
+                parse_send_response(body),
+                Ok(SendBocResponse::Rejected(message)) if message == "rejected"
+            ));
+        }
+
+        let Err(error) = parse_send_response(br#"{"result":null}"#) else {
+            panic!("ambiguous response must fail");
+        };
+        assert_eq!(error.code, ErrorCode::InvalidProviderResponse);
+    }
+
+    #[test]
+    fn only_definite_http_rejections_are_safe_to_replace() {
+        for status in [400, 401, 403, 404, 405, 413, 422, 429] {
+            assert!(is_explicit_send_rejection(&provider_error(status)));
+        }
+        for status in [408, 500, 502, 503, 504] {
+            assert!(!is_explicit_send_rejection(&provider_error(status)));
+        }
+    }
+
+    fn provider_error(status: u16) -> DomainError {
+        DomainError {
+            code: ErrorCode::HttpRejected,
+            category: ErrorCategory::ProviderProtocol,
+            retry: RetryAdvice::None,
+            developer_message: "provider rejected request".to_owned(),
+            provider_status: Some(status),
+            retry_after_ms: None,
+            host_kind: None,
+        }
+    }
+}
