@@ -53,5 +53,43 @@ pub(crate) fn build_engine_cdylib(root: &Path, target_dir: &Path) -> Result<Path
             .arg("--release")
             .arg("--locked"),
     )?;
-    Ok(target_dir.join("release/libwallet_engine.dylib"))
+    let library = engine_cdylib_path(target_dir);
+    if !library.is_file() {
+        bail!(
+            "Cargo did not produce expected cdylib: {}",
+            library.display()
+        );
+    }
+    Ok(library)
+}
+
+fn engine_cdylib_path(target_dir: &Path) -> PathBuf {
+    let filename = format!(
+        "{}wallet_engine{}",
+        env::consts::DLL_PREFIX,
+        env::consts::DLL_SUFFIX,
+    );
+    target_dir.join("release").join(filename)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::env;
+    use std::path::Path;
+
+    use super::engine_cdylib_path;
+
+    #[test]
+    fn locates_engine_cdylib_using_host_platform_naming() {
+        let expected = format!(
+            "{}wallet_engine{}",
+            env::consts::DLL_PREFIX,
+            env::consts::DLL_SUFFIX,
+        );
+
+        assert_eq!(
+            engine_cdylib_path(Path::new("target")),
+            Path::new("target/release").join(expected),
+        );
+    }
 }
