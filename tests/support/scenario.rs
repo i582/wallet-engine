@@ -11,7 +11,7 @@ use wallet_engine::{
     WalletClientError, WalletHttpHost, WalletOperationOutcome, WalletUpdate,
 };
 
-use super::host::{MemoryPlatformHost, RequestKind, ScenarioHttpHost};
+use super::host::{MemoryPlatformHost, PlatformCallKind, RequestKind, ScenarioHttpHost};
 use super::localnet::LocalnetHttpHost;
 use super::test_wallet;
 
@@ -142,12 +142,34 @@ pub(crate) fn pause_next_seqno_request(name: impl Into<String>) -> ControlStep {
     }
 }
 
+pub(crate) fn pause_next_journal_load(name: impl Into<String>) -> ControlStep {
+    ControlStep::PausePlatformCall {
+        name: name.into(),
+        kind: PlatformCallKind::JournalLoad,
+    }
+}
+
+pub(crate) fn pause_next_secret_read(name: impl Into<String>) -> ControlStep {
+    ControlStep::PausePlatformCall {
+        name: name.into(),
+        kind: PlatformCallKind::SecretRead,
+    }
+}
+
 pub(crate) fn wait_for_request(name: impl Into<String>) -> ControlStep {
     ControlStep::WaitForRequest { name: name.into() }
 }
 
 pub(crate) fn release_request(name: impl Into<String>) -> ControlStep {
     ControlStep::ReleaseRequest { name: name.into() }
+}
+
+pub(crate) fn wait_for_platform_call(name: impl Into<String>) -> ControlStep {
+    ControlStep::WaitForPlatformCall { name: name.into() }
+}
+
+pub(crate) fn release_platform_call(name: impl Into<String>) -> ControlStep {
+    ControlStep::ReleasePlatformCall { name: name.into() }
 }
 
 pub(crate) const fn fail_next_activity_request(status: u16) -> ControlStep {
@@ -663,6 +685,16 @@ pub(crate) enum ControlStep {
         name: String,
     },
     ReleaseRequest {
+        name: String,
+    },
+    PausePlatformCall {
+        name: String,
+        kind: PlatformCallKind,
+    },
+    WaitForPlatformCall {
+        name: String,
+    },
+    ReleasePlatformCall {
         name: String,
     },
     FailNextActivityRequest {
@@ -1414,6 +1446,16 @@ impl ScenarioRunner {
                 } else {
                     Err("scenario has no HTTP host".to_owned())
                 }
+            }
+            When::Control(ControlStep::PausePlatformCall { name, kind }) => {
+                self.platform_host.pause_next_platform_call(name, kind);
+                Ok(())
+            }
+            When::Control(ControlStep::WaitForPlatformCall { name }) => {
+                self.platform_host.wait_for_platform_call(&name)
+            }
+            When::Control(ControlStep::ReleasePlatformCall { name }) => {
+                self.platform_host.release_platform_call(&name)
             }
             When::Control(ControlStep::FailNextActivityRequest { status }) => {
                 let host = self.scripted_http_host.as_ref().ok_or_else(|| {

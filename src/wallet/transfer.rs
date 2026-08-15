@@ -68,14 +68,7 @@ pub(crate) fn prepare_transfer(
     let tlb_amount =
         u128::try_from(amount_nanograms.clone()).map_err(|_| TransferError::AmountOutOfRange)?;
 
-    let mut info = CommonMsgInfoInt::new(destination.to_msg_address(), TLBCoins::new(tlb_amount));
-    // Use one conservative policy until destination metadata is preserved by
-    // the address type. This also lets uninitialized recipients accept funds.
-    info.bounce = false;
-
-    let internal = Msg::new(info, TonCell::empty().to_owned())
-        .to_cell()
-        .map_err(TransferError::InternalMessage)?;
+    let internal = build_internal_message(&destination, tlb_amount)?;
 
     let external = wallet
         .create_ext_in_msg(
@@ -110,6 +103,24 @@ pub(crate) fn prepare_transfer(
     })
 }
 
+fn build_internal_message(
+    destination: &TonAddress,
+    amount_nanograms: u128,
+) -> Result<TonCell, TransferError> {
+    let mut info = CommonMsgInfoInt::new(
+        destination.to_msg_address(),
+        TLBCoins::new(amount_nanograms),
+    );
+
+    // Use one conservative policy until destination metadata is preserved by
+    // the address type. This also lets uninitialized recipients accept funds.
+    info.bounce = false;
+
+    Msg::new(info, TonCell::empty().to_owned())
+        .to_cell()
+        .map_err(TransferError::InternalMessage)
+}
+
 pub(crate) fn derive_source(
     mnemonic_bytes: &[u8],
     network: Network,
@@ -117,4 +128,29 @@ pub(crate) fn derive_source(
     let mnemonic = std::str::from_utf8(mnemonic_bytes).map_err(TransferError::MnemonicEncoding)?;
     let wallet = derive_v5r1_wallet(mnemonic, network).map_err(TransferError::WalletDerivation)?;
     Ok(wallet.address.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use ton::block_tlb::CommonMsgInfo;
+
+    use super::*;
+
+    const DESTINATION: &str = "0:2222222222222222222222222222222222222222222222222222222222222222";
+
+    #[test]
+    fn serialized_internal_message_is_non_bounceable() {
+        let destination = TonAddress::from_str(DESTINATION).expect("valid destination");
+        let cell = build_internal_message(&destination, 1).expect("internal message");
+        let message = Msg::<TonCell>::from_cell(&cell).expect("decode internal message");
+
+        let CommonMsgInfo::Int(info) = message.info else {
+            panic!("transfer must contain an internal message");
+        };
+
+        assert!(!info.bounce, "the serialized BOC must disable bouncing");
+        assert!(!info.bounced, "a new transfer cannot already be bounced");
+        assert_eq!(info.dst, destination.to_msg_address());
+        assert_eq!(info.value.coins, TLBCoins::new(1));
+    }
 }

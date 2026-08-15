@@ -577,6 +577,22 @@ mod tests {
     }
 
     #[test]
+    fn provider_server_envelope_is_retryable() {
+        let error = parse_account(&encode(json!({
+            "ok": false,
+            "code": 503,
+            "error": { "message": "provider unavailable" }
+        })))
+        .expect_err("a provider server envelope must fail");
+
+        assert_eq!(error.code, ErrorCode::HttpRejected);
+        assert_eq!(error.category, ErrorCategory::ProviderProtocol);
+        assert_eq!(error.retry, RetryAdvice::Safe);
+        assert_eq!(error.provider_status, Some(503));
+        assert_eq!(error.developer_message, "provider rejected request");
+    }
+
+    #[test]
     fn rate_limit_retry_after_is_converted_to_milliseconds() {
         let error = response_error(
             429,

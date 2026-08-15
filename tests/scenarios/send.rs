@@ -63,6 +63,69 @@ fn cancel_before_the_durable_boundary_stops_the_request_and_releases_the_slot() 
 }
 
 #[test]
+fn cancelling_while_the_journal_load_is_pending_discards_its_late_result() {
+    scenario("cancel during journal load cannot revive a send")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .when(pause_next_journal_load("journal-load"))
+        .when(start("send", send().to(own_address()).grams(1)))
+        .when(wait_for_platform_call("journal-load"))
+        .when(call("cancel", cancel_send()))
+        .then(succeeds("cancel"))
+        .then(snapshot().send_phase(SendPhase::Cancelled))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .then(remember_revision("after-cancel"))
+        .when(release_platform_call("journal-load"))
+        .then(error("send", WalletClientError::StateUnavailable))
+        .then(revision_is("after-cancel"))
+        .then(snapshot().send_phase(SendPhase::Cancelled))
+        .run();
+}
+
+#[test]
+fn cancelling_while_seqno_is_pending_cancels_only_that_request() {
+    scenario("cancel during seqno fetch cannot continue to authorization")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .when(pause_next_seqno_request("seqno"))
+        .when(start("send", send().to(own_address()).grams(1)))
+        .when(wait_for_request("seqno"))
+        .when(call("cancel", cancel_send()))
+        .then(succeeds("cancel"))
+        .then(request_was_cancelled("seqno"))
+        .then(snapshot().send_phase(SendPhase::Cancelled))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .then(remember_revision("after-cancel"))
+        .when(release_request("seqno"))
+        .then(error("send", WalletClientError::StateUnavailable))
+        .then(revision_is("after-cancel"))
+        .then(snapshot().send_phase(SendPhase::Cancelled))
+        .run();
+}
+
+#[test]
+fn cancelling_while_secret_authorization_is_pending_discards_the_secret() {
+    scenario("cancel during protected-secret read cannot sign or persist")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .when(pause_next_secret_read("secret-read"))
+        .when(start("send", send().to(own_address()).grams(1)))
+        .when(wait_for_platform_call("secret-read"))
+        .when(call("cancel", cancel_send()))
+        .then(succeeds("cancel"))
+        .then(snapshot().send_phase(SendPhase::Cancelled))
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .then(remember_revision("after-cancel"))
+        .when(release_platform_call("secret-read"))
+        .then(error("send", WalletClientError::StateUnavailable))
+        .then(revision_is("after-cancel"))
+        .then(snapshot().send_phase(SendPhase::Cancelled))
+        .run();
+}
+
+#[test]
 fn cancelling_without_an_active_send_is_idempotent() {
     scenario("cancel send is safe when no send exists")
         .when(call("first-cancel", cancel_send()))

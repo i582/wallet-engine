@@ -334,3 +334,43 @@ fn validate_record_id(record_id: &str) -> Result<(), WalletLifecycleError> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ADDRESS: &str = "0:1111111111111111111111111111111111111111111111111111111111111111";
+
+    #[test]
+    fn descriptor_must_use_the_record_bound_secret_reference() {
+        let descriptor = WalletDescriptor {
+            record_id: "wallet-record".to_owned(),
+            address: ADDRESS.to_owned(),
+            network: Network::Testnet,
+            secret_ref: ProtectedSecretRef {
+                value: "wallet:another-record:mnemonic".to_owned(),
+            },
+        };
+
+        assert_eq!(
+            validate_descriptor(&descriptor),
+            Err(WalletLifecycleError::InvalidRecordId)
+        );
+    }
+
+    #[test]
+    fn descriptor_rejects_an_invalid_wallet_address() {
+        let record_id = "wallet-record";
+        let descriptor = WalletDescriptor {
+            record_id: record_id.to_owned(),
+            address: "not-a-ton-address".to_owned(),
+            network: Network::Testnet,
+            secret_ref: secret_ref_for(record_id),
+        };
+
+        assert_eq!(
+            validate_descriptor(&descriptor),
+            Err(WalletLifecycleError::InvalidRecordId)
+        );
+    }
+}

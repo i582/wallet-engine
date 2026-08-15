@@ -51,6 +51,12 @@ pub(crate) enum RequestKind {
     Seqno,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlatformCallKind {
+    JournalLoad,
+    SecretRead,
+}
+
 struct RequestGate {
     name: String,
     kind: RequestKind,
@@ -523,9 +529,86 @@ pub(super) struct MemoryPlatformHost {
     journal_load_error: Mutex<Option<JournalHostError>>,
     journal_write_error_on: Mutex<Option<u64>>,
     journal_write_count: Mutex<u64>,
+    platform_gate: Mutex<Option<PlatformGate>>,
+    platform_changed: Condvar,
+}
+
+struct PlatformGate {
+    name: String,
+    kind: PlatformCallKind,
+    reached: bool,
+    released: bool,
 }
 
 impl MemoryPlatformHost {
+    pub(super) fn pause_next_platform_call(&self, name: String, kind: PlatformCallKind) {
+        *lock(&self.platform_gate) = Some(PlatformGate {
+            name,
+            kind,
+            reached: false,
+            released: false,
+        });
+    }
+
+    pub(super) fn wait_for_platform_call(&self, name: &str) -> Result<(), String> {
+        let mut gate = lock(&self.platform_gate);
+        let deadline = Instant::now() + CHECKPOINT_TIMEOUT;
+        loop {
+            let current = gate
+                .as_ref()
+                .ok_or_else(|| format!("platform checkpoint `{name}` does not exist"))?;
+            if current.name != name {
+                return Err(format!(
+                    "expected platform checkpoint `{}`, got `{name}`",
+                    current.name
+                ));
+            }
+            if current.reached {
+                return Ok(());
+            }
+
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(format!(
+                    "platform checkpoint `{name}` was not reached within {CHECKPOINT_TIMEOUT:?}"
+                ));
+            }
+            gate = match self.platform_changed.wait_timeout(gate, remaining) {
+                Ok((guard, _)) => guard,
+                Err(poisoned) => poisoned.into_inner().0,
+            };
+        }
+    }
+
+    pub(super) fn release_platform_call(&self, name: &str) -> Result<(), String> {
+        self.wait_for_platform_call(name)?;
+        let mut gate = lock(&self.platform_gate);
+        let current = gate
+            .as_mut()
+            .ok_or_else(|| format!("platform checkpoint `{name}` disappeared"))?;
+        current.released = true;
+        self.platform_changed.notify_all();
+        Ok(())
+    }
+
+    fn wait_at_platform_gate(&self, kind: PlatformCallKind) {
+        let mut gate = lock(&self.platform_gate);
+        let should_wait = matches!(gate.as_ref(), Some(current) if current.kind == kind);
+        if !should_wait {
+            return;
+        }
+
+        if let Some(current) = gate.as_mut() {
+            current.reached = true;
+        }
+        self.platform_changed.notify_all();
+
+        while gate.as_ref().is_some_and(|current| !current.released) {
+            gate = wait(&self.platform_changed, gate);
+        }
+        *gate = None;
+    }
+
     pub(super) fn store_test_secret(&self, secret_ref: &ProtectedSecretRef, bytes: &[u8]) {
         lock(&self.secrets).insert(secret_ref.value.clone(), bytes.to_vec());
     }
@@ -624,6 +707,7 @@ impl WalletPlatformHost for MemoryPlatformHost {
     ) -> Result<Vec<u8>, ProtectedSecretHostError> {
         *lock(&self.secret_reads) += 1;
         lock(&self.secret_read_reasons).push((request.secret_ref.value.clone(), request.reason));
+        self.wait_at_platform_gate(PlatformCallKind::SecretRead);
         let secret_read_error = lock(&self.secret_read_error).take();
         if let Some(error) = secret_read_error {
             return Err(error);
@@ -665,6 +749,7 @@ impl WalletPlatformHost for MemoryPlatformHost {
         &self,
         key: JournalKey,
     ) -> Result<Option<JournalRecord>, JournalHostError> {
+        self.wait_at_platform_gate(PlatformCallKind::JournalLoad);
         let journal_load_error = lock(&self.journal_load_error).take();
         if let Some(error) = journal_load_error {
             return Err(error);

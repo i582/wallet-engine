@@ -260,6 +260,31 @@ mod tests {
     }
 
     #[test]
+    fn a_page_without_an_established_cursor_cannot_extend_existing_history() {
+        let mut state = state();
+        state.activity = vec![record("existing", 10, 1)];
+        state.activity_cursor = None;
+        state.activity_has_more = true;
+        state.sync_activity_snapshot();
+        let before = state.snapshot.activity.clone();
+
+        let added = apply_activity_page(
+            &mut state,
+            ActivityPage {
+                items: vec![record("unexpected", 9, 2)],
+                cursor: Some(cursor(9, 2)),
+                has_more: true,
+            },
+        );
+
+        assert_eq!(added, 0);
+        assert_eq!(state.snapshot.activity, before);
+        assert!(state.activity_cursor.is_none());
+        assert!(!state.activity_has_more);
+        assert!(!state.snapshot.activity_has_more);
+    }
+
+    #[test]
     fn the_first_refreshed_page_initializes_rows_cursor_and_has_more_together() {
         let mut state = state();
         let expected_cursor = cursor(20, 3);

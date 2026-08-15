@@ -61,8 +61,10 @@ fn validate_provider_url(value: &str) -> Result<(), WalletClientError> {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_provider_url;
-    use crate::WalletClientError;
+    use super::{validate_config, validate_provider_url};
+    use crate::{Network, ProviderConfig, WalletClientConfig, WalletClientError};
+
+    const ADDRESS: &str = "0:1111111111111111111111111111111111111111111111111111111111111111";
 
     #[test]
     fn provider_url_accepts_secure_and_loopback_transports() {
@@ -88,5 +90,32 @@ mod tests {
             validate_provider_url("http://192.168.1.10:8080/api/v2"),
             Err(WalletClientError::InvalidConfig)
         );
+    }
+
+    #[test]
+    fn client_config_requires_application_identity_and_send_validity() {
+        let mut config = valid_config();
+        config.record_id = "   ".to_owned();
+        assert_eq!(
+            validate_config(&config),
+            Err(WalletClientError::InvalidConfig)
+        );
+
+        let mut config = valid_config();
+        config.send_validity_seconds = 0;
+        assert_eq!(
+            validate_config(&config),
+            Err(WalletClientError::InvalidConfig)
+        );
+    }
+
+    fn valid_config() -> WalletClientConfig {
+        WalletClientConfig {
+            record_id: "validation-wallet".to_owned(),
+            address: ADDRESS.to_owned(),
+            network: Network::Testnet,
+            send_validity_seconds: 300,
+            providers: ProviderConfig::standard(Network::Testnet),
+        }
     }
 }

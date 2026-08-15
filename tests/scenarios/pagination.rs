@@ -123,6 +123,34 @@ fn host_cancellation_returns_the_pagination_resource_to_idle() {
 }
 
 #[test]
+fn shutdown_cancels_pagination_without_discarding_loaded_activity() {
+    scenario("shutdown cancels only the in-flight older page")
+        .given(activity_pages(&[10, 5]))
+        .when(call("refresh", refresh_wallet()))
+        .then(update("refresh").completed())
+        .then(remember_activity_as("head"))
+        .when(pause_next_activity_request("older-page"))
+        .when(start("older", load_more_activity()))
+        .when(wait_for_request("older-page"))
+        .when(call("shutdown", shutdown_client()))
+        .then(succeeds("shutdown"))
+        .then(request_was_cancelled("older-page"))
+        .then(
+            snapshot()
+                .pagination_phase(ResourcePhase::Idle)
+                .activity_count(10)
+                .has_more(true),
+        )
+        .then(activity_is(&["head"]))
+        .then(remember_revision("after-shutdown"))
+        .when(release_request("older-page"))
+        .then(update("older").superseded())
+        .then(revision_is("after-shutdown"))
+        .then(activity_is(&["head"]))
+        .run();
+}
+
+#[test]
 fn loads_older_real_transactions_from_localnet() {
     scenario("pagination loads older transactions from Acton localnet")
         .given(network().localnet())
