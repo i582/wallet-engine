@@ -158,6 +158,8 @@ example-web-build: example-web-install bindings-wasm
 example-web-test: example-web-install bindings-wasm
     bun --cwd examples/web test
 
+web-check: web-fmt-check web-lint web-build web-test example-web-fmt-check example-web-lint example-web-build example-web-test
+
 example-c-build: bindings-c build-c
     cmake -S examples/c -B target/c-example
     cmake --build target/c-example
