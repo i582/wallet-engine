@@ -296,6 +296,7 @@ impl App {
             record_id: descriptor.record_id.clone(),
             address: descriptor.address.clone(),
             public_key: descriptor.public_key.clone(),
+            local_secret_ref: Some(descriptor.secret_ref.clone()),
             network: descriptor.network,
             send_validity_seconds: 300,
             providers: ProviderConfig::standard(descriptor.network),
@@ -349,10 +350,6 @@ impl App {
             self.status = Some("Wallet client is unavailable".to_owned());
             return;
         };
-        let Some(descriptor) = self.descriptor.clone() else {
-            self.status = Some("Wallet descriptor is unavailable".to_owned());
-            return;
-        };
         let amount_nanograms = match parse_gram_amount(&self.send_amount) {
             Ok(amount) => amount,
             Err(message) => {
@@ -383,7 +380,6 @@ impl App {
             destination: self.send_destination.clone(),
             amount: SendAmount::exact(amount_nanograms),
             comment: None,
-            secret_ref: descriptor.secret_ref,
         };
         match client.send(request).await {
             Ok(result) => {

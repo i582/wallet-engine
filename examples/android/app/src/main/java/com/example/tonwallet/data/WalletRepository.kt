@@ -95,7 +95,6 @@ class WalletRepository(private val store: SecureWalletStore) {
                 destination = destination.trim(),
                 amount = SendAmount.Exact(nanograms = amountNanograms),
                 comment = null,
-                secretRef = wallet.descriptor().secretRef,
             ),
         )
         when (result.phase) {
@@ -140,6 +139,7 @@ class WalletRepository(private val store: SecureWalletStore) {
                     recordId = wallet.recordId,
                     address = wallet.address,
                     publicKey = wallet.publicKey,
+                    localSecretRef = wallet.descriptor().secretRef,
                     network = wallet.network,
                     sendValiditySeconds = SEND_VALIDITY_SECONDS,
                     providers = ProviderConfig(

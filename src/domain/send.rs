@@ -1,6 +1,5 @@
 //! Public transfer requests, phases, snapshots, and results.
 
-use super::ProtectedSecretRef;
 use crate::Base64Hash;
 
 /// The transfer value policy applied by the wallet contract.
@@ -42,8 +41,6 @@ pub struct SendRequest {
     /// An optional plaintext UTF-8 comment attached to the internal message.
     #[serde(default)]
     pub comment: Option<String>,
-    /// The protected mnemonic reference for the source wallet.
-    pub secret_ref: ProtectedSecretRef,
 }
 
 /// Public transfer intent used to preview a send without unlocking its secret.

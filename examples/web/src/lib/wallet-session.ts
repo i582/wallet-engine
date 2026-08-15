@@ -123,7 +123,6 @@ export class WalletSession {
         operationId: crypto.randomUUID(),
         destination,
         amount: {kind: "exact", nanograms: amountNanograms},
-        secretRef: this.descriptor.secretRef,
       })
     } catch (cause) {
       const diagnostic: string | undefined = this.client.snapshot().send.errorMessage
@@ -171,6 +170,7 @@ async function createClient(
       recordId: descriptor.recordId,
       address: descriptor.address,
       publicKey: descriptor.publicKey,
+      localSecretRef: descriptor.secretRef,
       network: descriptor.network,
       // This is application policy, not a hidden engine default. The engine
       // adds it to Toncenter's fresh synchronization timestamp.

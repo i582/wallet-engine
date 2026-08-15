@@ -15,6 +15,8 @@ export interface WalletClientConfig {
   readonly recordId: string
   readonly address: string
   readonly publicKey: number[]
+  /** Protected mnemonic reference for local signing; omit for a public-key-only wallet. */
+  readonly localSecretRef?: ProtectedSecretRef
   readonly network: Network
   readonly sendValiditySeconds: number
   readonly providers: ProviderConfig
@@ -209,7 +211,6 @@ export interface SendRequest {
   readonly amount: SendAmount
   /** Optional plaintext UTF-8 comment. */
   readonly comment?: string
-  readonly secretRef: ProtectedSecretRef
 }
 
 export interface SendPreviewRequest {

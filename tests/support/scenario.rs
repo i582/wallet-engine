@@ -54,6 +54,7 @@ pub(crate) fn wallet() -> WalletFixture {
         balance_nanograms: "0".to_owned(),
         seqno: 0,
         sync_utime: Some(1_800_000_000),
+        local_signing: true,
     }
 }
 
@@ -441,6 +442,7 @@ pub(crate) struct WalletFixture {
     pub(super) balance_nanograms: String,
     pub(super) seqno: u32,
     pub(super) sync_utime: Option<u64>,
+    local_signing: bool,
 }
 
 impl WalletFixture {
@@ -490,6 +492,12 @@ impl WalletFixture {
     #[must_use]
     pub(crate) const fn seqno(mut self, seqno: u32) -> Self {
         self.seqno = seqno;
+        self
+    }
+
+    #[must_use]
+    pub(crate) const fn public_key_only(mut self) -> Self {
+        self.local_signing = false;
         self
     }
 }
@@ -1260,6 +1268,7 @@ impl ScenarioRunner {
         let secret_ref = ProtectedSecretRef {
             value: TEST_SECRET_REF.to_owned(),
         };
+        let local_secret_ref = wallet.local_signing.then(|| secret_ref.clone());
         let secret = match secret_behavior {
             SecretBehavior::Valid | SecretBehavior::HostFailure => {
                 test_wallet().recovery_phrase_bytes()
@@ -1267,7 +1276,9 @@ impl ScenarioRunner {
             SecretBehavior::Invalid => b"invalid recovery phrase",
             SecretBehavior::AnotherWallet => test_wallet().other_recovery_phrase_bytes(),
         };
-        platform_host.store_test_secret(&secret_ref, secret);
+        if local_secret_ref.is_some() {
+            platform_host.store_test_secret(&secret_ref, secret);
+        }
         if secret_behavior == SecretBehavior::HostFailure {
             platform_host.fail_next_secret_read();
         }
@@ -1321,6 +1332,7 @@ impl ScenarioRunner {
                 record_id: TEST_RECORD_ID.to_owned(),
                 address: test_wallet().testnet_v5_address().to_owned(),
                 public_key: test_wallet().public_key(),
+                local_secret_ref,
                 network: Network::Testnet,
                 send_validity_seconds,
                 providers: ProviderConfig {
@@ -1474,7 +1486,6 @@ impl ScenarioRunner {
                             destination,
                             amount: action.amount,
                             comment: action.comment,
-                            secret_ref: self.secret_ref.clone(),
                         };
                         std::thread::spawn(move || {
                             let result = block_on(client.send(request));

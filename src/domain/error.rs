@@ -163,9 +163,12 @@ pub enum WalletClientError {
     /// The client configuration or operation request is invalid.
     #[error("invalid wallet client configuration")]
     InvalidConfig,
-    /// The transfer request has an invalid operation ID, destination, amount, or secret reference.
+    /// The transfer request has an invalid operation ID, destination, or amount.
     #[error("invalid send request")]
     InvalidSendRequest,
+    /// The wallet has public identity but no protected secret configured for local signing.
+    #[error("the wallet is not configured for local signing")]
+    LocalSigningUnavailable,
     /// A client-local identifier or revision counter overflowed.
     #[error("wallet client identifier space is exhausted")]
     IdentifierExhausted,

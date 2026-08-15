@@ -45,6 +45,34 @@ fn emulation_completes_before_secret_authorization_and_persistence() {
 }
 
 #[test]
+fn public_key_only_wallet_can_preview_but_cannot_sign_locally() {
+    scenario("public-key-only identity remains useful without a local mnemonic")
+        .given(
+            wallet()
+                .active()
+                .balance(grams(10))
+                .seqno(7)
+                .public_key_only(),
+        )
+        .when(call(
+            "preview",
+            preview_send(send().to(own_address()).grams(1)),
+        ))
+        .then(result("preview").previewed())
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .then(remember_revision("before-send"))
+        .when(call("send", send().to(own_address()).grams(1)))
+        .then(error("send", WalletClientError::LocalSigningUnavailable))
+        .then(revision_is("before-send"))
+        .then(snapshot().send_phase(SendPhase::Idle))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .run();
+}
+
+#[test]
 fn cancelling_emulation_discards_its_late_result_before_authorization() {
     scenario("cancelled preview cannot unlock or revive a send")
         .given(wallet().active().balance(grams(10)).seqno(7))

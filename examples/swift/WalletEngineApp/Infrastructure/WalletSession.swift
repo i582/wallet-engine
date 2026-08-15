@@ -58,6 +58,7 @@ nonisolated struct AppleWalletEnvironment: Sendable {
             recordId: wallet.recordId,
             address: wallet.address,
             publicKey: publicKey,
+            localSecretRef: ProtectedSecretRef(value: wallet.secretRef),
             network: network,
             sendValiditySeconds: 300,
             providers: ProviderConfig(

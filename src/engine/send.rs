@@ -50,9 +50,16 @@ impl WalletClient {
         ) = {
             let mut state = self.lock()?;
             ensure_running(&state)?;
+            let local_secret_ref = state
+                .config
+                .local_secret_ref
+                .clone()
+                .ok_or(WalletClientError::LocalSigningUnavailable)?;
+
             if state.active_send.is_some() {
                 return Err(WalletClientError::SendAlreadyInProgress);
             }
+
             state.send_generation = state
                 .send_generation
                 .checked_add(1)
@@ -73,6 +80,7 @@ impl WalletClient {
                 config.record_id.clone(),
                 expected_source.clone(),
                 request.clone(),
+                local_secret_ref,
             );
             let directive = workflow
                 .begin()

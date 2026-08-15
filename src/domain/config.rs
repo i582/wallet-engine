@@ -1,5 +1,7 @@
 //! Network, provider, and wallet-client configuration.
 
+use super::ProtectedSecretRef;
+
 /// Selects the TON network used for addresses, providers, and wallet derivation.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, uniffi::Enum,
@@ -53,6 +55,13 @@ pub struct WalletClientConfig {
     /// This value is public metadata. The engine uses it to build a faithful
     /// fake-signed message for preflight emulation without unlocking the mnemonic.
     pub public_key: Vec<u8>,
+    /// The protected mnemonic reference used for local signing.
+    ///
+    /// `None` configures a public-key-only wallet. Read operations and send
+    /// previews remain available, while [`crate::WalletClient::send`] returns
+    /// [`crate::WalletClientError::LocalSigningUnavailable`].
+    #[serde(default)]
+    pub local_secret_ref: Option<ProtectedSecretRef>,
     /// The network for the address and all provider requests.
     pub network: Network,
     /// Lifetime of a newly signed external message, in seconds.

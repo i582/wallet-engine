@@ -1523,9 +1523,6 @@ private struct SendWalletView: View {
         errorMessage = nil
         Task {
             do {
-                guard let descriptor = wallet.descriptor else {
-                    throw SendPresentationError.walletNotMigrated
-                }
                 guard let nanograms = GramAmount.nanograms(from: normalizedAmount) else {
                     throw SendPresentationError.invalidAmount
                 }
@@ -1535,7 +1532,6 @@ private struct SendWalletView: View {
                         destination: normalizedDestination,
                         amount: .exact(nanograms: nanograms),
                         comment: nil,
-                        secretRef: descriptor.secretRef
                     )
                 )
                 switch result.phase {

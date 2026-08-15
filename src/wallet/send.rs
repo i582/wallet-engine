@@ -11,8 +11,8 @@ use ton::ton_core::types::TonAddress;
 
 use crate::domain::{
     AccountStatus, JournalCompareExchange, JournalCompareExchangeResult, JournalKey, JournalRecord,
-    ProtectedSecretRead, SecretAccessReason, SendPhase, SendRequest, SendSnapshot,
-    bounded_diagnostic,
+    ProtectedSecretRead, ProtectedSecretRef, SecretAccessReason, SendPhase, SendRequest,
+    SendSnapshot, bounded_diagnostic,
 };
 use crate::types::{Boc, parse_positive_decimal};
 use crate::{Base64Hash, SendAmount};
@@ -253,6 +253,9 @@ pub(crate) struct SendWorkflow {
     /// The immutable caller intent for this operation.
     request: SendRequest,
 
+    /// The wallet-level protected secret used only by the local signing path.
+    local_secret_ref: ProtectedSecretRef,
+
     /// The current reducer stage.
     /// Each reducer method accepts only its documented predecessor stage.
     stage: SendStage,
@@ -282,11 +285,17 @@ pub(crate) struct SendWorkflow {
 }
 
 impl SendWorkflow {
-    pub(crate) const fn new(record_id: String, source: TonAddress, request: SendRequest) -> Self {
+    pub(crate) const fn new(
+        record_id: String,
+        source: TonAddress,
+        request: SendRequest,
+        local_secret_ref: ProtectedSecretRef,
+    ) -> Self {
         Self {
             record_id,
             source,
             request,
+            local_secret_ref,
             stage: SendStage::Validating,
             fresh_account: None,
             prepared: None,
@@ -560,7 +569,7 @@ impl SendWorkflow {
 
     fn read_secret_directive(&self) -> SendDirective {
         SendDirective::ReadProtectedSecret(ProtectedSecretRead {
-            secret_ref: self.request.secret_ref.clone(),
+            secret_ref: self.local_secret_ref.clone(),
             reason: SecretAccessReason::SignTransfer,
             prompt: "Authenticate to sign this GRAM transfer".to_owned(),
         })
@@ -638,12 +647,6 @@ fn validate_request(record_id: &str, request: &SendRequest) -> Result<(), SendWo
     }
 
     validate_amount(&request.amount)?;
-
-    if request.secret_ref.value.trim().is_empty() {
-        return Err(SendWorkflowError::InvalidRequest(
-            "protected secret reference is empty".to_owned(),
-        ));
-    }
 
     Ok(())
 }
@@ -745,20 +748,11 @@ mod tests {
                 },
                 "amount must be positive canonical nanograms",
             ),
-            (
-                "record",
-                SendRequest {
-                    secret_ref: ProtectedSecretRef {
-                        value: "  ".to_owned(),
-                    },
-                    ..request()
-                },
-                "protected secret reference is empty",
-            ),
         ];
 
         for (record_id, request, diagnostic) in cases {
-            let mut workflow = SendWorkflow::new(record_id.to_owned(), source(), request);
+            let mut workflow =
+                SendWorkflow::new(record_id.to_owned(), source(), request, local_secret_ref());
             assert_eq!(
                 workflow.begin(),
                 Err(SendWorkflowError::InvalidRequest(diagnostic.to_owned()))
@@ -972,7 +966,7 @@ mod tests {
     }
 
     fn workflow() -> SendWorkflow {
-        SendWorkflow::new("record".to_owned(), source(), request())
+        SendWorkflow::new("record".to_owned(), source(), request(), local_secret_ref())
     }
 
     fn request() -> SendRequest {
@@ -981,9 +975,12 @@ mod tests {
             destination: RAW_DESTINATION.to_owned(),
             amount: SendAmount::exact("1"),
             comment: None,
-            secret_ref: ProtectedSecretRef {
-                value: "secret".to_owned(),
-            },
+        }
+    }
+
+    fn local_secret_ref() -> ProtectedSecretRef {
+        ProtectedSecretRef {
+            value: "secret".to_owned(),
         }
     }
 

@@ -10,7 +10,13 @@ use crate::wallet::crypto::derive_v5r1_public_state;
 use crate::{SendAmount, SendPreviewRequest, SendRequest, WalletClientConfig, WalletClientError};
 
 pub(super) fn validate_config(config: &WalletClientConfig) -> Result<(), WalletClientError> {
-    if config.record_id.trim().is_empty() || config.send_validity_seconds == 0 {
+    if config.record_id.trim().is_empty()
+        || config.send_validity_seconds == 0
+        || config
+            .local_secret_ref
+            .as_ref()
+            .is_some_and(|secret_ref| secret_ref.value.trim().is_empty())
+    {
         return Err(WalletClientError::InvalidConfig);
     }
 
@@ -28,7 +34,6 @@ pub(super) fn validate_send(request: &SendRequest) -> Result<(), WalletClientErr
     if request.operation_id.trim().is_empty()
         || request.destination.trim().is_empty()
         || TonAddress::from_str(&request.destination).is_err()
-        || request.secret_ref.value.trim().is_empty()
         || !valid_send_amount(&request.amount)
     {
         return Err(WalletClientError::InvalidSendRequest);
@@ -92,7 +97,9 @@ fn validate_provider_url(value: &str) -> Result<(), WalletClientError> {
 mod tests {
     use super::{validate_config, validate_provider_url};
     use crate::wallet::crypto::derive_v5r1_public_state;
-    use crate::{Network, ProviderConfig, WalletClientConfig, WalletClientError};
+    use crate::{
+        Network, ProtectedSecretRef, ProviderConfig, WalletClientConfig, WalletClientError,
+    };
 
     #[test]
     fn provider_url_accepts_secure_and_loopback_transports() {
@@ -151,6 +158,26 @@ mod tests {
             validate_config(&config),
             Err(WalletClientError::InvalidConfig)
         );
+
+        let mut config = valid_config();
+        config.local_secret_ref = Some(ProtectedSecretRef {
+            value: "  ".to_owned(),
+        });
+        assert_eq!(
+            validate_config(&config),
+            Err(WalletClientError::InvalidConfig)
+        );
+    }
+
+    #[test]
+    fn client_config_accepts_local_and_public_key_only_signing_modes() {
+        assert_eq!(validate_config(&valid_config()), Ok(()));
+
+        let mut config = valid_config();
+        config.local_secret_ref = Some(ProtectedSecretRef {
+            value: "wallet:validation-wallet:mnemonic".to_owned(),
+        });
+        assert_eq!(validate_config(&config), Ok(()));
     }
 
     #[test]
@@ -178,6 +205,7 @@ mod tests {
             record_id: "validation-wallet".to_owned(),
             address: address.to_string(),
             public_key,
+            local_secret_ref: None,
             network: Network::Testnet,
             send_validity_seconds: 300,
             providers: ProviderConfig::standard(Network::Testnet),

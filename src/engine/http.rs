@@ -352,6 +352,7 @@ mod tests {
             record_id: "record".to_owned(),
             address: "address".to_owned(),
             public_key: vec![0; 32],
+            local_secret_ref: None,
             network: Network::Testnet,
             send_validity_seconds: 300,
             providers: ProviderConfig {
@@ -391,6 +392,7 @@ mod tests {
             record_id: "record".to_owned(),
             address: "address".to_owned(),
             public_key: vec![0; 32],
+            local_secret_ref: None,
             network: Network::Testnet,
             send_validity_seconds: 300,
             providers: ProviderConfig {
