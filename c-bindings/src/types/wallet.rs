@@ -2,7 +2,7 @@
 
 use wallet_engine::{CreateWalletRequest, CreatedWallet, WalletDescriptor, WalletLifecycleError};
 
-use crate::abi::{WalletEngineAbiStatus, WalletEngineStringView};
+use crate::abi::{WalletEngineAbiStatus, WalletEngineBytesView, WalletEngineStringView};
 
 use super::{
     WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_OTHER, WalletEngineNetwork,
@@ -80,6 +80,8 @@ pub struct WalletEngineWalletDescriptorView {
     pub record_id: WalletEngineStringView,
     /// Friendly non-bounceable TON address.
     pub address: WalletEngineStringView,
+    /// Raw 32-byte Ed25519 public key used by the V5R1 contract.
+    pub public_key: WalletEngineBytesView,
     /// Network used for derivation and future operations.
     pub network: WalletEngineNetwork,
     /// Host protected-storage reference for the mnemonic.
@@ -91,6 +93,7 @@ impl From<&WalletDescriptor> for WalletEngineWalletDescriptorView {
         Self {
             record_id: WalletEngineStringView::from(value.record_id.as_str()),
             address: WalletEngineStringView::from(value.address.as_str()),
+            public_key: WalletEngineBytesView::from(value.public_key.as_slice()),
             network: network_to_abi(value.network),
             secret_ref: WalletEngineProtectedSecretRefView::from(&value.secret_ref),
         }

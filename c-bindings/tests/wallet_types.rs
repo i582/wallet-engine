@@ -86,6 +86,7 @@ fn created_wallet_view_borrows_descriptor_and_words_for_the_callback() {
         descriptor: WalletDescriptor {
             record_id: "wallet-1".to_owned(),
             address: "UQExampleAddress".to_owned(),
+            public_key: vec![7; 32],
             network: Network::Testnet,
             secret_ref: ProtectedSecretRef {
                 value: "wallet:wallet-1:mnemonic".to_owned(),
@@ -105,9 +106,12 @@ fn created_wallet_view_borrows_descriptor_and_words_for_the_callback() {
         // SAFETY: All nested views are valid for this callback invocation.
         let address = unsafe { view.descriptor.address.try_to_string() };
         // SAFETY: All nested views are valid for this callback invocation.
+        let public_key = unsafe { view.descriptor.public_key.try_to_vec() };
+        // SAFETY: All nested views are valid for this callback invocation.
         let secret_ref = unsafe { view.descriptor.secret_ref.value.try_to_string() };
         assert_eq!(record_id.as_deref(), Ok("wallet-1"));
         assert_eq!(address.as_deref(), Ok("UQExampleAddress"));
+        assert_eq!(public_key.as_deref(), Ok([7; 32].as_slice()));
         assert_eq!(view.descriptor.network, WALLET_ENGINE_NETWORK_TESTNET);
         assert_eq!(secret_ref.as_deref(), Ok("wallet:wallet-1:mnemonic"));
 
