@@ -7,13 +7,14 @@ use base64::Engine as _;
 use num_bigint::BigUint;
 use serde::Deserialize;
 use ton::ton_core::types::TonAddress;
-use url::Url;
 
 use crate::domain::bounded_diagnostic;
 use crate::{
     DomainError, ErrorCategory, ErrorCode, HttpHeader, HttpMethod, HttpRequest, HttpRequestId,
     RetryAdvice, SendEmulation, SendEmulationAction, WalletClientConfig, WalletClientError,
 };
+
+use super::http::build_toncenter_url;
 
 const MAX_RESPONSE_BODY_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_RESPONSE_HEADER_BYTES: u64 = 64 * 1024;
@@ -45,7 +46,7 @@ pub(super) fn build_emulation_request(
     Ok(HttpRequest {
         id,
         method: HttpMethod::Post,
-        url: emulation_url(&config.providers.toncenter_base_url)?,
+        url: build_toncenter_url(config, &["api", "emulate", "v1", "emulateTrace"], &[])?,
         headers: vec![
             HttpHeader {
                 name: "Accept".to_owned(),
@@ -173,30 +174,6 @@ fn parse_action(action: RawEmulationAction) -> Result<SendEmulationAction, Domai
     })
 }
 
-fn emulation_url(base: &str) -> Result<String, WalletClientError> {
-    let mut url = Url::parse(base).map_err(|_| WalletClientError::InvalidConfig)?;
-    let mut segments = url
-        .path_segments()
-        .ok_or(WalletClientError::InvalidConfig)?
-        .filter(|segment| !segment.is_empty())
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-
-    if !matches!(segments.as_slice(), [.., api, version] if api == "api" && version == "v2") {
-        return Err(WalletClientError::InvalidConfig);
-    }
-    segments.truncate(segments.len() - 2);
-    segments.extend(
-        ["api", "emulate", "v1", "emulateTrace"]
-            .into_iter()
-            .map(str::to_owned),
-    );
-
-    url.set_path(&segments.join("/"));
-    url.set_query(None);
-    Ok(url.into())
-}
-
 fn transaction_succeeded(transaction: &EmulatedTransaction, require_phases: bool) -> bool {
     if transaction.description.aborted != Some(false) {
         return false;
@@ -296,8 +273,8 @@ mod tests {
     const ADDRESS: &str = "0:1111111111111111111111111111111111111111111111111111111111111111";
 
     #[test]
-    fn builds_the_emulate_trace_request_from_the_v2_provider_root() {
-        let config = config("https://provider.example/custom/api/v2/");
+    fn builds_the_emulate_trace_request_from_the_provider_base() {
+        let config = config("https://provider.example/custom/");
         let request = build_emulation_request(&config, HttpRequestId { value: 9 }, b"boc")
             .expect("emulation request must build");
         let body: serde_json::Value =

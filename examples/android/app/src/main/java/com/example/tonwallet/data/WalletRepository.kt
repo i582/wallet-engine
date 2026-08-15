@@ -194,8 +194,8 @@ class WalletRepository(private val store: SecureWalletStore) {
     }
 
     private companion object {
-        const val TESTNET_BASE_URL = "https://testnet.toncenter.com/api/v2"
-        const val MAINNET_BASE_URL = "https://toncenter.com/api/v2"
+        const val TESTNET_BASE_URL = "https://testnet.toncenter.com"
+        const val MAINNET_BASE_URL = "https://toncenter.com"
         val SEND_VALIDITY_SECONDS: UInt = 300u
     }
 }

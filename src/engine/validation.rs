@@ -64,6 +64,7 @@ impl WalletClientConfig {
 fn validate_provider_url(value: &str) -> Result<(), WalletClientError> {
     let url = Url::parse(value).map_err(|_| WalletClientError::InvalidConfig)?;
     let host = url.host().ok_or(WalletClientError::InvalidConfig)?;
+    let path = url.path().trim_end_matches('/');
     let secure = url.scheme() == "https";
     let loopback_http = url.scheme() == "http"
         && match host {
@@ -71,11 +72,15 @@ fn validate_provider_url(value: &str) -> Result<(), WalletClientError> {
             Host::Ipv4(address) => address.is_loopback(),
             Host::Ipv6(address) => address.is_loopback(),
         };
+    let api_specific_path =
+        path.ends_with("/api/v2") || path.ends_with("/api/v3") || path.ends_with("/api/emulate/v1");
 
     if (!secure && !loopback_http)
         || !url.username().is_empty()
         || url.password().is_some()
+        || url.query().is_some()
         || url.fragment().is_some()
+        || api_specific_path
     {
         return Err(WalletClientError::InvalidConfig);
     }
@@ -91,28 +96,42 @@ mod tests {
 
     #[test]
     fn provider_url_accepts_secure_and_loopback_transports() {
-        assert_eq!(validate_provider_url("https://example.com/api/v2"), Ok(()));
+        assert_eq!(validate_provider_url("https://example.com"), Ok(()));
         assert_eq!(
-            validate_provider_url("http://127.0.0.1:8080/api/v2"),
+            validate_provider_url("https://example.com/toncenter"),
             Ok(())
         );
-        assert_eq!(validate_provider_url("http://[::1]:8080/api/v2"), Ok(()));
-        assert_eq!(
-            validate_provider_url("http://localhost:8080/api/v2"),
-            Ok(())
-        );
+        assert_eq!(validate_provider_url("http://127.0.0.1:8080"), Ok(()));
+        assert_eq!(validate_provider_url("http://[::1]:8080"), Ok(()));
+        assert_eq!(validate_provider_url("http://localhost:8080"), Ok(()));
     }
 
     #[test]
     fn provider_url_rejects_insecure_remote_transports() {
         assert_eq!(
-            validate_provider_url("http://example.com/api/v2"),
+            validate_provider_url("http://example.com"),
             Err(WalletClientError::InvalidConfig)
         );
         assert_eq!(
-            validate_provider_url("http://192.168.1.10:8080/api/v2"),
+            validate_provider_url("http://192.168.1.10:8080"),
             Err(WalletClientError::InvalidConfig)
         );
+    }
+
+    #[test]
+    fn provider_url_rejects_api_specific_paths_and_query_parameters() {
+        for value in [
+            "https://example.com/api/v2",
+            "https://example.com/custom/api/v3/",
+            "https://example.com/api/emulate/v1",
+            "https://example.com?api_key=secret",
+        ] {
+            assert_eq!(
+                validate_provider_url(value),
+                Err(WalletClientError::InvalidConfig),
+                "provider base unexpectedly accepted {value}"
+            );
+        }
     }
 
     #[test]

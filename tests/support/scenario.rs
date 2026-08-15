@@ -1294,7 +1294,7 @@ impl ScenarioRunner {
                 client_host: host.clone(),
                 scripted_host: Some(host),
                 localnet_host: None,
-                provider_base_url: "https://testnet.toncenter.com/api/v2".to_owned(),
+                provider_base_url: "https://testnet.toncenter.com".to_owned(),
             }
         };
         let ScenarioTransport {

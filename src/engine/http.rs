@@ -50,16 +50,17 @@ pub(super) fn evaluate_response<T>(
     evaluate(result, parse)
 }
 
-pub(super) fn build_toncenter_request(
+pub(super) fn build_toncenter_v2_request(
     config: &WalletClientConfig,
     id: HttpRequestId,
     path: &str,
     query: &[(&str, &str)],
 ) -> Result<HttpRequest, WalletClientError> {
+    let path = ["api", "v2", path];
     Ok(HttpRequest {
         id,
         method: HttpMethod::Get,
-        url: build_provider_url(&config.providers.toncenter_base_url, path, query)?,
+        url: build_toncenter_url(config, &path, query)?,
         headers: vec![HttpHeader {
             name: "Accept".to_owned(),
             value: "application/json".to_owned(),
@@ -68,6 +69,19 @@ pub(super) fn build_toncenter_request(
         max_response_header_bytes: MAX_RESPONSE_HEADER_BYTES,
         max_response_body_bytes: MAX_RESPONSE_BODY_BYTES,
     })
+}
+
+/// Builds a Toncenter URL below the configured deployment base.
+///
+/// Callers provide the complete API-specific path as individual segments. This
+/// keeps API version selection at the request site and avoids deriving one API
+/// root from another.
+pub(super) fn build_toncenter_url(
+    config: &WalletClientConfig,
+    path: &[&str],
+    query: &[(&str, &str)],
+) -> Result<String, WalletClientError> {
+    build_provider_url(&config.providers.toncenter_base_url, path, query)
 }
 
 fn evaluate<T>(
@@ -124,17 +138,25 @@ fn host_error(kind: HttpHostErrorKind, message: &str) -> DomainError {
 
 fn build_provider_url(
     base: &str,
-    path: &str,
+    path: &[&str],
     query: &[(&str, &str)],
 ) -> Result<String, WalletClientError> {
     let mut url = Url::parse(base).map_err(|_| WalletClientError::InvalidConfig)?;
 
-    url.path_segments_mut()
-        .map_err(|_| WalletClientError::InvalidConfig)?
-        .pop_if_empty()
-        .push(path);
+    {
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|_| WalletClientError::InvalidConfig)?;
+        segments.pop_if_empty();
+        for segment in path {
+            segments.push(segment);
+        }
+    }
 
-    url.query_pairs_mut().extend_pairs(query.iter().copied());
+    url.set_query(None);
+    if !query.is_empty() {
+        url.query_pairs_mut().extend_pairs(query.iter().copied());
+    }
 
     Ok(url.into())
 }
@@ -333,11 +355,11 @@ mod tests {
             network: Network::Testnet,
             send_validity_seconds: 300,
             providers: ProviderConfig {
-                toncenter_base_url: "https://provider.example/custom/api/v2/".to_owned(),
+                toncenter_base_url: "https://provider.example/custom/".to_owned(),
             },
         };
 
-        let request = build_toncenter_request(
+        let request = build_toncenter_v2_request(
             &config,
             HttpRequestId { value: 9 },
             "getTransactions",
@@ -377,7 +399,7 @@ mod tests {
         };
 
         assert_eq!(
-            build_toncenter_request(&config, HttpRequestId { value: 1 }, "resource", &[],),
+            build_toncenter_v2_request(&config, HttpRequestId { value: 1 }, "resource", &[],),
             Err(WalletClientError::InvalidConfig)
         );
     }

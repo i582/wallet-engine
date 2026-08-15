@@ -30,7 +30,7 @@ beforeAll(async () => {
 describe("BrowserHttpHost", () => {
   test("injects the Toncenter API key only into its configured origin", async () => {
     let observedKey: string | null = null
-    const host = new BrowserHttpHost("https://testnet.toncenter.com/api/v2", {
+    const host = new BrowserHttpHost("https://testnet.toncenter.com", {
       toncenterApiKey: "secret-value",
       fetch: mockFetch(async (_input, init) => {
         observedKey = new Headers(init?.headers).get("X-API-Key")
@@ -57,7 +57,7 @@ describe("BrowserHttpHost", () => {
 
   test("honors cancellation that arrives before fetch starts", async () => {
     let fetchCount = 0
-    const host = new BrowserHttpHost("https://testnet.toncenter.com/api/v2", {
+    const host = new BrowserHttpHost("https://testnet.toncenter.com", {
       fetch: mockFetch(async () => {
         fetchCount += 1
         return new Response()
@@ -70,7 +70,7 @@ describe("BrowserHttpHost", () => {
   })
 
   test("aborts a response that exceeds the Rust limit", async () => {
-    const host = new BrowserHttpHost("https://testnet.toncenter.com/api/v2", {
+    const host = new BrowserHttpHost("https://testnet.toncenter.com", {
       fetch: mockFetch(async () => new Response(new Uint8Array(32))),
     })
     const request: HttpRequest = {...httpRequest(9), maxResponseBodyBytes: 8}
@@ -166,7 +166,7 @@ function walletConfig(descriptor: {
     network: "testnet",
     sendValiditySeconds: 300,
     providers: {
-      toncenterBaseUrl: "https://testnet.toncenter.com/api/v2",
+      toncenterBaseUrl: "https://testnet.toncenter.com",
     },
   }
 }

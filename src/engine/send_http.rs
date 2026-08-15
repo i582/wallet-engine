@@ -8,7 +8,7 @@ use crate::{
     RetryAdvice, WalletClientConfig, WalletClientError,
 };
 
-use super::http::build_toncenter_request;
+use super::http::build_toncenter_v2_request;
 
 pub(super) enum SendBocResponse {
     Accepted,
@@ -113,7 +113,7 @@ fn build_json_rpc_request(
     }))
     .map_err(|_| WalletClientError::StateUnavailable)?;
 
-    let mut request = build_toncenter_request(config, id, "jsonRPC", &[])?;
+    let mut request = build_toncenter_v2_request(config, id, "jsonRPC", &[])?;
 
     request.method = HttpMethod::Post;
     request.headers.push(HttpHeader {

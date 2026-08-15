@@ -12,7 +12,7 @@ import {
 
 import {BrowserWalletStore} from "@/lib/browser-wallet-store"
 
-const TESTNET_BASE_URL: string = "https://testnet.toncenter.com/api/v2"
+const TESTNET_BASE_URL: string = "https://testnet.toncenter.com"
 const JOURNAL_DATABASE_NAME: string = "wallet-engine-example-journal"
 
 export interface CreatedWalletSession {

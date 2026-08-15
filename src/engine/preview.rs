@@ -11,7 +11,7 @@ use crate::{
 
 use super::WalletClient;
 use super::emulation::{build_emulation_request, is_message_not_accepted, parse_emulation};
-use super::http::{build_toncenter_request, evaluate_response};
+use super::http::{build_toncenter_v2_request, evaluate_response};
 use super::provider::parse_account;
 use super::send_http::{build_seqno_request, parse_seqno};
 use super::state::{OperationFamily, ensure_running};
@@ -56,7 +56,7 @@ impl WalletClient {
             let generation = state.preview_generation;
             let config = state.config.clone();
             let expected_source = config.parsed_address()?;
-            let account_request = build_toncenter_request(
+            let account_request = build_toncenter_v2_request(
                 &config,
                 state.allocate_request_id()?,
                 "getAddressInformation",

@@ -8,7 +8,7 @@ use crate::{
 };
 
 use super::WalletClient;
-use super::http::build_toncenter_request;
+use super::http::build_toncenter_v2_request;
 use super::http::evaluate_response;
 use super::provider::{ActivityPage, ActivityPageCursor, activity_record_order, parse_activity};
 use super::state::{OperationFamily, State, ensure_running, update};
@@ -180,13 +180,13 @@ pub(super) fn build_refresh_requests(
     activity_id: HttpRequestId,
 ) -> Result<(HttpRequest, HttpRequest), WalletClientError> {
     Ok((
-        build_toncenter_request(
+        build_toncenter_v2_request(
             config,
             account_id,
             "getAddressInformation",
             &[("address", config.address.as_str())],
         )?,
-        build_toncenter_request(
+        build_toncenter_v2_request(
             config,
             activity_id,
             "getTransactions",
@@ -202,7 +202,7 @@ pub(super) fn build_activity_page_request(
 ) -> Result<HttpRequest, WalletClientError> {
     let logical_time = cursor.logical_time.to_string();
 
-    build_toncenter_request(
+    build_toncenter_v2_request(
         config,
         id,
         "getTransactions",

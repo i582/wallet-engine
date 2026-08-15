@@ -1,6 +1,6 @@
 //! V5R1 transfer orchestration.
 use super::client::WalletClient;
-use super::http::{build_toncenter_request, evaluate_response};
+use super::http::{build_toncenter_v2_request, evaluate_response};
 use super::send_http::{
     SendBocResponse, build_send_boc_request, build_seqno_request, is_explicit_send_rejection,
     parse_send_response, parse_seqno,
@@ -61,7 +61,7 @@ impl WalletClient {
             let config = state.config.clone();
             let expected_source = config.parsed_address()?;
 
-            let account_request = build_toncenter_request(
+            let account_request = build_toncenter_v2_request(
                 &config,
                 state.allocate_request_id()?,
                 "getAddressInformation",

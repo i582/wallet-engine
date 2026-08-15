@@ -62,8 +62,8 @@ nonisolated struct AppleWalletEnvironment: Sendable {
             sendValiditySeconds: 300,
             providers: ProviderConfig(
                 toncenterBaseUrl: isMainnet
-                    ? "https://toncenter.com/api/v2"
-                    : "https://testnet.toncenter.com/api/v2"
+                    ? "https://toncenter.com"
+                    : "https://testnet.toncenter.com"
             )
         )
     }

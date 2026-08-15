@@ -85,7 +85,7 @@ impl LocalnetHttpHost {
     }
 
     pub(super) fn provider_base_url(&self) -> String {
-        format!("{}/api/v2", lock(&self.localnet).base_url)
+        lock(&self.localnet).base_url.clone()
     }
 
     pub(super) fn submitted_message(&self) -> Option<SubmittedMessage> {

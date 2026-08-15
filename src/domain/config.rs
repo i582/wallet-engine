@@ -16,7 +16,11 @@ pub enum Network {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderConfig {
-    /// The HTTPS base URL for a Toncenter-compatible API v2 provider.
+    /// The HTTPS base URL for a Toncenter-compatible provider.
+    ///
+    /// The engine appends the path for the API used by each request. An optional
+    /// deployment prefix is preserved, so `https://provider.example/toncenter`
+    /// produces paths below `/toncenter/api/...`.
     /// Loopback HTTP URLs are accepted for local development networks.
     pub toncenter_base_url: String,
 }
@@ -27,8 +31,8 @@ impl ProviderConfig {
     #[must_use]
     pub fn standard(network: Network) -> Self {
         let toncenter_base_url = match network {
-            Network::Mainnet => "https://toncenter.com/api/v2",
-            Network::Testnet => "https://testnet.toncenter.com/api/v2",
+            Network::Mainnet => "https://toncenter.com",
+            Network::Testnet => "https://testnet.toncenter.com",
         };
         Self {
             toncenter_base_url: toncenter_base_url.to_owned(),
@@ -70,11 +74,11 @@ mod tests {
     fn standard_provider_matches_each_network() {
         assert_eq!(
             ProviderConfig::standard(Network::Mainnet).toncenter_base_url,
-            "https://toncenter.com/api/v2"
+            "https://toncenter.com"
         );
         assert_eq!(
             ProviderConfig::standard(Network::Testnet).toncenter_base_url,
-            "https://testnet.toncenter.com/api/v2"
+            "https://testnet.toncenter.com"
         );
     }
 }
