@@ -44,16 +44,24 @@ pub(crate) fn run_command(command: &mut Command) -> Result<()> {
     }
 }
 
-pub(crate) fn build_engine_cdylib(root: &Path, target_dir: &Path) -> Result<PathBuf> {
+pub(crate) fn bindings_target_dir(root: &Path) -> PathBuf {
+    root.join("target/bindings-host")
+}
+
+pub(crate) fn bindgen_target_dir(root: &Path) -> PathBuf {
+    root.join("target/bindgen-tools")
+}
+
+pub(crate) fn build_engine_cdylib(root: &Path) -> Result<PathBuf> {
+    let target_dir = bindings_target_dir(root);
     run_command(
-        cargo_command(root, target_dir)
+        cargo_command(root, &target_dir)
             .arg("build")
             .arg("--manifest-path")
             .arg(root.join("Cargo.toml"))
-            .arg("--release")
             .arg("--locked"),
     )?;
-    let library = engine_cdylib_path(target_dir);
+    let library = engine_cdylib_path(&target_dir);
     if !library.is_file() {
         bail!(
             "Cargo did not produce expected cdylib: {}",
@@ -69,7 +77,7 @@ fn engine_cdylib_path(target_dir: &Path) -> PathBuf {
         env::consts::DLL_PREFIX,
         env::consts::DLL_SUFFIX,
     );
-    target_dir.join("release").join(filename)
+    target_dir.join("debug").join(filename)
 }
 
 #[cfg(test)]
@@ -89,7 +97,7 @@ mod tests {
 
         assert_eq!(
             engine_cdylib_path(Path::new("target")),
-            Path::new("target/release").join(expected),
+            Path::new("target/debug").join(expected),
         );
     }
 }

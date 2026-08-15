@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::files::{copy_generated, normalize_file, require_file};
 use crate::paths::repository_root;
-use crate::process::{build_engine_cdylib, cargo_command, run_command};
+use crate::process::{bindgen_target_dir, build_engine_cdylib, cargo_command, run_command};
 
 pub(crate) fn generate_kotlin(check: bool) -> Result<()> {
     let root = repository_root()?;
@@ -17,13 +17,12 @@ pub(crate) fn generate_kotlin(check: bool) -> Result<()> {
     let generated = temporary.path().join("generated");
     fs::create_dir_all(&generated).context("failed to create Kotlin generation directory")?;
 
-    let engine_library = build_engine_cdylib(&root, &root.join("target/kotlin-bindings"))?;
+    let engine_library = build_engine_cdylib(&root)?;
     run_command(
-        cargo_command(&root, &root.join("kotlin-bindgen/target"))
+        cargo_command(&root, &bindgen_target_dir(&root))
             .arg("run")
             .arg("--manifest-path")
             .arg(root.join("kotlin-bindgen/Cargo.toml"))
-            .arg("--release")
             .arg("--locked")
             .arg("--")
             .arg("generate")
