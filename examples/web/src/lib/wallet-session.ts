@@ -105,7 +105,10 @@ export class WalletSession {
 
   async previewSend(destination: string, amountNanograms: string): Promise<SendPreview> {
     this.assertOpen()
-    return await this.client.previewSend({destination, amountNanograms})
+    return await this.client.previewSend({
+      destination,
+      amount: {kind: "exact", nanograms: amountNanograms},
+    })
   }
 
   async cancelSendPreview(): Promise<void> {
@@ -119,7 +122,7 @@ export class WalletSession {
       return await this.client.send({
         operationId: crypto.randomUUID(),
         destination,
-        amountNanograms,
+        amount: {kind: "exact", nanograms: amountNanograms},
         secretRef: this.descriptor.secretRef,
       })
     } catch (cause) {

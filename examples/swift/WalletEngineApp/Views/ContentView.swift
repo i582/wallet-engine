@@ -1533,7 +1533,7 @@ private struct SendWalletView: View {
                     SendRequest(
                         operationId: UUID().uuidString.lowercased(),
                         destination: normalizedDestination,
-                        amountNanograms: nanograms,
+                        amount: .exact(nanograms: nanograms),
                         secretRef: descriptor.secretRef
                     )
                 )

@@ -8,6 +8,7 @@ import java.math.BigInteger
 data class StoredWallet(
     val recordId: String,
     val address: String,
+    val publicKey: ByteArray,
     val name: String,
     val network: Network,
     val secretRef: String,
@@ -17,6 +18,7 @@ data class StoredWallet(
     fun descriptor(): WalletDescriptor = WalletDescriptor(
         recordId = recordId,
         address = address,
+        publicKey = publicKey,
         network = network,
         secretRef = ProtectedSecretRef(secretRef),
     )

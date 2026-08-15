@@ -27,6 +27,10 @@ nonisolated struct AppleWalletEnvironment: Sendable {
         wallet: StoredWallet,
         network: Network? = nil
     ) throws -> WalletClient {
+        guard let publicKey = wallet.publicKey, publicKey.count == 32 else {
+            throw WalletSessionError.missingPublicKey
+        }
+
         // Rust call identifiers are unique only within one WalletClient.
         // Keep the host cancellation registry client-scoped so a retiring
         // client's late cancel cannot cancel an identically numbered call in
@@ -35,6 +39,7 @@ nonisolated struct AppleWalletEnvironment: Sendable {
         return try WalletClient(
             config: config(
                 wallet: wallet,
+                publicKey: publicKey,
                 network: network ?? wallet.network.engineValue
             ),
             httpHost: httpHost,
@@ -45,12 +50,14 @@ nonisolated struct AppleWalletEnvironment: Sendable {
     @MainActor
     func config(
         wallet: StoredWallet,
+        publicKey: Data,
         network: Network
     ) -> WalletClientConfig {
         let isMainnet = network == .mainnet
         return WalletClientConfig(
             recordId: wallet.recordId,
             address: wallet.address,
+            publicKey: publicKey,
             network: network,
             sendValiditySeconds: 300,
             providers: ProviderConfig(
@@ -314,6 +321,7 @@ final class WalletSession {
 }
 
 enum WalletSessionError: Error, Sendable {
+    case missingPublicKey
     case shutDown
     case superseded
 }

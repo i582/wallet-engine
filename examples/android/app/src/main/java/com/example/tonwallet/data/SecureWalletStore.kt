@@ -43,6 +43,10 @@ class SecureWalletStore(private val context: Context) : WalletPlatformHost {
                     StoredWallet(
                         recordId = item.getString("record_id"),
                         address = item.getString("address"),
+                        publicKey = item.optString("public_key_base64")
+                            .takeIf(String::isNotEmpty)
+                            ?.let { Base64.decode(it, Base64.NO_WRAP) }
+                            ?: ByteArray(0),
                         name = item.getString("name"),
                         network = Network.valueOf(item.getString("network")),
                         secretRef = item.getString("secret_ref"),
@@ -58,6 +62,7 @@ class SecureWalletStore(private val context: Context) : WalletPlatformHost {
         val wallet = StoredWallet(
             recordId = descriptor.recordId,
             address = descriptor.address,
+            publicKey = descriptor.publicKey,
             name = name.trim().ifBlank { "My Wallet" }.take(32),
             network = descriptor.network,
             secretRef = descriptor.secretRef.value,
@@ -158,6 +163,10 @@ class SecureWalletStore(private val context: Context) : WalletPlatformHost {
                 JSONObject()
                     .put("record_id", wallet.recordId)
                     .put("address", wallet.address)
+                    .put(
+                        "public_key_base64",
+                        Base64.encodeToString(wallet.publicKey, Base64.NO_WRAP),
+                    )
                     .put("name", wallet.name)
                     .put("network", wallet.network.name)
                     .put("secret_ref", wallet.secretRef),

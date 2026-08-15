@@ -8,6 +8,7 @@ import org.ton.wallet.engine.ImportWalletRequest
 import org.ton.wallet.engine.Network
 import org.ton.wallet.engine.ProviderConfig
 import org.ton.wallet.engine.ResourcePhase
+import org.ton.wallet.engine.SendAmount
 import org.ton.wallet.engine.SendPhase
 import org.ton.wallet.engine.SendRequest
 import org.ton.wallet.engine.WalletClient
@@ -92,7 +93,7 @@ class WalletRepository(private val store: SecureWalletStore) {
             SendRequest(
                 operationId = UUID.randomUUID().toString().lowercase(),
                 destination = destination.trim(),
-                amountNanograms = amountNanograms,
+                amount = SendAmount.Exact(nanograms = amountNanograms),
                 secretRef = wallet.descriptor().secretRef,
             ),
         )
@@ -137,6 +138,7 @@ class WalletRepository(private val store: SecureWalletStore) {
                 config = WalletClientConfig(
                     recordId = wallet.recordId,
                     address = wallet.address,
+                    publicKey = wallet.publicKey,
                     network = wallet.network,
                     sendValiditySeconds = SEND_VALIDITY_SECONDS,
                     providers = ProviderConfig(

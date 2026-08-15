@@ -6,8 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use num_bigint::BigUint;
 use wallet_engine::{
-    CreateWalletRequest, CreatedWallet, ImportWalletRequest, Network, ProviderConfig, SendPhase,
-    SendPreviewRequest, SendRequest, WalletClient, WalletClientConfig, WalletDescriptor,
+    CreateWalletRequest, CreatedWallet, ImportWalletRequest, Network, ProviderConfig, SendAmount,
+    SendPhase, SendPreviewRequest, SendRequest, WalletClient, WalletClientConfig, WalletDescriptor,
     WalletLifecycle, WalletSnapshot,
 };
 
@@ -362,10 +362,10 @@ impl App {
         };
 
         self.status = Some("Checking transfer…".to_owned());
-        let preview = match client
+        match client
             .preview_send(SendPreviewRequest {
                 destination: self.send_destination.clone(),
-                amount_nanograms: amount_nanograms.clone(),
+                amount: SendAmount::exact(amount_nanograms.clone()),
             })
             .await
         {
@@ -380,7 +380,7 @@ impl App {
         let request = SendRequest {
             operation_id: new_id("send"),
             destination: self.send_destination.clone(),
-            amount_nanograms,
+            amount: SendAmount::exact(amount_nanograms),
             secret_ref: descriptor.secret_ref,
         };
         match client.send(request).await {

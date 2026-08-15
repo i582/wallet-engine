@@ -191,21 +191,33 @@ export interface JournalCompareExchangeResult {
   readonly current?: JournalRecord
 }
 
+/** The amount policy applied by the wallet contract. */
+export type SendAmount =
+  | {
+      readonly kind: "exact"
+      /** Exact positive value in canonical base-10 nanograms. */
+      readonly nanograms: string
+    }
+  | {
+      /** Transfer the complete remaining balance after network fees. */
+      readonly kind: "all"
+    }
+
 export interface SendRequest {
   readonly operationId: string
   readonly destination: string
-  readonly amountNanograms: string
+  readonly amount: SendAmount
   readonly secretRef: ProtectedSecretRef
 }
 
 export interface SendPreviewRequest {
   readonly destination: string
-  readonly amountNanograms: string
+  readonly amount: SendAmount
 }
 
 export interface SendPreview {
   readonly destination: string
-  readonly amountNanograms: string
+  readonly amount: SendAmount
   readonly validUntil: number
   /** Complete fake-signed external-message BOC in standard padded Base64. */
   readonly messageBocBase64: string

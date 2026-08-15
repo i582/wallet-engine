@@ -23,6 +23,7 @@ nonisolated extension StoredWallet {
         self.init(
             recordId: descriptor.recordId,
             address: descriptor.address,
+            publicKey: descriptor.publicKey,
             name: name,
             network: StoredWalletNetwork(engine: descriptor.network),
             secretRef: descriptor.secretRef.value
@@ -31,13 +32,16 @@ nonisolated extension StoredWallet {
 
     var descriptor: WalletDescriptor? {
         guard !recordId.isEmpty,
-              !secretRef.isEmpty else {
+              !secretRef.isEmpty,
+              let publicKey,
+              publicKey.count == 32 else {
             return nil
         }
 
         return WalletDescriptor(
             recordId: recordId,
             address: address,
+            publicKey: publicKey,
             network: network.engineValue,
             secretRef: ProtectedSecretRef(value: secretRef)
         )
