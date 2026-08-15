@@ -49,9 +49,11 @@ impl WalletClient {
                 next_id: 1,
                 refresh_generation: 0,
                 pagination_generation: 0,
+                preview_generation: 0,
                 send_generation: 0,
                 active_refresh: None,
                 active_pagination: None,
+                active_preview: None,
                 active_send: None,
                 send_commit_started: false,
                 send_workflow: None,
@@ -157,6 +159,7 @@ fn prepare_shutdown(
 ) -> Result<(Vec<crate::HttpRequestId>, Vec<SnapshotWaiter>), WalletClientError> {
     let has_active_work = state.active_refresh.is_some()
         || state.active_pagination.is_some()
+        || state.active_preview.is_some()
         || state.active_send.is_some();
     if has_active_work && state.snapshot.revision == u64::MAX {
         return Err(WalletClientError::IdentifierExhausted);
@@ -175,6 +178,10 @@ fn prepare_shutdown(
     if let Some((_, request_id)) = state.active_pagination.take() {
         request_ids.push(request_id);
         state.snapshot.activity_pagination_resource = ResourceState::idle();
+    }
+
+    if let Some((_, preview_request_ids)) = state.active_preview.take() {
+        request_ids.extend(preview_request_ids);
     }
 
     if let Some((_, send_request_ids)) = state.active_send.take() {

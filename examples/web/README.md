@@ -4,6 +4,13 @@ This example shows the smallest complete browser flow for `@ton/wallet-engine`.
 It creates a Wallet V5R1 testnet wallet. Then it loads the account and activity
 snapshot through the browser host callbacks.
 
+The send screen calls `previewSend` before confirmation. It shows Toncenter
+fees and actions when they are available. A preview failure displays a warning
+and keeps the **Send anyway** action available.
+
+The later `send` call loads a new sequence number and builds a new signed
+message. It does not reuse the preview message.
+
 The interface also reads the public GRAM/USD market rate from TonAPI. This
 example-only request is not part of Wallet Engine or its host callback API.
 

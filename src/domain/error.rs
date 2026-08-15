@@ -175,6 +175,9 @@ pub enum WalletClientError {
     /// Another transfer is already being prepared or submitted by this client.
     #[error("another send operation is already in progress")]
     SendAlreadyInProgress,
+    /// Another send preview is already fetching or emulating current chain state.
+    #[error("another send preview is already in progress")]
+    SendPreviewAlreadyInProgress,
     /// A durable prior submission has no definite provider outcome.
     ///
     /// The caller must not create a replacement transfer because the stored
@@ -208,6 +211,29 @@ pub enum WalletClientError {
     /// The protected secret cannot be decoded as a valid wallet recovery phrase.
     #[error("the protected wallet secret is invalid")]
     InvalidProtectedSecret,
+    /// Toncenter could not emulate the signed transfer before submission.
+    #[error("transfer emulation failed: {diagnostic}")]
+    EmulationFailed {
+        /// A bounded provider or transport diagnostic that contains no secret material.
+        diagnostic: String,
+    },
+    /// The emulator ran correctly, but the current wallet state did not accept
+    /// the external message, for example because its seqno became stale.
+    #[error("emulation message was not accepted: {diagnostic}")]
+    EmulationMessageNotAccepted {
+        /// A bounded provider diagnostic that contains no secret material.
+        diagnostic: String,
+    },
+    /// Emulation proved that the source wallet transaction would not complete.
+    #[error("transfer emulation rejected the message: {diagnostic}")]
+    EmulationRejected {
+        /// A bounded explanation of the failed transaction phase.
+        diagnostic: String,
+        /// The TVM compute exit code, when Toncenter returned one.
+        compute_exit_code: Option<i32>,
+        /// The action-phase result code, when Toncenter returned one.
+        action_result_code: Option<i32>,
+    },
     /// A send failed before submission became ambiguous.
     #[error("send failed: {diagnostic}")]
     SendFailed {

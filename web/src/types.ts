@@ -14,6 +14,7 @@ export interface ProviderConfig {
 export interface WalletClientConfig {
   readonly recordId: string
   readonly address: string
+  readonly publicKey: number[]
   readonly network: Network
   readonly sendValiditySeconds: number
   readonly providers: ProviderConfig
@@ -105,6 +106,27 @@ export interface SendSnapshot {
   readonly errorMessage?: string
 }
 
+export interface SendEmulationAction {
+  /** Validated action identifier in standard padded Base64. */
+  readonly actionId: Base64Hash
+  readonly kind: string
+  readonly succeeded: boolean
+  readonly accounts: string[]
+  /** Validated transaction hashes in standard padded Base64. */
+  readonly transactionHashes: Base64Hash[]
+  readonly detailsJson: string
+}
+
+export interface SendEmulation {
+  readonly mcBlockSeqno: number
+  readonly walletFeesNanograms: string
+  readonly traceFeesNanograms: string
+  readonly transactionCount: number
+  readonly actions: SendEmulationAction[]
+  readonly traceSucceeded: boolean
+  readonly isIncomplete: boolean
+}
+
 export interface WalletSnapshot {
   readonly revision: number
   readonly recordId: string
@@ -176,6 +198,20 @@ export interface SendRequest {
   readonly secretRef: ProtectedSecretRef
 }
 
+export interface SendPreviewRequest {
+  readonly destination: string
+  readonly amountNanograms: string
+}
+
+export interface SendPreview {
+  readonly destination: string
+  readonly amountNanograms: string
+  readonly validUntil: number
+  /** Complete fake-signed external-message BOC in standard padded Base64. */
+  readonly messageBocBase64: string
+  readonly emulation: SendEmulation
+}
+
 export interface SendResult {
   readonly operationId: string
   /** Normalized signed external-message hash in standard padded Base64. */
@@ -186,6 +222,7 @@ export interface SendResult {
 export interface WalletDescriptor {
   readonly recordId: string
   readonly address: string
+  readonly publicKey: number[]
   readonly network: Network
   readonly secretRef: ProtectedSecretRef
 }

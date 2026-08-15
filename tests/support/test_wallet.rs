@@ -1,3 +1,5 @@
+use ton::ton_wallet::Mnemonic;
+
 /// A stable mnemonic and the V5R1 testnet address derived from it.
 ///
 /// Keep these values together. Changing one without the other would make
@@ -24,6 +26,15 @@ impl TestWalletFixture {
 
     pub(crate) const fn testnet_v5_address(&self) -> &'static str {
         Self::TESTNET_V5_ADDRESS
+    }
+
+    pub(crate) fn public_key(&self) -> Vec<u8> {
+        Mnemonic::from_str(Self::RECOVERY_PHRASE, None)
+            .expect("test recovery phrase must remain valid")
+            .to_key_pair()
+            .expect("test recovery phrase must derive a key pair")
+            .public_key
+            .to_vec()
     }
 
     pub(crate) const fn other_recovery_phrase_bytes(&self) -> &'static [u8] {

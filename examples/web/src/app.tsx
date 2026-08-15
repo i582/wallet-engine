@@ -1,4 +1,4 @@
-import type {SendResult, WalletSnapshot} from "@ton/wallet-engine"
+import type {SendPreview, SendResult, WalletSnapshot} from "@ton/wallet-engine"
 import {type ReactElement, useEffect, useState} from "react"
 
 import {RecoveryScreen} from "@/components/recovery-screen"
@@ -138,6 +138,20 @@ export function App(): ReactElement {
     setError(undefined)
   }
 
+  async function previewTransfer(
+    destination: string,
+    amountNanograms: string,
+  ): Promise<SendPreview> {
+    if (!session) {
+      throw new Error("The wallet is not open")
+    }
+    return await session.previewSend(destination, amountNanograms)
+  }
+
+  async function cancelTransferPreview(): Promise<void> {
+    await session?.cancelSendPreview()
+  }
+
   async function sendTransfer(destination: string, amountNanograms: string): Promise<SendResult> {
     if (!session) {
       throw new Error("The wallet is not open")
@@ -167,6 +181,8 @@ export function App(): ReactElement {
         snapshot={snapshot}
         onForget={forgetWallet}
         onLoadMore={loadMoreActivity}
+        onCancelSendPreview={cancelTransferPreview}
+        onPreviewSend={previewTransfer}
         onRefresh={refreshWallet}
         onSend={sendTransfer}
       />

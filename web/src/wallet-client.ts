@@ -5,6 +5,8 @@ import {initializeWalletEngine} from "./initialize"
 import type {BrowserPlatformHost} from "./platform-host"
 import type {
   SendRequest,
+  SendPreview,
+  SendPreviewRequest,
   SendResult,
   WalletClientConfig,
   WalletSnapshot,
@@ -65,6 +67,16 @@ export class WalletClient {
   async send(request: SendRequest): Promise<SendResult> {
     this.assertOpen()
     return (await this.raw.send(request)) as SendResult
+  }
+
+  async previewSend(request: SendPreviewRequest): Promise<SendPreview> {
+    this.assertOpen()
+    return (await this.raw.previewSend(request)) as SendPreview
+  }
+
+  async cancelSendPreview(): Promise<void> {
+    this.assertOpen()
+    await this.raw.cancelSendPreview()
   }
 
   async cancelSend(): Promise<void> {

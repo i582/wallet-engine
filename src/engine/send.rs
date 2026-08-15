@@ -21,9 +21,10 @@ use super::provider::parse_account;
 impl WalletClient {
     /// Signs, records, and submits one V5R1 transfer.
     ///
-    /// The engine first loads fresh account state. It then authorizes mnemonic
-    /// access and signs inside Rust. Before submission, it stores the exact BOC
-    /// with compare-and-swap.
+    /// A preceding [`Self::preview_send`] is an informational UI step, not a
+    /// prerequisite. This method independently reloads account state and seqno,
+    /// calculates a new validity window, and builds the real message only after
+    /// protected-secret authorization.
     ///
     /// A transport error after submission produces `SubmissionUnknown`. Do not
     /// create a replacement transfer for the same funds. This crate does not
@@ -153,6 +154,26 @@ impl WalletClient {
             observed_at: account.sync_utime.unwrap_or_default(),
         };
 
+        // Use synchronized provider time for the real signature. A UI preview
+        // can be several blocks old by the time the user confirms it.
+        let provider_time = account.sync_utime.ok_or_else(|| {
+            self.send_failed_error(
+                generation,
+                "fresh account state did not include provider synchronization time",
+            )
+        })?;
+        let provider_time = u32::try_from(provider_time).map_err(|_| {
+            self.send_failed_error(
+                generation,
+                "provider synchronization time does not fit the wallet timestamp field",
+            )
+        })?;
+        let valid_until = provider_time
+            .checked_add(config.send_validity_seconds)
+            .ok_or_else(|| {
+                self.send_failed_error(generation, "transfer expiration timestamp overflow")
+            })?;
+
         let directive = workflow
             .fresh_account_loaded(fresh.clone())
             .map_err(|error| self.send_workflow_error(generation, error))?;
@@ -198,26 +219,6 @@ impl WalletClient {
 
         self.publish_send_workflow(generation, &workflow)?;
 
-        // Base the expiration on the provider's synchronized chain view. Device clocks can be
-        // wrong, while this timestamp belongs to the same fresh state used for status and seqno.
-        let provider_time = account.sync_utime.ok_or_else(|| {
-            self.send_failed_error(
-                generation,
-                "fresh account state did not include provider synchronization time",
-            )
-        })?;
-        let provider_time = u32::try_from(provider_time).map_err(|_| {
-            self.send_failed_error(
-                generation,
-                "provider synchronization time does not fit the wallet timestamp field",
-            )
-        })?;
-        let valid_until = provider_time
-            .checked_add(config.send_validity_seconds)
-            .ok_or_else(|| {
-                self.send_failed_error(generation, "transfer expiration timestamp overflow")
-            })?;
-
         let prepared = prepare_transfer(
             secret.as_slice(),
             &config.record_id,
@@ -231,7 +232,6 @@ impl WalletClient {
             self.send_failed_error(generation, format!("failed to prepare transfer: {error}"))
         })?;
 
-        let summary = prepared.public_summary(config.network);
         let submit_request =
             build_send_boc_request(&config, submit_request_id, prepared.signed_boc.as_bytes())
                 .map_err(|_| {
@@ -331,7 +331,6 @@ impl WalletClient {
                 state.next_revision()?;
             }
         }
-        let _ = summary;
         Ok(SendResult {
             operation_id: request.operation_id,
             message_hash,

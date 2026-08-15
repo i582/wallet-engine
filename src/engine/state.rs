@@ -14,6 +14,7 @@ use super::provider::{ActivityPageCursor, ActivityRecord};
 pub(super) enum OperationFamily {
     Refresh,
     Pagination,
+    Preview,
     Send,
 }
 
@@ -58,6 +59,10 @@ pub(super) struct State {
     /// This counter separates a cancelled page response from a later page request.
     pub(super) pagination_generation: u64,
 
+    /// The generation of the newest send preview.
+    /// It prevents a cancelled preview response from completing a later preview.
+    pub(super) preview_generation: u64,
+
     /// The generation of the newest send operation.
     /// A send result can mutate state only while this generation is active.
     pub(super) send_generation: u64,
@@ -70,6 +75,10 @@ pub(super) struct State {
     /// The active older-page load as `(generation, request_id)`.
     /// Only one page request can run. A refresh removes and cancels this entry.
     pub(super) active_pagination: Option<(u64, HttpRequestId)>,
+
+    /// The active send preview as `(generation, active_request_ids)`.
+    /// Preview requests never read protected secrets or change the send snapshot.
+    pub(super) active_preview: Option<(u64, Vec<HttpRequestId>)>,
 
     /// The active send as `(generation, active_request_ids)`.
     /// The list contains only HTTP requests that the host currently owns.
@@ -157,6 +166,10 @@ impl State {
                 .is_some_and(|active| active.0 == generation),
             OperationFamily::Pagination => self
                 .active_pagination
+                .is_some_and(|active| active.0 == generation),
+            OperationFamily::Preview => self
+                .active_preview
+                .as_ref()
                 .is_some_and(|active| active.0 == generation),
             OperationFamily::Send => self
                 .active_send

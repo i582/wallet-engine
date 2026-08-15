@@ -7,7 +7,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc --noEmit && vite build",
-    "dev": "vite",
+    "dev": "vite --port 4999",
     "fmt": "biome format --write .",
     "fmt:check": "biome format .",
     "lint": "biome check --formatter-enabled=false .",

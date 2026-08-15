@@ -14,6 +14,7 @@ describe("BrowserWalletStore", () => {
     const descriptor: WalletDescriptor = {
       recordId: "example-record",
       address: "0:example",
+      publicKey: Array.from({length: 32}, () => 0),
       network: "testnet",
       secretRef: {value: "example-secret"},
     }

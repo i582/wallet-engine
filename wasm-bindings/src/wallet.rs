@@ -90,6 +90,25 @@ impl WalletClient {
         to_value(&result)
     }
 
+    #[wasm_bindgen(js_name = previewSend)]
+    pub async fn preview_send(&self, request: JsValue) -> Result<JsValue, JsValue> {
+        let request = from_value(request)?;
+        let preview = self
+            .inner
+            .preview_send(request)
+            .await
+            .map_err(|error| engine_error(&error))?;
+        to_value(&preview)
+    }
+
+    #[wasm_bindgen(js_name = cancelSendPreview)]
+    pub async fn cancel_send_preview(&self) -> Result<(), JsValue> {
+        self.inner
+            .cancel_send_preview()
+            .await
+            .map_err(|error| engine_error(&error))
+    }
+
     #[wasm_bindgen(js_name = cancelSend)]
     pub async fn cancel_send(&self) -> Result<(), JsValue> {
         self.inner

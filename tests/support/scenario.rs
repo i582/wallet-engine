@@ -4,11 +4,16 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use futures::executor::block_on;
+use ton::ton_core::cell::TonCell;
+use ton::ton_core::traits::tlb::TLB;
 use wallet_engine::{
     AccountStatus, ActivityCursor, DomainError, Network, ProtectedSecretRef, ProviderConfig,
-    ResourcePhase, SendPhase, SendRequest, SendResult, WalletClient, WalletClientConfig,
-    WalletClientError, WalletHttpHost, WalletOperationOutcome, WalletUpdate,
+    ResourcePhase, SendPhase, SendPreview, SendPreviewRequest, SendRequest, SendResult,
+    WalletClient, WalletClientConfig, WalletClientError, WalletHttpHost, WalletOperationOutcome,
+    WalletUpdate,
 };
 
 use super::host::{MemoryPlatformHost, PlatformCallKind, RequestKind, ScenarioHttpHost};
@@ -71,6 +76,8 @@ pub(crate) const fn provider() -> ProviderFixture {
         account_retry_after_seconds: None,
         activity_malformed: false,
         account_redirected: false,
+        emulation_status: 200,
+        emulation_rejected: false,
     }
 }
 
@@ -95,6 +102,10 @@ pub(crate) fn send() -> SendAction {
         destination: Destination::SelfWallet,
         amount_nanograms: NANOGRAMS_PER_GRAM.to_string(),
     }
+}
+
+pub(crate) const fn preview_send(action: SendAction) -> UserAction {
+    UserAction::PreviewSend(action)
 }
 
 pub(crate) const fn refresh_wallet() -> UserAction {
@@ -139,6 +150,13 @@ pub(crate) fn pause_next_seqno_request(name: impl Into<String>) -> ControlStep {
     ControlStep::PauseRequest {
         name: name.into(),
         kind: RequestKind::Seqno,
+    }
+}
+
+pub(crate) fn pause_next_emulation_request(name: impl Into<String>) -> ControlStep {
+    ControlStep::PauseRequest {
+        name: name.into(),
+        kind: RequestKind::Emulation,
     }
 }
 
@@ -216,6 +234,10 @@ pub(crate) const fn cancel_send() -> UserAction {
     UserAction::CancelSend
 }
 
+pub(crate) const fn cancel_send_preview() -> UserAction {
+    UserAction::CancelSendPreview
+}
+
 pub(crate) fn resume(name: impl Into<String>, outcome: SubmissionOutcome) -> ControlStep {
     ControlStep::ResumeSubmission {
         name: name.into(),
@@ -260,6 +282,18 @@ pub(crate) fn error(name: impl Into<String>, expected: WalletClientError) -> Exp
     Expectation::Error {
         operation: name.into(),
         expected,
+    }
+}
+
+pub(crate) fn emulation_failed(name: impl Into<String>) -> Expectation {
+    Expectation::EmulationFailed {
+        operation: name.into(),
+    }
+}
+
+pub(crate) fn emulation_message_not_accepted(name: impl Into<String>) -> Expectation {
+    Expectation::EmulationMessageNotAccepted {
+        operation: name.into(),
     }
 }
 
@@ -529,6 +563,8 @@ pub(crate) struct ProviderFixture {
     pub(super) account_retry_after_seconds: Option<u64>,
     pub(super) activity_malformed: bool,
     pub(super) account_redirected: bool,
+    pub(super) emulation_status: u16,
+    pub(super) emulation_rejected: bool,
 }
 
 pub(crate) struct ActivityFixture {
@@ -564,6 +600,18 @@ impl ProviderFixture {
     #[must_use]
     pub(crate) const fn account_redirects(mut self) -> Self {
         self.account_redirected = true;
+        self
+    }
+
+    #[must_use]
+    pub(crate) const fn emulation_fails(mut self, status: u16) -> Self {
+        self.emulation_status = status;
+        self
+    }
+
+    #[must_use]
+    pub(crate) const fn emulation_rejects_transfer(mut self) -> Self {
+        self.emulation_rejected = true;
         self
     }
 }
@@ -646,7 +694,9 @@ pub(crate) struct ActionStep {
 
 pub(crate) enum UserAction {
     Send(SendAction),
+    PreviewSend(SendAction),
     CancelSend,
+    CancelSendPreview,
     Refresh,
     CancelRefresh,
     LoadMoreActivity,
@@ -788,12 +838,25 @@ pub(crate) enum Expectation {
         operation: String,
         expected: WalletClientError,
     },
+    EmulationFailed {
+        operation: String,
+    },
+    EmulationMessageNotAccepted {
+        operation: String,
+    },
     Success {
         operation: String,
     },
     ResultPhase {
         operation: String,
         phase: SendPhase,
+    },
+    ResultPreviewed {
+        operation: String,
+    },
+    ResultEmulationAction {
+        operation: String,
+        kind: String,
     },
     UpdateOutcome {
         operation: String,
@@ -923,6 +986,12 @@ impl UpdateExpectation {
 }
 
 impl ResultExpectation {
+    pub(crate) fn previewed(self) -> Expectation {
+        Expectation::ResultPreviewed {
+            operation: self.name,
+        }
+    }
+
     #[must_use]
     pub(crate) fn submitted(self) -> Expectation {
         self.phase(SendPhase::Submitted)
@@ -936,6 +1005,13 @@ impl ResultExpectation {
     #[must_use]
     pub(crate) fn submission_unknown(self) -> Expectation {
         self.phase(SendPhase::SubmissionUnknown)
+    }
+
+    pub(crate) fn emulated_action(self, kind: impl Into<String>) -> Expectation {
+        Expectation::ResultEmulationAction {
+            operation: self.name,
+            kind: kind.into(),
+        }
     }
 
     fn phase(self, phase: SendPhase) -> Expectation {
@@ -1079,6 +1155,7 @@ struct ScenarioRunner {
 #[derive(Debug)]
 enum OperationResult {
     Send(Result<SendResult, WalletClientError>),
+    Preview(Result<SendPreview, WalletClientError>),
     Update(Box<Result<WalletUpdate, WalletClientError>>),
     Snapshot(Box<Result<wallet_engine::WalletSnapshot, WalletClientError>>),
     Unit(Result<(), WalletClientError>),
@@ -1088,10 +1165,14 @@ enum OperationResult {
 impl OperationResult {
     fn error(&self) -> Option<&WalletClientError> {
         match self {
-            Self::Send(Err(error)) | Self::Unit(Err(error)) => Some(error),
+            Self::Send(Err(error)) | Self::Preview(Err(error)) | Self::Unit(Err(error)) => {
+                Some(error)
+            }
             Self::Update(result) => result.as_ref().as_ref().err(),
             Self::Snapshot(result) => result.as_ref().as_ref().err(),
-            Self::Send(Ok(_)) | Self::Unit(Ok(())) | Self::Harness(_) => None,
+            Self::Send(Ok(_)) | Self::Preview(Ok(_)) | Self::Unit(Ok(())) | Self::Harness(_) => {
+                None
+            }
         }
     }
 }
@@ -1129,6 +1210,8 @@ impl ScenarioRunner {
                         account_retry_after_seconds: fixture.account_retry_after_seconds,
                         activity_malformed: fixture.activity_malformed,
                         account_redirected: fixture.account_redirected,
+                        emulation_status: fixture.emulation_status,
+                        emulation_rejected: fixture.emulation_rejected,
                     };
                 }
                 Step::Given(Given::Activity(fixture)) => pages.clone_from(&fixture.pages),
@@ -1203,6 +1286,7 @@ impl ScenarioRunner {
             WalletClientConfig {
                 record_id: TEST_RECORD_ID.to_owned(),
                 address: test_wallet().testnet_v5_address().to_owned(),
+                public_key: test_wallet().public_key(),
                 network: Network::Testnet,
                 send_validity_seconds,
                 providers: ProviderConfig {
@@ -1331,6 +1415,20 @@ impl ScenarioRunner {
                 let client = self.client.clone();
                 let (sender, receiver) = channel();
                 let thread = match step.action {
+                    UserAction::PreviewSend(action) => {
+                        let destination = match action.destination {
+                            Destination::SelfWallet => self.address.clone(),
+                            Destination::Address(address) => address,
+                        };
+                        let request = SendPreviewRequest {
+                            destination,
+                            amount_nanograms: action.amount_nanograms,
+                        };
+                        std::thread::spawn(move || {
+                            let result = block_on(client.preview_send(request));
+                            let _ = sender.send(OperationResult::Preview(result));
+                        })
+                    }
                     UserAction::Send(action) => {
                         let destination = match action.destination {
                             Destination::SelfWallet => self.address.clone(),
@@ -1349,6 +1447,10 @@ impl ScenarioRunner {
                     }
                     UserAction::CancelSend => std::thread::spawn(move || {
                         let result = block_on(client.cancel_send());
+                        let _ = sender.send(OperationResult::Unit(result));
+                    }),
+                    UserAction::CancelSendPreview => std::thread::spawn(move || {
+                        let result = block_on(client.cancel_send_preview());
                         let _ = sender.send(OperationResult::Unit(result));
                     }),
                     UserAction::Refresh => std::thread::spawn(move || {
@@ -1504,6 +1606,40 @@ impl ScenarioRunner {
                     )),
                 }
             }
+            Expectation::EmulationFailed { operation } => {
+                self.finish_operation(&operation)?;
+                match self
+                    .results
+                    .get(&operation)
+                    .and_then(OperationResult::error)
+                {
+                    Some(WalletClientError::EmulationFailed { diagnostic })
+                        if !diagnostic.is_empty() =>
+                    {
+                        Ok(())
+                    }
+                    actual => Err(format!(
+                        "expected `{operation}` to return a nonempty EmulationFailed diagnostic\nactual: {actual:?}"
+                    )),
+                }
+            }
+            Expectation::EmulationMessageNotAccepted { operation } => {
+                self.finish_operation(&operation)?;
+                match self
+                    .results
+                    .get(&operation)
+                    .and_then(OperationResult::error)
+                {
+                    Some(WalletClientError::EmulationMessageNotAccepted { diagnostic })
+                        if !diagnostic.is_empty() =>
+                    {
+                        Ok(())
+                    }
+                    actual => Err(format!(
+                        "expected `{operation}` to return a nonempty EmulationMessageNotAccepted diagnostic\nactual: {actual:?}"
+                    )),
+                }
+            }
             Expectation::Success { operation } => {
                 self.finish_operation(&operation)?;
                 match self.results.get(&operation) {
@@ -1521,6 +1657,45 @@ impl ScenarioRunner {
                     Some(OperationResult::Send(Ok(result))) if result.phase == phase => Ok(()),
                     actual => Err(format!(
                         "expected `{operation}` to finish with {phase:?}\nactual: {actual:?}"
+                    )),
+                }
+            }
+            Expectation::ResultPreviewed { operation } => {
+                self.finish_operation(&operation)?;
+                match self.results.get(&operation) {
+                    Some(OperationResult::Preview(Ok(preview)))
+                        if preview.emulation.transaction_count > 0
+                            && !preview.emulation.wallet_fees_nanograms.is_empty()
+                            && !preview.emulation.trace_fees_nanograms.is_empty()
+                            && STANDARD
+                                .decode(&preview.message_boc_base64)
+                                .ok()
+                                .is_some_and(|bytes| TonCell::from_boc(bytes).is_ok()) =>
+                    {
+                        Ok(())
+                    }
+                    actual => Err(format!(
+                        "expected `{operation}` to return a validated emulation preview\nactual: {actual:?}"
+                    )),
+                }
+            }
+            Expectation::ResultEmulationAction { operation, kind } => {
+                self.finish_operation(&operation)?;
+                match self.results.get(&operation) {
+                    Some(OperationResult::Preview(Ok(preview)))
+                        if preview.emulation.actions.iter().any(|action| {
+                            action.kind == kind
+                                && action.succeeded
+                                && !action.accounts.is_empty()
+                                && !action.transaction_hashes.is_empty()
+                                && serde_json::from_str::<serde_json::Value>(&action.details_json)
+                                    .is_ok_and(|details| details.is_object())
+                        }) =>
+                    {
+                        Ok(())
+                    }
+                    actual => Err(format!(
+                        "expected `{operation}` to expose a successful `{kind}` emulation action with validated accounts, hashes, and JSON details\nactual: {actual:?}"
                     )),
                 }
             }

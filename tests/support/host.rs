@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use ton::block_tlb::Msg;
 use ton::ton_core::cell::TonCell;
 use ton::ton_core::traits::tlb::TLB;
+use ton::ton_core::types::TonAddress;
 use wallet_engine::{
     HttpHeader, HttpHostError, HttpHostErrorKind, HttpRequest, HttpRequestId, HttpResponse,
     JournalCompareExchange, JournalCompareExchangeResult, JournalHostError, JournalHostErrorKind,
@@ -34,6 +35,8 @@ struct HttpState {
     account_retry_after_seconds: Option<u64>,
     activity_malformed: bool,
     account_redirected: bool,
+    emulation_status: u16,
+    emulation_rejected: bool,
     activity_pages: Vec<usize>,
     activity_page_index: usize,
     next_activity_status: Option<u16>,
@@ -49,6 +52,7 @@ pub(crate) enum RequestKind {
     Account,
     Activity,
     Seqno,
+    Emulation,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -86,6 +90,8 @@ impl ScenarioHttpHost {
                 account_retry_after_seconds: None,
                 activity_malformed: false,
                 account_redirected: false,
+                emulation_status: 200,
+                emulation_rejected: false,
                 activity_pages: Vec::new(),
                 activity_page_index: 0,
                 next_activity_status: None,
@@ -114,6 +120,8 @@ impl ScenarioHttpHost {
         state.account_retry_after_seconds = fixture.account_retry_after_seconds;
         state.activity_malformed = fixture.activity_malformed;
         state.account_redirected = fixture.account_redirected;
+        state.emulation_status = fixture.emulation_status;
+        state.emulation_rejected = fixture.emulation_rejected;
     }
 
     pub(super) fn set_activity_pages(&self, pages: Vec<usize>) {
@@ -363,6 +371,88 @@ impl ScenarioHttpHost {
         )
     }
 
+    fn emulation_response(&self, request: &HttpRequest) -> Result<HttpResponse, HttpHostError> {
+        let body: Value = serde_json::from_slice(&request.body)
+            .map_err(|error| host_error(HttpHostErrorKind::Other, error.to_string()))?;
+        if body.get("ignore_chksig") != Some(&Value::Bool(true)) {
+            return Err(host_error(
+                HttpHostErrorKind::Other,
+                "emulation must explicitly ignore only signature verification",
+            ));
+        }
+        if body.get("with_actions") != Some(&Value::Bool(true)) {
+            return Err(host_error(
+                HttpHostErrorKind::Other,
+                "emulation must request high-level actions",
+            ));
+        }
+        let encoded_boc = body
+            .get("boc")
+            .and_then(Value::as_str)
+            .ok_or_else(|| host_error(HttpHostErrorKind::Other, "emulation has no BOC"))?;
+        let boc = STANDARD
+            .decode(encoded_boc)
+            .map_err(|error| host_error(HttpHostErrorKind::Other, error.to_string()))?;
+        let cell = TonCell::from_boc(boc)
+            .map_err(|error| host_error(HttpHostErrorKind::Other, error.to_string()))?;
+        let message = Msg::<TonCell>::from_cell(&cell)
+            .map_err(|error| host_error(HttpHostErrorKind::Other, error.to_string()))?;
+        let account = TonAddress::from_msg_address(message.dst())
+            .map_err(|error| host_error(HttpHostErrorKind::Other, error.to_string()))?
+            .to_string();
+
+        self.wait_at_request_gate(RequestKind::Emulation, request.id)?;
+        let state = lock(&self.state);
+        if state.emulation_status != 200 {
+            return Ok(response_with_status(
+                request,
+                state.emulation_status,
+                json!({ "error": "scripted emulation failure" }),
+            ));
+        }
+        let rejected = state.emulation_rejected;
+        drop(state);
+        Ok(response(
+            request,
+            json!({
+                "mc_block_seqno": 42,
+                "trace": { "tx_hash": "root", "children": [] },
+                "transactions": {
+                    "root": {
+                        "account": account,
+                        "total_fees": "1000000",
+                        "description": {
+                            "type": "ord",
+                            "aborted": rejected,
+                            "compute_ph": {
+                                "success": !rejected,
+                                "exit_code": if rejected { 33 } else { 0 }
+                            },
+                            "action": {
+                                "success": !rejected,
+                                "result_code": if rejected { 34 } else { 0 }
+                            }
+                        }
+                    }
+                },
+                "actions": [{
+                    "action_id": STANDARD.encode([1_u8; 32]),
+                    "type": "ton_transfer",
+                    "success": !rejected,
+                    "accounts": [account],
+                    "transactions": [STANDARD.encode([2_u8; 32])],
+                    "details": {
+                        "source": account,
+                        "destination": account,
+                        "value": "1000000000"
+                    }
+                }],
+                "rand_seed": "",
+                "is_incomplete": false
+            }),
+        ))
+    }
+
     fn submit_response(
         &self,
         request: &HttpRequest,
@@ -491,6 +581,9 @@ impl WalletHttpHost for ScenarioHttpHost {
                 return Err(host_error(kind, "scripted activity transport failure"));
             }
             return Ok(response);
+        }
+        if request.url.contains("/api/emulate/v1/emulateTrace") {
+            return self.emulation_response(&request);
         }
 
         let body: Value = serde_json::from_slice(&request.body)

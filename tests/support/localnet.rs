@@ -216,7 +216,13 @@ impl LocalnetHttpHost {
         )
         .map_err(|error| error.to_string())?;
         let destination = TonAddress::from_str(&self.address).map_err(|error| error.to_string())?;
-        let initial_seqno = localnet.seqno(&self.address)?;
+        // `runGetMethod` has no meaningful result for an uninitialized account.
+        // Treat its first wallet message as seqno zero and include StateInit.
+        let initial_seqno = if localnet.account_state(&self.address)? == "active" {
+            localnet.seqno(&self.address)?
+        } else {
+            0
+        };
 
         for offset in 0..count {
             let mut info = CommonMsgInfoInt::new(destination.to_msg_address(), TLBCoins::new(1));
@@ -228,7 +234,7 @@ impl LocalnetHttpHost {
                 .checked_add(offset)
                 .ok_or_else(|| "localnet spam seqno overflowed".to_owned())?;
             let external = wallet
-                .create_ext_in_msg(vec![internal], seqno, u32::MAX, false)
+                .create_ext_in_msg(vec![internal], seqno, u32::MAX, seqno == 0)
                 .map_err(|error| error.to_string())?;
             let boc = STANDARD.encode(external.to_boc().map_err(|error| error.to_string())?);
             let (status, body) = request(
@@ -389,6 +395,8 @@ impl WalletHttpHost for LocalnetHttpHost {
             .any(|window| window == b"runGetMethod")
         {
             self.wait_at_request_gate(RequestKind::Seqno, request.id)?;
+        } else if request.url.contains("/api/emulate/v1/emulateTrace") {
+            self.wait_at_request_gate(RequestKind::Emulation, request.id)?;
         }
         self.execute(&request)
     }
@@ -408,6 +416,28 @@ struct Localnet {
 }
 
 impl Localnet {
+    fn account_state(&self, address: &str) -> Result<String, String> {
+        let (status, body) = request(
+            &self.client,
+            Method::GET,
+            &format!(
+                "{}/api/v2/getAddressInformation?address={address}",
+                self.base_url
+            ),
+            None,
+        )?;
+        if !(200..300).contains(&status) {
+            return Err(format!(
+                "account state request failed with HTTP {status}: {body}"
+            ));
+        }
+
+        body.pointer("/result/state")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| format!("account state response has no state: {body}"))
+    }
+
     fn start() -> Result<Self, String> {
         let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
         std::fs::write(

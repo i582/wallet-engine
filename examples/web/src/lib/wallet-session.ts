@@ -2,6 +2,7 @@ import {
   BrowserPlatformHost,
   IndexedDbJournalStore,
   type RecoveryPhrase,
+  type SendPreview,
   type SendResult,
   type WalletDescriptor,
   WalletClient,
@@ -102,6 +103,16 @@ export class WalletSession {
     return (await this.client.loadMoreActivity()).snapshot
   }
 
+  async previewSend(destination: string, amountNanograms: string): Promise<SendPreview> {
+    this.assertOpen()
+    return await this.client.previewSend({destination, amountNanograms})
+  }
+
+  async cancelSendPreview(): Promise<void> {
+    this.assertOpen()
+    await this.client.cancelSendPreview()
+  }
+
   async send(destination: string, amountNanograms: string): Promise<SendResult> {
     this.assertOpen()
     try {
@@ -156,6 +167,7 @@ async function createClient(
     {
       recordId: descriptor.recordId,
       address: descriptor.address,
+      publicKey: descriptor.publicKey,
       network: descriptor.network,
       // This is application policy, not a hidden engine default. The engine
       // adds it to Toncenter's fresh synchronization timestamp.

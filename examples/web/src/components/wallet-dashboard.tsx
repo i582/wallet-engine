@@ -10,7 +10,7 @@ import {
   WarningCircle,
 } from "@phosphor-icons/react"
 import type {Icon} from "@phosphor-icons/react"
-import type {ActivityItem, SendResult, WalletSnapshot} from "@ton/wallet-engine"
+import type {ActivityItem, SendPreview, SendResult, WalletSnapshot} from "@ton/wallet-engine"
 import {type ReactElement, useId, useState} from "react"
 
 import {SendForm} from "@/components/send-form"
@@ -36,6 +36,8 @@ export interface WalletDashboardProps {
   readonly onRefresh: () => Promise<void>
   readonly onLoadMore: () => Promise<void>
   readonly onForget: () => Promise<void>
+  readonly onPreviewSend: (destination: string, amountNanograms: string) => Promise<SendPreview>
+  readonly onCancelSendPreview: () => Promise<void>
   readonly onSend: (destination: string, amountNanograms: string) => Promise<SendResult>
 }
 
@@ -48,6 +50,8 @@ export function WalletDashboard({
   onRefresh,
   onLoadMore,
   onForget,
+  onPreviewSend,
+  onCancelSendPreview,
   onSend,
 }: WalletDashboardProps): ReactElement {
   const [copied, setCopied] = useState<boolean>(false)
@@ -132,7 +136,14 @@ export function WalletDashboard({
         />
       </div>
 
-      {sendOpen ? <SendForm onClose={() => setSendOpen(false)} onSend={onSend} /> : null}
+      {sendOpen ? (
+        <SendForm
+          onCancelPreview={onCancelSendPreview}
+          onClose={() => setSendOpen(false)}
+          onPreview={onPreviewSend}
+          onSend={onSend}
+        />
+      ) : null}
       {selectedActivity ? (
         <TransactionView
           gramUsdRate={gramUsdRate}

@@ -5,6 +5,10 @@
 
 use std::ops::Deref;
 
+use ton::block_tlb::StateInit;
+use ton::ton_core::cell::TonHash;
+use ton::ton_core::traits::tlb::TLB;
+use ton::ton_core::types::TonAddress;
 use ton::ton_wallet::{
     Mnemonic, TonWallet, WALLET_V5R1_ID_DEFAULT, WALLET_V5R1_ID_DEFAULT_TESTNET, WORDLIST_EN_SET,
     WalletVersion,
@@ -161,4 +165,29 @@ const fn v5r1_contract_wallet_id(network: Network) -> i32 {
         Network::Mainnet => WALLET_V5R1_ID_DEFAULT,
         Network::Testnet => WALLET_V5R1_ID_DEFAULT_TESTNET,
     }
+}
+
+/// Derives the V5R1 address and `StateInit` from public metadata only.
+///
+/// The public key is sufficient because wallet code and initial data are
+/// deterministic. No signing key or mnemonic is involved.
+pub(crate) fn derive_v5r1_public_state(
+    public_key: &[u8],
+    network: Network,
+) -> Result<(TonAddress, StateInit), WalletCryptoError> {
+    let public_key =
+        TonHash::from_slice(public_key).map_err(|_| WalletCryptoError::WalletConstruction)?;
+    let wallet_id = v5r1_contract_wallet_id(network);
+    let code = WalletVersion::get_code(WalletVersion::V5R1)
+        .map_err(|_| WalletCryptoError::WalletConstruction)?
+        .clone();
+    let data = ton::ton_wallet::WalletV5Data::new(wallet_id, public_key)
+        .to_cell()
+        .map_err(|_| WalletCryptoError::WalletConstruction)?;
+    let state_init = StateInit::new(code, data);
+    let address = state_init
+        .derive_address(0)
+        .map_err(|_| WalletCryptoError::WalletConstruction)?;
+
+    Ok((address, state_init))
 }

@@ -329,6 +329,7 @@ mod tests {
         let config = WalletClientConfig {
             record_id: "record".to_owned(),
             address: "address".to_owned(),
+            public_key: vec![0; 32],
             network: Network::Testnet,
             send_validity_seconds: 300,
             providers: ProviderConfig {
@@ -367,6 +368,7 @@ mod tests {
         let config = WalletClientConfig {
             record_id: "record".to_owned(),
             address: "address".to_owned(),
+            public_key: vec![0; 32],
             network: Network::Testnet,
             send_validity_seconds: 300,
             providers: ProviderConfig {

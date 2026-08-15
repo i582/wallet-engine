@@ -7,8 +7,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use num_bigint::BigUint;
 use wallet_engine::{
     CreateWalletRequest, CreatedWallet, ImportWalletRequest, Network, ProviderConfig, SendPhase,
-    SendRequest, WalletClient, WalletClientConfig, WalletDescriptor, WalletLifecycle,
-    WalletSnapshot,
+    SendPreviewRequest, SendRequest, WalletClient, WalletClientConfig, WalletDescriptor,
+    WalletLifecycle, WalletSnapshot,
 };
 
 use crate::http_host::ReqwestHttpHost;
@@ -295,6 +295,7 @@ impl App {
         let config = WalletClientConfig {
             record_id: descriptor.record_id.clone(),
             address: descriptor.address.clone(),
+            public_key: descriptor.public_key.clone(),
             network: descriptor.network,
             send_validity_seconds: 300,
             providers: ProviderConfig::standard(descriptor.network),
@@ -356,6 +357,21 @@ impl App {
             Ok(amount) => amount,
             Err(message) => {
                 self.status = Some(message);
+                return;
+            }
+        };
+
+        self.status = Some("Checking transfer…".to_owned());
+        let preview = match client
+            .preview_send(SendPreviewRequest {
+                destination: self.send_destination.clone(),
+                amount_nanograms: amount_nanograms.clone(),
+            })
+            .await
+        {
+            Ok(preview) => preview,
+            Err(error) => {
+                self.status = Some(error.to_string());
                 return;
             }
         };

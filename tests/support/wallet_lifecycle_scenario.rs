@@ -390,11 +390,12 @@ impl WalletLifecycleRunner {
                     && descriptor.network == network
                     && descriptor.secret_ref.value == expected_ref
                     && !descriptor.address.is_empty()
+                    && descriptor.public_key.len() == 32
                 {
                     Ok(())
                 } else {
                     Err(format!(
-                        "descriptor `{operation}` did not preserve record, network, address, and secret reference"
+                        "descriptor `{operation}` did not preserve record, network, address, public key, and secret reference"
                     ))
                 }
             }

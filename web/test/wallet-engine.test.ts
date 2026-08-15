@@ -98,7 +98,13 @@ describe("high-level WASM API", () => {
 
   test("Rust awaits JavaScript HTTP callbacks during refresh", async () => {
     let fetchCount = 0
-    const client = await WalletClient.create(walletConfig("refresh-wallet"), {
+    const lifecycle = await WalletLifecycle.create(platform)
+    lifecycles.push(lifecycle)
+    const created = await lifecycle.createWallet({
+      recordId: "refresh-wallet",
+      network: "testnet",
+    })
+    const client = await WalletClient.create(walletConfig(created.descriptor), {
       platformHost: platform,
       fetch: mockFetch(async () => {
         fetchCount += 1
@@ -125,6 +131,7 @@ describe("high-level WASM API", () => {
     })
     expect(created.recoveryPhrase.phrase.split(" ")).toHaveLength(24)
     expect(created.descriptor.address).toStartWith("0Q")
+    expect(created.descriptor.publicKey).toHaveLength(32)
 
     const revealed = await lifecycle.revealRecoveryPhrase(created.descriptor)
     expect(revealed.phrase).toEqual(created.recoveryPhrase.phrase)
@@ -147,10 +154,15 @@ function httpRequest(id: number, overrides: Partial<HttpRequest> = {}): HttpRequ
   }
 }
 
-function walletConfig(recordId: string): WalletClientConfig {
+function walletConfig(descriptor: {
+  readonly recordId: string
+  readonly address: string
+  readonly publicKey: number[]
+}): WalletClientConfig {
   return {
-    recordId,
-    address: "0QAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACkT",
+    recordId: descriptor.recordId,
+    address: descriptor.address,
+    publicKey: descriptor.publicKey,
     network: "testnet",
     sendValiditySeconds: 300,
     providers: {

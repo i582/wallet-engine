@@ -7,18 +7,19 @@
 use std::str::FromStr;
 use std::str::Utf8Error;
 
-use ton::block_tlb::{CommonMsgInfoInt, Msg};
+use ton::block_tlb::{CommonMsgInfo, CommonMsgInfoExtIn, CommonMsgInfoInt, Msg};
 use ton::errors::TonError;
 use ton::ton_core::cell::TonCell;
 use ton::ton_core::errors::TonCoreError;
 use ton::ton_core::traits::tlb::TLB;
 use ton::ton_core::types::TonAddress;
-use ton::ton_core::types::tlb_core::TLBCoins;
+use ton::ton_core::types::tlb_core::{MsgAddressExt, TLBCoins, TLBEitherRef};
+use ton::ton_wallet::{WALLET_V5R1_ID_DEFAULT, WALLET_V5R1_ID_DEFAULT_TESTNET, WalletVersion};
 
 use crate::types::{Boc, BocError, parse_positive_decimal};
 use crate::{Base64Hash, Base64HashError, Network, SendRequest};
 
-use super::crypto::{WalletCryptoError, derive_v5r1_wallet};
+use super::crypto::{WalletCryptoError, derive_v5r1_public_state, derive_v5r1_wallet};
 use super::send::{FreshSendAccount, PreparedTransfer};
 
 #[derive(Debug, thiserror::Error)]
@@ -33,6 +34,8 @@ pub(crate) enum TransferError {
     InvalidAmount,
     #[error("transfer amount exceeds the TON coin representation")]
     AmountOutOfRange,
+    #[error("wallet public key does not derive the configured source address")]
+    PublicKeyMismatch,
     #[error("internal message construction failed")]
     InternalMessage(#[source] TonCoreError),
     #[error("external message signing failed")]
@@ -101,6 +104,71 @@ pub(crate) fn prepare_transfer(
         signed_boc,
         message_hash,
     })
+}
+
+/// Builds a complete V5R1 transfer with a placeholder signature.
+///
+/// Toncenter validates the message body and actions with `ignore_chksig=true`.
+/// An uninitialized wallet also receives its deterministic `StateInit`, derived
+/// from the persisted public key. The mnemonic is never needed for this step.
+pub(crate) fn prepare_transfer_emulation(
+    source: &TonAddress,
+    public_key: &[u8],
+    network: Network,
+    destination: &str,
+    amount_nanograms: &str,
+    account: &FreshSendAccount,
+    valid_until: u32,
+) -> Result<Boc, TransferError> {
+    let destination =
+        TonAddress::from_str(destination).map_err(TransferError::InvalidDestination)?;
+    let amount_nanograms =
+        parse_positive_decimal(amount_nanograms).ok_or(TransferError::InvalidAmount)?;
+    let tlb_amount =
+        u128::try_from(amount_nanograms).map_err(|_| TransferError::AmountOutOfRange)?;
+    let internal = build_internal_message(&destination, tlb_amount)?;
+    let wallet_id = match network {
+        Network::Mainnet => WALLET_V5R1_ID_DEFAULT,
+        Network::Testnet => WALLET_V5R1_ID_DEFAULT_TESTNET,
+    };
+    let body = WalletVersion::build_ext_in_body(
+        WalletVersion::V5R1,
+        valid_until,
+        account.seqno,
+        wallet_id,
+        vec![internal],
+    )
+    .map_err(TransferError::ExternalMessage)?;
+
+    // V5 stores the signature after the body. Zero bytes are deliberate: the
+    // Emulate API skips only this cryptographic check and executes everything else.
+    let mut signed = TonCell::builder();
+    signed
+        .write_cell(&body)
+        .map_err(TransferError::InternalMessage)?;
+    signed
+        .write_bits([0_u8; 64], 512)
+        .map_err(TransferError::InternalMessage)?;
+    let signed = signed.build().map_err(TransferError::InternalMessage)?;
+    let info = CommonMsgInfo::ExtIn(CommonMsgInfoExtIn {
+        src: MsgAddressExt::NONE,
+        dst: source.to_msg_address_int(),
+        import_fee: TLBCoins::ZERO,
+    });
+
+    let mut external = Msg::new(info, signed);
+    if account.needs_state_init() {
+        let (derived_source, state_init) = derive_v5r1_public_state(public_key, network)
+            .map_err(TransferError::WalletDerivation)?;
+        if &derived_source != source {
+            return Err(TransferError::PublicKeyMismatch);
+        }
+        external.init = Some(TLBEitherRef::new(state_init));
+    }
+    let external = external.to_cell().map_err(TransferError::InternalMessage)?;
+
+    Boc::try_from(external.to_boc().map_err(TransferError::BocEncoding)?)
+        .map_err(TransferError::InvalidBoc)
 }
 
 fn build_internal_message(

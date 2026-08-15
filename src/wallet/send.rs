@@ -12,10 +12,10 @@ use ton::ton_core::types::TonAddress;
 use crate::Base64Hash;
 use crate::domain::{
     AccountStatus, JournalCompareExchange, JournalCompareExchangeResult, JournalKey, JournalRecord,
-    PreparedSend, ProtectedSecretRead, SecretAccessReason, SendPhase, SendRequest, SendSnapshot,
+    ProtectedSecretRead, SecretAccessReason, SendPhase, SendRequest, SendSnapshot,
     bounded_diagnostic,
 };
-use crate::types::{Boc, TonAddressExt as _, parse_positive_decimal};
+use crate::types::{Boc, parse_positive_decimal};
 
 const JOURNAL_SCHEMA_VERSION: u32 = 1;
 const FIRST_JOURNAL_VERSION: u64 = 1;
@@ -87,17 +87,6 @@ pub(crate) struct PreparedTransfer {
     /// The normalized external-message hash in standard padded Base64.
     /// Applications can use it to locate the submitted message without storing the recovery phrase.
     pub message_hash: Base64Hash,
-}
-
-impl PreparedTransfer {
-    pub(crate) fn public_summary(&self, network: crate::Network) -> PreparedSend {
-        PreparedSend {
-            operation_id: self.operation_id.clone(),
-            valid_until: self.valid_until,
-            destination: self.destination.to_user_friendly(network),
-            amount_nanograms: self.amount_nanograms.to_string(),
-        }
-    }
 }
 
 /// Full internal state. Public `SendPhase` intentionally remains a compact
@@ -390,12 +379,7 @@ impl SendWorkflow {
 
         self.fresh_account = Some(account);
         self.stage = SendStage::Authorizing;
-
-        Ok(SendDirective::ReadProtectedSecret(ProtectedSecretRead {
-            secret_ref: self.request.secret_ref.clone(),
-            reason: SecretAccessReason::SignTransfer,
-            prompt: "Authenticate to sign this GRAM transfer".to_owned(),
-        }))
+        Ok(self.read_secret_directive())
     }
 
     /// Marks successful host authorization.
@@ -566,6 +550,14 @@ impl SendWorkflow {
             record_id: self.record_id.clone(),
             slot: SEND_SLOT.to_owned(),
         }
+    }
+
+    fn read_secret_directive(&self) -> SendDirective {
+        SendDirective::ReadProtectedSecret(ProtectedSecretRead {
+            secret_ref: self.request.secret_ref.clone(),
+            reason: SecretAccessReason::SignTransfer,
+            prompt: "Authenticate to sign this GRAM transfer".to_owned(),
+        })
     }
 
     fn prepared_ref(&self) -> Result<&PreparedTransfer, SendWorkflowError> {

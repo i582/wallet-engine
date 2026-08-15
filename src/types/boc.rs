@@ -14,6 +14,10 @@ impl Boc {
     pub(crate) fn as_bytes(&self) -> &[u8] {
         &self.0
     }
+
+    pub(crate) fn to_base64(&self) -> String {
+        STANDARD.encode(self.as_bytes())
+    }
 }
 
 impl TryFrom<Vec<u8>> for Boc {
@@ -30,7 +34,7 @@ impl Serialize for Boc {
     where
         S: Serializer,
     {
-        serializer.serialize_str(&STANDARD.encode(self.as_bytes()))
+        serializer.serialize_str(&self.to_base64())
     }
 }
 

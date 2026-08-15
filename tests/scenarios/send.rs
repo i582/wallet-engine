@@ -18,6 +18,117 @@ fn second_send_is_rejected_while_first_is_in_progress() {
 }
 
 #[test]
+fn emulation_completes_before_secret_authorization_and_persistence() {
+    scenario("send preview uses only public wallet metadata")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(submission().paused("submit"))
+        .when(pause_next_emulation_request("emulation"))
+        .when(start(
+            "preview",
+            preview_send(send().to(own_address()).grams(1)),
+        ))
+        .when(wait_for_request("emulation"))
+        .then(snapshot().send_phase(SendPhase::Idle))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .when(release_request("emulation"))
+        .then(result("preview").emulated_action("ton_transfer"))
+        .when(start("send", send().to(own_address()).grams(1)))
+        .then(send_phase("send", SendPhase::Submitting))
+        .when(resume("submit", submission_accepted()))
+        .then(result("send").submitted())
+        .run();
+}
+
+#[test]
+fn cancelling_emulation_discards_its_late_result_before_authorization() {
+    scenario("cancelled preview cannot unlock or revive a send")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .when(pause_next_emulation_request("emulation"))
+        .when(start(
+            "preview",
+            preview_send(send().to(own_address()).grams(1)),
+        ))
+        .when(wait_for_request("emulation"))
+        .when(call("cancel", cancel_send_preview()))
+        .then(succeeds("cancel"))
+        .then(request_was_cancelled("emulation"))
+        .then(snapshot().send_phase(SendPhase::Idle))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .then(remember_revision("after-cancel"))
+        .when(release_request("emulation"))
+        .then(error("preview", WalletClientError::StateUnavailable))
+        .then(revision_is("after-cancel"))
+        .then(snapshot().send_phase(SendPhase::Idle))
+        .run();
+}
+
+#[test]
+fn provider_emulation_failure_stops_before_secret_and_journal() {
+    scenario("emulation transport failure keeps the send retryable")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(provider().emulation_fails(503))
+        .when(call(
+            "preview",
+            preview_send(send().to(own_address()).grams(1)),
+        ))
+        .then(emulation_failed("preview"))
+        .then(snapshot().send_phase(SendPhase::Idle))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .run();
+}
+
+#[test]
+fn failed_preview_does_not_block_the_independent_send_workflow() {
+    scenario("preview failure warns the client but does not gate confirmation")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(provider().emulation_fails(503))
+        .when(call(
+            "preview",
+            preview_send(send().to(own_address()).grams(1)),
+        ))
+        .then(emulation_failed("preview"))
+        .then(snapshot().send_phase(SendPhase::Idle))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        // The real workflow does not reuse or retry the failed preview. It loads
+        // fresh account state and seqno before requesting authorization.
+        .when(call("send", send().to(own_address()).grams(1)))
+        .then(result("send").submitted())
+        .then(snapshot().send_phase(SendPhase::Submitted))
+        .run();
+}
+
+#[test]
+fn rejected_emulation_exposes_tvm_phase_codes_without_unlocking_secret() {
+    scenario("failed emulation is a typed transfer rejection")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(provider().emulation_rejects_transfer())
+        .when(call(
+            "preview",
+            preview_send(send().to(own_address()).grams(1)),
+        ))
+        .then(error(
+            "preview",
+            WalletClientError::EmulationRejected {
+                diagnostic: "emulated transfer did not complete successfully".to_owned(),
+                compute_exit_code: Some(33),
+                action_result_code: Some(34),
+            },
+        ))
+        .then(snapshot().send_phase(SendPhase::Idle))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .run();
+}
+
+#[test]
 fn send_cannot_be_cancelled_after_the_durable_commit_boundary() {
     scenario("cancel after the signed message becomes durable")
         .given(wallet().active().balance(grams(10)).seqno(7))
@@ -194,7 +305,20 @@ fn first_transfer_deploys_the_wallet_on_localnet_and_appears_in_history() {
     scenario("first transfer activates an uninitialized wallet on localnet")
         .given(network().localnet())
         .given(wallet().uninitialized().balance(grams(10)))
-        .when(call("send", send().to(own_address()).grams(1)))
+        .when(pause_next_emulation_request("deploy-emulation"))
+        .when(start(
+            "preview",
+            preview_send(send().to(own_address()).grams(1)),
+        ))
+        .when(wait_for_request("deploy-emulation"))
+        .then(snapshot().send_phase(SendPhase::Idle))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .when(release_request("deploy-emulation"))
+        // Localnet can omit the high-level action list, but the trace and fees
+        // must still form a valid preview before the user confirms the send.
+        .then(result("preview").previewed())
+        .when(start("send", send().to(own_address()).grams(1)))
         .then(submitted_message().contains_state_init())
         .then(result("send").submitted())
         .then(on_chain_wallet().active().seqno(1))
@@ -277,6 +401,104 @@ fn send_rereads_seqno_after_an_external_transfer_follows_fresh_account() {
 }
 
 #[test]
+fn send_ignores_a_successful_preview_seqno_after_an_external_transfer() {
+    scenario("confirmed send rebuilds a preview after another client spends")
+        .given(network().localnet())
+        .given(wallet().uninitialized().balance(grams(10)))
+        .when(call("external-deploy", spam_transfers(1)))
+        .then(succeeds("external-deploy"))
+        .then(on_chain_wallet().active().seqno(1))
+        // The preview is valid for the current seqno, but it is only information
+        // for the confirmation screen. It does not reserve seqno 1.
+        .when(call(
+            "preview",
+            preview_send(send().to(own_address()).nanograms(1)),
+        ))
+        .then(result("preview").previewed())
+        .then(snapshot().send_phase(SendPhase::Idle))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        // Another client invalidates the preview by consuming seqno 1.
+        .when(call("external-spend", spam_transfers(1)))
+        .then(succeeds("external-spend"))
+        .then(on_chain_wallet().active().seqno(2))
+        // Confirmation starts an independent send. It must fetch seqno 2,
+        // construct a new signed message, and execute as seqno 3.
+        .when(call("send", send().to(own_address()).nanograms(1)))
+        .then(result("send").submitted())
+        .then(on_chain_wallet().active().seqno(3))
+        .run();
+}
+
+#[test]
+fn external_transfer_while_active_wallet_emulation_is_pending_is_not_misclassified() {
+    scenario("an external spend makes a pending active-wallet emulation stale")
+        .given(network().localnet())
+        .given(wallet().uninitialized().balance(grams(10)))
+        // A different client deploys the wallet without touching this engine's
+        // protected-secret or durable-journal hosts.
+        .when(call("external-deploy", spam_transfers(1)))
+        .then(succeeds("external-deploy"))
+        .then(on_chain_wallet().active().seqno(1))
+        // This send reads seqno 1 and constructs its fake-signed message before
+        // the emulation HTTP request is allowed to reach Acton.
+        .when(pause_next_emulation_request("stale-emulation"))
+        .when(start(
+            "stale-preview",
+            preview_send(send().to(own_address()).nanograms(1)),
+        ))
+        .when(wait_for_request("stale-emulation"))
+        .then(snapshot().send_phase(SendPhase::Idle))
+        // Another same-key client consumes seqno 1 while the emulation waits.
+        .when(call("external-spend", spam_transfers(1)))
+        .then(succeeds("external-spend"))
+        .then(on_chain_wallet().active().seqno(2))
+        .when(release_request("stale-emulation"))
+        // Acton rejects the stale external message. This is a chain-state race,
+        // not an emulator outage or a successfully created failed transaction.
+        .then(emulation_message_not_accepted("stale-preview"))
+        .then(snapshot().send_phase(SendPhase::Idle))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        // A real send fetches seqno 2 independently and executes exactly once.
+        .when(call("retry", send().to(own_address()).nanograms(1)))
+        .then(result("retry").submitted())
+        .then(on_chain_wallet().active().seqno(3))
+        .run();
+}
+
+#[test]
+fn external_deployment_while_first_send_emulation_is_pending_is_not_misclassified() {
+    scenario("an external deployment invalidates a pending StateInit emulation")
+        .given(network().localnet())
+        .given(wallet().uninitialized().balance(grams(10)))
+        // The engine prepares a seqno-zero message with StateInit, then waits.
+        .when(pause_next_emulation_request("deployment-emulation"))
+        .when(start(
+            "stale-preview",
+            preview_send(send().to(own_address()).nanograms(1)),
+        ))
+        .when(wait_for_request("deployment-emulation"))
+        .then(snapshot().send_phase(SendPhase::Idle))
+        // A different client deploys the same V5R1 wallet first.
+        .when(call("external-deploy", spam_transfers(1)))
+        .then(succeeds("external-deploy"))
+        .then(on_chain_wallet().active().seqno(1))
+        .when(release_request("deployment-emulation"))
+        .then(emulation_message_not_accepted("stale-preview"))
+        .then(snapshot().send_phase(SendPhase::Idle))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        // The retry observes an active wallet, omits StateInit, and uses seqno 1.
+        .when(call("retry", send().to(own_address()).nanograms(1)))
+        .then(result("retry").submitted())
+        .then(on_chain_wallet().active().seqno(2))
+        .run();
+}
+
+#[test]
 fn replaying_the_exact_external_message_executes_only_once_on_localnet() {
     scenario("the chain deduplicates an exact signed external message replay")
         .given(network().localnet())
@@ -299,31 +521,29 @@ fn replaying_the_exact_external_message_executes_only_once_on_localnet() {
 }
 
 #[test]
-fn expired_external_message_does_not_leave_the_next_send_waiting_forever() {
-    scenario("an expired submitted message leaves seqno unchanged")
+fn expired_external_message_is_rejected_before_authorization() {
+    scenario("an already expired message cannot pass preflight emulation")
         .given(network().localnet())
         .given(client().send_validity_seconds(1))
         .given(wallet().uninitialized().balance(grams(10)))
         .when(call("baseline-refresh", refresh_wallet()))
         .then(update("baseline-refresh").completed())
         .then(remember_activity_as("funding"))
-        // sendBoc accepts the envelope, but valid_until is already at the
-        // provider timestamp and the wallet must not execute the message.
-        .when(call("expired", send().to(own_address()).nanograms(1)))
-        .then(result("expired").submitted())
+        // The local emulator evaluates valid_until before the engine unlocks
+        // the secret or persists a signed message.
+        .when(call(
+            "expired",
+            preview_send(send().to(own_address()).nanograms(1)),
+        ))
+        .then(emulation_message_not_accepted("expired"))
+        .then(snapshot().send_phase(SendPhase::Idle))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
         .then(on_chain_wallet().uninitialized())
         .when(call("refresh", refresh_wallet()))
         .then(update("refresh").completed())
         .then(activity_is(&["funding"]))
-        // The durable Submitted record is resolved by fresh seqno evidence on
-        // the next attempt. It fails deterministically instead of signing a
-        // replacement or waiting without a terminal result.
-        .when(call("replacement", send().to(own_address()).nanograms(1)))
-        .then(error(
-            "replacement",
-            WalletClientError::WalletSeqnoNotAdvanced,
-        ))
-        .then(snapshot().send_phase(SendPhase::Failed))
         .run();
 }
 

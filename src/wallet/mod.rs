@@ -3,7 +3,7 @@
 //! The public API creates and imports wallets while the host stores recovery
 //! words. Private submodules derive wallet keys and build signed transfers.
 
-mod crypto;
+pub(crate) mod crypto;
 pub(crate) mod send;
 pub(crate) mod transfer;
 
@@ -11,7 +11,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 use ton::ton_core::types::TonAddress;
 
-use self::crypto::{SensitiveMnemonic, derive_v5r1_wallet, generate_mnemonic};
+use self::crypto::{
+    SensitiveMnemonic, derive_v5r1_public_state, derive_v5r1_wallet, generate_mnemonic,
+};
 use crate::domain::{
     Network, ProtectedSecretHostError, ProtectedSecretHostErrorKind, ProtectedSecretRead,
     ProtectedSecretRef, ProtectedSecretStore, SecretAccessReason, bounded_diagnostic,
@@ -29,6 +31,11 @@ pub struct WalletDescriptor {
     pub record_id: String,
     /// The derived friendly non-bounceable TON address.
     pub address: String,
+    /// The raw 32-byte Ed25519 public key used by the V5R1 contract.
+    ///
+    /// This is safe to persist. It lets the engine emulate a first deployment
+    /// before it asks the host to unlock the recovery phrase.
+    pub public_key: Vec<u8>,
     /// The network used for derivation and future operations.
     pub network: Network,
     /// The host protected-storage reference for the mnemonic.
@@ -273,9 +280,16 @@ fn derive_descriptor(
 ) -> Result<WalletDescriptor, WalletLifecycleError> {
     let secret_ref = secret_ref_for(record_id);
 
+    let phrase = secret
+        .as_str()
+        .map_err(|_| WalletLifecycleError::InvalidRecoveryPhrase)?;
+    let wallet = derive_v5r1_wallet(phrase, network)
+        .map_err(|_| WalletLifecycleError::AddressDerivationFailed)?;
+
     Ok(WalletDescriptor {
         record_id: record_id.to_owned(),
-        address: derive_address(network, secret)?.to_user_friendly(network),
+        address: wallet.address.to_user_friendly(network),
+        public_key: wallet.key_pair.public_key.to_vec(),
         network,
         secret_ref,
     })
@@ -313,8 +327,13 @@ fn secret_ref_for(record_id: &str) -> ProtectedSecretRef {
 fn validate_descriptor(descriptor: &WalletDescriptor) -> Result<(), WalletLifecycleError> {
     validate_record_id(&descriptor.record_id)?;
 
+    let configured_address = TonAddress::from_str(&descriptor.address)
+        .map_err(|_| WalletLifecycleError::InvalidRecordId)?;
+    let (derived_address, _) = derive_v5r1_public_state(&descriptor.public_key, descriptor.network)
+        .map_err(|_| WalletLifecycleError::InvalidRecordId)?;
+
     if descriptor.secret_ref != secret_ref_for(&descriptor.record_id)
-        || TonAddress::from_str(&descriptor.address).is_err()
+        || configured_address != derived_address
     {
         return Err(WalletLifecycleError::InvalidRecordId);
     }
@@ -346,6 +365,7 @@ mod tests {
         let descriptor = WalletDescriptor {
             record_id: "wallet-record".to_owned(),
             address: ADDRESS.to_owned(),
+            public_key: vec![0; 32],
             network: Network::Testnet,
             secret_ref: ProtectedSecretRef {
                 value: "wallet:another-record:mnemonic".to_owned(),
@@ -364,6 +384,7 @@ mod tests {
         let descriptor = WalletDescriptor {
             record_id: record_id.to_owned(),
             address: "not-a-ton-address".to_owned(),
+            public_key: vec![0; 32],
             network: Network::Testnet,
             secret_ref: secret_ref_for(record_id),
         };

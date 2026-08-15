@@ -6,8 +6,10 @@
 
 mod activity;
 mod client;
+mod emulation;
 mod host;
 mod http;
+mod preview;
 mod provider;
 mod refresh;
 mod send;

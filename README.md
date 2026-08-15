@@ -148,9 +148,9 @@ platforms. The engine does not own platform networking or protected storage.
 9. Call `waitForChange` to receive later snapshot revisions.
 10. Call `shutdown()` before you discard the client.
 
-The wallet descriptor contains the stable application record ID, address, network, and
-protected-secret reference. Your application needs these values after a
-restart.
+The wallet descriptor contains the stable application record ID, address,
+Ed25519 public key, network, and protected-secret reference. Your application
+needs these values after a restart. The public key is not a secret.
 
 ## Wallet state
 
@@ -171,8 +171,13 @@ is available.
 
 ## Sending GRAM
 
-Call `send` with a unique operation ID, destination address, amount in
-nanograms, and the wallet secret reference.
+Call `previewSend` to show fees, actions, and execution warnings before the user confirms a transfer. This call does not read the recovery phrase.
+
+The preview is information, not permission to send. A preview failure does not block `send`.
+
+Chain state can change after the preview. Therefore, `send` never reuses the preview message, sequence number, or expiration time.
+
+Call `send` after user confirmation. Give it a unique operation ID, destination, nanogram amount, and wallet secret reference.
 
 Set `sendValiditySeconds` in `WalletClientConfig` according to your product's
 submission policy. The engine adds this duration to the synchronization time
@@ -180,14 +185,37 @@ from the fresh Toncenter account response. It does not trust the device clock.
 A short duration can expire before inclusion. A long duration leaves the
 signed message valid for longer.
 
-Before submission, the engine:
+`previewSend` does these steps:
 
 1. loads a fresh account state and sequence number.
-2. requests the protected recovery phrase from the host.
-3. makes sure that the phrase belongs to the selected wallet.
-4. signs the V5R1 external message in Rust.
-5. stores the exact signed BoC in the host journal.
-6. submits that BoC to the provider.
+2. builds the complete V5R1 intent from the stored public key.
+3. emulates it with a placeholder signature and `ignore_chksig`.
+4. returns fees, actions, trace status, and the preview expiration time.
+
+`send` starts a new workflow after confirmation:
+
+1. loads the durable send journal.
+2. loads a new account state and sequence number.
+3. calculates a new expiration time from the provider synchronization time.
+4. requests the protected recovery phrase from the host.
+5. makes sure that the phrase belongs to the selected wallet.
+6. builds and signs a new V5R1 message in Rust.
+7. stores the exact signed BoC in the host journal.
+8. submits that BoC to the provider.
+
+The emulation request does not contain the mnemonic or private key. Child
+transaction failures remain in `SendEmulation.traceSucceeded`; they do not
+automatically block submission because a recipient can reject or bounce.
+`SendEmulation.actions` contains the high-level actions returned by Toncenter.
+Each action has validated Base64 identifiers, involved accounts, and its
+action-specific details as JSON.
+
+The engine distinguishes three preview failures. `EmulationFailed` means
+that the service, transport, or response failed. `EmulationMessageNotAccepted`
+means that the current chain state rejected the external message, for example
+after another client advanced the wallet seqno. `EmulationRejected` means that
+the external message created a wallet transaction, but its compute or action
+phase failed. The last error includes the returned TVM phase codes.
 
 Handle every send phase explicitly:
 
