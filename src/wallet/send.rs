@@ -694,3 +694,371 @@ fn next_journal_version(current: Option<u64>) -> Result<u64, SendWorkflowError> 
         None => Ok(FIRST_JOURNAL_VERSION),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ProtectedSecretRef;
+    use ton::ton_core::cell::TonCell;
+
+    const RAW_SOURCE: &str = "0:1111111111111111111111111111111111111111111111111111111111111111";
+    const RAW_DESTINATION: &str =
+        "0:2222222222222222222222222222222222222222222222222222222222222222";
+    const RAW_OTHER: &str = "0:3333333333333333333333333333333333333333333333333333333333333333";
+
+    #[test]
+    fn request_validation_rejects_every_invalid_public_field() {
+        let cases = [
+            ("", request(), "wallet record identity is empty"),
+            (
+                "record",
+                SendRequest {
+                    operation_id: String::new(),
+                    ..request()
+                },
+                "operation identifier is invalid",
+            ),
+            (
+                "record",
+                SendRequest {
+                    operation_id: "x".repeat(129),
+                    ..request()
+                },
+                "operation identifier is invalid",
+            ),
+            (
+                "record",
+                SendRequest {
+                    destination: "not an address".to_owned(),
+                    ..request()
+                },
+                "destination is invalid",
+            ),
+            (
+                "record",
+                SendRequest {
+                    amount_nanograms: "01".to_owned(),
+                    ..request()
+                },
+                "amount must be positive canonical nanograms",
+            ),
+            (
+                "record",
+                SendRequest {
+                    secret_ref: ProtectedSecretRef {
+                        value: "  ".to_owned(),
+                    },
+                    ..request()
+                },
+                "protected secret reference is empty",
+            ),
+        ];
+
+        for (record_id, request, diagnostic) in cases {
+            let mut workflow = SendWorkflow::new(record_id.to_owned(), source(), request);
+            assert_eq!(
+                workflow.begin(),
+                Err(SendWorkflowError::InvalidRequest(diagnostic.to_owned()))
+            );
+            assert_eq!(workflow.snapshot().phase, SendPhase::Validating);
+        }
+    }
+
+    #[test]
+    fn journal_loading_rejects_corrupt_or_foreign_records() {
+        let records = [
+            JournalRecord {
+                version: 0,
+                payload: durable_payload(SendStage::Submitted),
+            },
+            JournalRecord {
+                version: 1,
+                payload: b"not-json".to_vec(),
+            },
+            JournalRecord {
+                version: 1,
+                payload: durable_payload_with(|record| record.schema_version = 2),
+            },
+            JournalRecord {
+                version: 1,
+                payload: durable_payload_with(|record| record.operation_id.clear()),
+            },
+            JournalRecord {
+                version: 1,
+                payload: durable_payload_with(|record| record.record_id = "other".to_owned()),
+            },
+        ];
+
+        for record in records {
+            let mut workflow = workflow();
+            assert!(matches!(
+                workflow.begin(),
+                Ok(SendDirective::LoadJournal(_))
+            ));
+            assert!(matches!(
+                workflow.journal_loaded(Some(record)),
+                Err(SendWorkflowError::InvalidJournal(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn every_nonreplaceable_durable_stage_blocks_a_new_signature() {
+        for stage in [
+            SendStage::LoadingJournal,
+            SendStage::FetchingFreshAccount,
+            SendStage::Authorizing,
+            SendStage::Preparing,
+            SendStage::PersistingPrepared,
+            SendStage::ReadyToSubmit,
+            SendStage::Submitting,
+            SendStage::SubmissionUnknown,
+        ] {
+            let mut workflow = workflow();
+            assert!(workflow.begin().is_ok());
+            let record = JournalRecord {
+                version: 1,
+                payload: durable_payload(stage),
+            };
+            assert_eq!(
+                workflow.journal_loaded(Some(record)),
+                Err(SendWorkflowError::PreviousSubmissionUnresolved),
+                "stage {stage:?} must keep the shared send slot blocked"
+            );
+        }
+    }
+
+    #[test]
+    fn cancelled_and_failed_records_are_safe_to_replace() {
+        for stage in [SendStage::Cancelled, SendStage::Failed] {
+            let mut workflow = workflow();
+            assert!(workflow.begin().is_ok());
+            let record = JournalRecord {
+                version: 8,
+                payload: durable_payload(stage),
+            };
+            assert_eq!(
+                workflow.journal_loaded(Some(record)),
+                Ok(SendDirective::FetchFreshAccount)
+            );
+            assert_eq!(workflow.journal_version, Some(8));
+            assert_eq!(workflow.prior_submitted_seqno, None);
+        }
+    }
+
+    #[test]
+    fn cancellation_is_terminal_and_persists_only_when_a_boc_exists() {
+        let mut early = workflow();
+        assert!(early.begin().is_ok());
+        assert_eq!(early.cancel(), Ok(SendDirective::Finished));
+        assert_eq!(early.snapshot().phase, SendPhase::Cancelled);
+        assert_eq!(early.cancel(), Ok(SendDirective::Finished));
+
+        let (mut prepared, transfer) = preparing_workflow();
+        assert!(matches!(
+            prepared.transfer_prepared(transfer),
+            Ok(SendDirective::PersistJournal(_))
+        ));
+        assert!(matches!(
+            prepared.cancel(),
+            Ok(SendDirective::PersistJournal(_))
+        ));
+        assert_eq!(prepared.snapshot().phase, SendPhase::Cancelled);
+        assert_eq!(
+            prepared.journal_persisted(applied()),
+            Ok(SendDirective::Finished)
+        );
+    }
+
+    #[test]
+    fn successful_terminal_persistence_keeps_the_provider_reference() {
+        let mut workflow = ready_to_submit_workflow();
+        assert_eq!(workflow.submission_started(), Ok(()));
+        assert!(matches!(
+            workflow.submission_succeeded(Some("receipt-7".to_owned())),
+            Ok(SendDirective::PersistJournal(_))
+        ));
+        assert_eq!(
+            workflow.journal_persisted(applied()),
+            Ok(SendDirective::Finished)
+        );
+        assert_eq!(workflow.snapshot().phase, SendPhase::Submitted);
+        assert_eq!(workflow.provider_reference.as_deref(), Some("receipt-7"));
+    }
+
+    #[test]
+    fn reducer_rejects_out_of_order_events_without_changing_stage() {
+        let mut workflow = workflow();
+        assert!(matches!(
+            workflow.authorization_succeeded(),
+            Err(SendWorkflowError::InvalidTransition {
+                from: SendStage::Validating,
+                event: "authorization_succeeded"
+            })
+        ));
+        assert!(matches!(
+            workflow.journal_persisted(applied()),
+            Err(SendWorkflowError::InvalidTransition {
+                from: SendStage::Validating,
+                event: "journal_persisted"
+            })
+        ));
+        assert_eq!(workflow.snapshot().phase, SendPhase::Validating);
+    }
+
+    #[test]
+    fn prepared_transfer_must_match_every_bound_send_field() {
+        type TransferMutation = Box<dyn FnOnce(&mut PreparedTransfer)>;
+
+        let mismatches: Vec<TransferMutation> = vec![
+            Box::new(|prepared| prepared.operation_id = "other-operation".to_owned()),
+            Box::new(|prepared| prepared.record_id = "other-record".to_owned()),
+            Box::new(|prepared| prepared.source = other_address()),
+            Box::new(|prepared| prepared.destination = other_address()),
+            Box::new(|prepared| prepared.amount_nanograms = BigUint::from(2_u8)),
+            Box::new(|prepared| prepared.seqno = 8),
+            Box::new(|prepared| prepared.needs_state_init = true),
+        ];
+
+        for mutate in mismatches {
+            let (mut workflow, mut prepared) = preparing_workflow();
+            mutate(&mut prepared);
+            assert_eq!(
+                workflow.transfer_prepared(prepared),
+                Err(SendWorkflowError::PreparedTransferMismatch)
+            );
+            assert_eq!(workflow.snapshot().phase, SendPhase::Preparing);
+        }
+    }
+
+    #[test]
+    fn journal_version_exhaustion_is_reported_before_serialization() {
+        let (mut workflow, prepared) = preparing_workflow();
+        workflow.journal_version = Some(u64::MAX);
+
+        assert_eq!(
+            workflow.transfer_prepared(prepared),
+            Err(SendWorkflowError::InvalidJournal(
+                "version exhausted".to_owned()
+            ))
+        );
+    }
+
+    fn workflow() -> SendWorkflow {
+        SendWorkflow::new("record".to_owned(), source(), request())
+    }
+
+    fn request() -> SendRequest {
+        SendRequest {
+            operation_id: "operation".to_owned(),
+            destination: RAW_DESTINATION.to_owned(),
+            amount_nanograms: "1".to_owned(),
+            secret_ref: ProtectedSecretRef {
+                value: "secret".to_owned(),
+            },
+        }
+    }
+
+    fn source() -> TonAddress {
+        TonAddress::from_str(RAW_SOURCE).expect("test source address is valid")
+    }
+
+    fn destination() -> TonAddress {
+        TonAddress::from_str(RAW_DESTINATION).expect("test destination address is valid")
+    }
+
+    fn other_address() -> TonAddress {
+        TonAddress::from_str(RAW_OTHER).expect("test alternate address is valid")
+    }
+
+    fn fresh_account() -> FreshSendAccount {
+        FreshSendAccount {
+            status: AccountStatus::Active,
+            seqno: 7,
+            observed_at: 1_800_000_000,
+        }
+    }
+
+    fn prepared_transfer() -> PreparedTransfer {
+        PreparedTransfer {
+            operation_id: "operation".to_owned(),
+            record_id: "record".to_owned(),
+            source: source(),
+            destination: destination(),
+            amount_nanograms: BigUint::from(1_u8),
+            seqno: 7,
+            needs_state_init: false,
+            valid_until: 1_800_000_300,
+            signed_boc: Boc::try_from(TonCell::EMPTY_BOC.to_vec())
+                .expect("the empty-cell BOC fixture is valid"),
+            message_hash: Base64Hash::from_bytes(&[7; 32]).expect("the hash fixture has 32 bytes"),
+        }
+    }
+
+    fn preparing_workflow() -> (SendWorkflow, PreparedTransfer) {
+        let mut workflow = workflow();
+        assert!(matches!(
+            workflow.begin(),
+            Ok(SendDirective::LoadJournal(_))
+        ));
+        assert_eq!(
+            workflow.journal_loaded(None),
+            Ok(SendDirective::FetchFreshAccount)
+        );
+        assert!(matches!(
+            workflow.fresh_account_loaded(fresh_account()),
+            Ok(SendDirective::ReadProtectedSecret(_))
+        ));
+        assert!(matches!(
+            workflow.authorization_succeeded(),
+            Ok(SendDirective::PrepareTransfer { .. })
+        ));
+        (workflow, prepared_transfer())
+    }
+
+    fn ready_to_submit_workflow() -> SendWorkflow {
+        let (mut workflow, prepared) = preparing_workflow();
+        assert!(matches!(
+            workflow.transfer_prepared(prepared),
+            Ok(SendDirective::PersistJournal(_))
+        ));
+        assert!(matches!(
+            workflow.journal_persisted(applied()),
+            Ok(SendDirective::Submit { .. })
+        ));
+        workflow
+    }
+
+    fn durable_payload(stage: SendStage) -> Vec<u8> {
+        durable_payload_with(|record| record.stage = stage)
+    }
+
+    fn durable_payload_with(mutate: impl FnOnce(&mut DurableSendRecord)) -> Vec<u8> {
+        let prepared = prepared_transfer();
+        let mut record = DurableSendRecord {
+            schema_version: JOURNAL_SCHEMA_VERSION,
+            operation_id: prepared.operation_id,
+            record_id: prepared.record_id,
+            source: prepared.source,
+            destination: prepared.destination,
+            amount_nanograms: prepared.amount_nanograms.to_string(),
+            seqno: prepared.seqno,
+            needs_state_init: prepared.needs_state_init,
+            valid_until: prepared.valid_until,
+            signed_boc: prepared.signed_boc,
+            message_hash: prepared.message_hash,
+            stage: SendStage::Submitted,
+            provider_reference: None,
+            diagnostic: None,
+        };
+        mutate(&mut record);
+        serde_json::to_vec(&record).expect("durable record fixture serializes")
+    }
+
+    fn applied() -> JournalCompareExchangeResult {
+        JournalCompareExchangeResult {
+            applied: true,
+            current: None,
+        }
+    }
+}
