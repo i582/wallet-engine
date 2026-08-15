@@ -1,4 +1,5 @@
 NEXTEST_PROFILE_ARGS := if env_var_or_default("CI", "") != "" { "-P ci" } else { "" }
+NEXTEST_CONFIG_ARGS := "--config-file .config/nextest.toml"
 
 all: check
 
@@ -45,8 +46,8 @@ clippy:
 
 test:
     cargo nextest run --locked {{ NEXTEST_PROFILE_ARGS }}
-    cargo nextest run --locked --manifest-path c-bindings/Cargo.toml {{ NEXTEST_PROFILE_ARGS }}
-    cargo nextest run --locked --manifest-path xtask/Cargo.toml {{ NEXTEST_PROFILE_ARGS }}
+    cargo nextest run --locked --manifest-path c-bindings/Cargo.toml {{ NEXTEST_CONFIG_ARGS }} {{ NEXTEST_PROFILE_ARGS }}
+    cargo nextest run --locked --manifest-path xtask/Cargo.toml {{ NEXTEST_CONFIG_ARGS }} {{ NEXTEST_PROFILE_ARGS }}
     cargo test --locked --doc
 
 coverage-setup:
@@ -176,7 +177,7 @@ example-tui-clippy:
     cargo clippy --locked --manifest-path examples/tui/Cargo.toml --all-targets -- -D warnings
 
 example-tui-test:
-    cargo nextest run --locked --manifest-path examples/tui/Cargo.toml {{ NEXTEST_PROFILE_ARGS }}
+    cargo nextest run --locked --manifest-path examples/tui/Cargo.toml {{ NEXTEST_CONFIG_ARGS }} {{ NEXTEST_PROFILE_ARGS }}
 
 example-swift-build-macos: bindings-swift
     xcodebuild -project examples/swift/WalletEngineApp.xcodeproj -scheme WalletEngineApp -configuration Debug -destination 'platform=macOS,arch=arm64' -derivedDataPath target/swift-example CODE_SIGNING_ALLOWED=NO build
