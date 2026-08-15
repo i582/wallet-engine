@@ -22,7 +22,7 @@ env:
 jobs:
   quality:
     name: Format, check, and clippy
-    runs-on: ubuntu-24.04
+    runs-on: ubicloud-standard-8-ubuntu-2204
     timeout-minutes: 20
 
     permissions:
@@ -63,7 +63,7 @@ jobs:
 
   tests:
     name: Tests
-    runs-on: ubuntu-24.04
+    runs-on: ubicloud-standard-8-ubuntu-2204
     timeout-minutes: 30
     env:
       WALLET_ENGINE_SCENARIO_TIMEOUT_SECS: "300"

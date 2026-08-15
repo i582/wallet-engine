@@ -22,7 +22,7 @@ env:
 jobs:
   android:
     name: Android bindings and example
-    runs-on: ubuntu-24.04
+    runs-on: ubicloud-standard-8-ubuntu-2204
     timeout-minutes: 45
 
     permissions:
