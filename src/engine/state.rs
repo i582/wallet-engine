@@ -94,8 +94,15 @@ pub(super) struct State {
 
     /// The permanent terminal flag for this client instance.
     /// New operations fail after shutdown. Late host results cannot publish state.
-    /// Shutdown sets this flag only when no send is past its durable commit boundary.
+    /// Graceful shutdown sets this flag after any durable send becomes terminal.
     pub(super) shutdown: bool,
+
+    /// A graceful shutdown has started and rejects all new operations.
+    ///
+    /// An already durable send can continue while this flag is set. Shutdown
+    /// waits for that send to publish a terminal journal state before it sets
+    /// [`Self::shutdown`].
+    pub(super) closing: bool,
 }
 
 impl State {
@@ -160,7 +167,7 @@ impl State {
 }
 
 pub(super) const fn ensure_running(state: &State) -> Result<(), WalletClientError> {
-    if state.shutdown {
+    if state.closing || state.shutdown {
         Err(WalletClientError::Shutdown)
     } else {
         Ok(())

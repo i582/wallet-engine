@@ -204,6 +204,33 @@ fn invalid_protected_secret_fails_without_submission() {
 }
 
 #[test]
+fn amount_larger_than_the_fresh_balance_fails_before_signing() {
+    scenario("a transfer cannot exceed the fresh wallet balance")
+        .given(wallet().active().balance(grams(1)).seqno(7))
+        .when(call("too-large", send().to(own_address()).grams(100)))
+        .then(error(
+            "too-large",
+            WalletClientError::InsufficientBalance {
+                available_nanograms: grams(1).as_nanograms(),
+                requested_nanograms: grams(100).as_nanograms(),
+            },
+        ))
+        .then(snapshot().send_phase(SendPhase::Failed))
+        // The failure happens before authorization, signing, persistence, and submission.
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        // The rejected attempt must release the in-memory send slot.
+        .given(wallet().active().balance(grams(2)).seqno(7))
+        .given(submission().paused("retry-submit"))
+        .when(start("retry", send().to(own_address()).grams(1)))
+        .then(send_phase("retry", SendPhase::Submitting))
+        .when(resume("retry-submit", submission_accepted()))
+        .then(result("retry").submitted())
+        .run();
+}
+
+#[test]
 fn missing_provider_time_prevents_transfer_expiration() {
     scenario("fresh account state must include provider time")
         .given(

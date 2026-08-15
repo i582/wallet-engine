@@ -11,7 +11,7 @@ use wallet_engine::{
     WalletHttpHost, WalletOperationOutcome, WalletUpdate,
 };
 
-use super::host::{MemoryPlatformHost, ScenarioHttpHost};
+use super::host::{MemoryPlatformHost, RequestKind, ScenarioHttpHost};
 use super::localnet::LocalnetHttpHost;
 
 // Signing is CPU-heavy in debug builds. Parallel scenarios can legitimately
@@ -85,6 +85,44 @@ pub(crate) const fn load_more_activity() -> UserAction {
     UserAction::LoadMoreActivity
 }
 
+pub(crate) const fn cancel_refresh() -> UserAction {
+    UserAction::CancelRefresh
+}
+
+pub(crate) const fn cancel_load_more_activity() -> UserAction {
+    UserAction::CancelLoadMoreActivity
+}
+
+pub(crate) const fn shutdown_client() -> UserAction {
+    UserAction::Shutdown
+}
+
+pub(crate) const fn wait_for_change(after_revision: u64) -> UserAction {
+    UserAction::WaitForChange { after_revision }
+}
+
+pub(crate) fn pause_next_account_request(name: impl Into<String>) -> ControlStep {
+    ControlStep::PauseRequest {
+        name: name.into(),
+        kind: RequestKind::Account,
+    }
+}
+
+pub(crate) fn pause_next_activity_request(name: impl Into<String>) -> ControlStep {
+    ControlStep::PauseRequest {
+        name: name.into(),
+        kind: RequestKind::Activity,
+    }
+}
+
+pub(crate) fn wait_for_request(name: impl Into<String>) -> ControlStep {
+    ControlStep::WaitForRequest { name: name.into() }
+}
+
+pub(crate) fn release_request(name: impl Into<String>) -> ControlStep {
+    ControlStep::ReleaseRequest { name: name.into() }
+}
+
 pub(crate) const fn spam_transfers(count: u32) -> UserAction {
     UserAction::SpamTransfers { count }
 }
@@ -97,7 +135,7 @@ pub(crate) fn invalid_address() -> Destination {
     Destination::Address("not-a-ton-address".to_owned())
 }
 
-pub(crate) fn start(name: impl Into<String>, action: SendAction) -> ActionStep {
+pub(crate) fn start(name: impl Into<String>, action: impl Into<UserAction>) -> ActionStep {
     ActionStep {
         name: name.into(),
         action: action.into(),
@@ -204,6 +242,30 @@ pub(crate) fn activity_is(names: &[&str]) -> Expectation {
     Expectation::ActivityIs(names.iter().map(|name| (*name).to_owned()).collect())
 }
 
+pub(crate) fn request_was_cancelled(name: impl Into<String>) -> Expectation {
+    Expectation::RequestWasCancelled(name.into())
+}
+
+pub(crate) fn remember_revision(name: impl Into<String>) -> Expectation {
+    Expectation::RememberRevision(name.into())
+}
+
+pub(crate) fn revision_is(name: impl Into<String>) -> Expectation {
+    Expectation::RevisionIs(name.into())
+}
+
+pub(crate) const fn protected_secret_was_not_read() -> Expectation {
+    Expectation::SecretReadCount(0)
+}
+
+pub(crate) const fn journal_is_empty() -> Expectation {
+    Expectation::JournalIsEmpty
+}
+
+pub(crate) const fn no_message_was_submitted() -> Expectation {
+    Expectation::NoSubmittedMessage
+}
+
 pub(crate) const fn submitted_message() -> SubmittedMessageExpectation {
     SubmittedMessageExpectation
 }
@@ -280,6 +342,12 @@ impl WalletFixture {
 
 pub(crate) struct GramAmount {
     nanograms: String,
+}
+
+impl GramAmount {
+    pub(crate) fn as_nanograms(&self) -> String {
+        self.nanograms.clone()
+    }
 }
 
 pub(crate) fn grams(value: u64) -> GramAmount {
@@ -403,7 +471,11 @@ pub(crate) enum UserAction {
     Send(SendAction),
     CancelSend,
     Refresh,
+    CancelRefresh,
     LoadMoreActivity,
+    CancelLoadMoreActivity,
+    Shutdown,
+    WaitForChange { after_revision: u64 },
     SpamTransfers { count: u32 },
 }
 
@@ -424,6 +496,16 @@ pub(crate) enum ControlStep {
     ResumeSubmission {
         name: String,
         outcome: SubmissionOutcome,
+    },
+    PauseRequest {
+        name: String,
+        kind: RequestKind,
+    },
+    WaitForRequest {
+        name: String,
+    },
+    ReleaseRequest {
+        name: String,
     },
 }
 
@@ -533,6 +615,12 @@ pub(crate) enum Expectation {
         only_new: bool,
     },
     ActivityIs(Vec<String>),
+    RequestWasCancelled(String),
+    RememberRevision(String),
+    RevisionIs(String),
+    SecretReadCount(u64),
+    JournalIsEmpty,
+    NoSubmittedMessage,
     SubmittedMessageContainsStateInit,
     OnChainWallet(OnChainWalletExpectation),
 }
@@ -589,6 +677,10 @@ impl UpdateExpectation {
 
     pub(crate) fn skipped(self) -> Expectation {
         self.outcome(WalletOperationOutcome::Skipped)
+    }
+
+    pub(crate) fn superseded(self) -> Expectation {
+        self.outcome(WalletOperationOutcome::Superseded)
     }
 
     pub(crate) fn added_items(self, count: u64) -> Expectation {
@@ -737,13 +829,26 @@ struct ScenarioRunner {
     results: HashMap<String, OperationResult>,
     activity_cursors: HashMap<String, ActivityCursor>,
     named_activity: HashMap<String, HashSet<String>>,
+    named_revisions: HashMap<String, u64>,
 }
 
 #[derive(Debug)]
 enum OperationResult {
     Send(Result<SendResult, WalletClientError>),
     Update(Box<Result<WalletUpdate, WalletClientError>>),
+    Snapshot(Box<Result<wallet_engine::WalletSnapshot, WalletClientError>>),
     Unit(Result<(), WalletClientError>),
+}
+
+impl OperationResult {
+    fn error(&self) -> Option<&WalletClientError> {
+        match self {
+            Self::Send(Err(error)) | Self::Unit(Err(error)) => Some(error),
+            Self::Update(result) => result.as_ref().as_ref().err(),
+            Self::Snapshot(result) => result.as_ref().as_ref().err(),
+            Self::Send(Ok(_)) | Self::Unit(Ok(())) => None,
+        }
+    }
 }
 
 impl ScenarioRunner {
@@ -851,6 +956,7 @@ impl ScenarioRunner {
             results: HashMap::new(),
             activity_cursors: HashMap::new(),
             named_activity: HashMap::new(),
+            named_revisions: HashMap::new(),
         })
     }
 
@@ -968,9 +1074,25 @@ impl ScenarioRunner {
                         let result = block_on(client.refresh());
                         let _ = sender.send(OperationResult::Update(Box::new(result)));
                     }),
+                    UserAction::CancelRefresh => std::thread::spawn(move || {
+                        let result = block_on(client.cancel_refresh());
+                        let _ = sender.send(OperationResult::Unit(result));
+                    }),
                     UserAction::LoadMoreActivity => std::thread::spawn(move || {
                         let result = block_on(client.load_more_activity());
                         let _ = sender.send(OperationResult::Update(Box::new(result)));
+                    }),
+                    UserAction::CancelLoadMoreActivity => std::thread::spawn(move || {
+                        let result = block_on(client.cancel_load_more_activity());
+                        let _ = sender.send(OperationResult::Unit(result));
+                    }),
+                    UserAction::Shutdown => std::thread::spawn(move || {
+                        let result = block_on(client.shutdown());
+                        let _ = sender.send(OperationResult::Unit(result));
+                    }),
+                    UserAction::WaitForChange { after_revision } => std::thread::spawn(move || {
+                        let result = block_on(client.wait_for_change(after_revision));
+                        let _ = sender.send(OperationResult::Snapshot(Box::new(result)));
                     }),
                     UserAction::SpamTransfers { count } => {
                         let address = self.address.clone();
@@ -1009,6 +1131,23 @@ impl ScenarioRunner {
                 .as_ref()
                 .ok_or_else(|| "localnet scenarios cannot resume provider submission".to_owned())?
                 .resume_submission(&name, outcome),
+            When::Control(ControlStep::PauseRequest { name, kind }) => {
+                self.scripted_http_host
+                    .as_ref()
+                    .ok_or_else(|| "localnet scenarios cannot pause HTTP requests".to_owned())?
+                    .pause_next_request(name, kind);
+                Ok(())
+            }
+            When::Control(ControlStep::WaitForRequest { name }) => self
+                .scripted_http_host
+                .as_ref()
+                .ok_or_else(|| "localnet scenarios cannot pause HTTP requests".to_owned())?
+                .wait_for_request(&name),
+            When::Control(ControlStep::ReleaseRequest { name }) => self
+                .scripted_http_host
+                .as_ref()
+                .ok_or_else(|| "localnet scenarios cannot pause HTTP requests".to_owned())?
+                .release_request(&name),
         }
     }
 
@@ -1036,9 +1175,7 @@ impl ScenarioRunner {
             } => {
                 self.finish_operation(&operation)?;
                 match self.results.get(&operation) {
-                    Some(
-                        OperationResult::Send(Err(actual)) | OperationResult::Unit(Err(actual)),
-                    ) if actual == &expected => Ok(()),
+                    Some(result) if result.error() == Some(&expected) => Ok(()),
                     actual => Err(format!(
                         "expected `{operation}` to return {expected:?}\nactual: {actual:?}"
                     )),
@@ -1233,6 +1370,72 @@ impl ScenarioRunner {
                     Err(format!(
                         "expected activity sets to match\nexpected: {expected:?}\nactual: {actual:?}"
                     ))
+                }
+            }
+            Expectation::RequestWasCancelled(name) => {
+                let cancelled = self
+                    .scripted_http_host
+                    .as_ref()
+                    .ok_or_else(|| {
+                        "localnet scenarios cannot inspect scripted HTTP cancellation".to_owned()
+                    })?
+                    .request_was_cancelled(&name)?;
+                if cancelled {
+                    Ok(())
+                } else {
+                    Err(format!("request at checkpoint `{name}` was not cancelled"))
+                }
+            }
+            Expectation::RememberRevision(name) => {
+                let revision = self
+                    .client
+                    .snapshot()
+                    .map_err(|error| error.to_string())?
+                    .revision;
+                self.named_revisions.insert(name, revision);
+                Ok(())
+            }
+            Expectation::RevisionIs(name) => {
+                let expected = self
+                    .named_revisions
+                    .get(&name)
+                    .copied()
+                    .ok_or_else(|| format!("revision `{name}` was not remembered"))?;
+                let actual = self
+                    .client
+                    .snapshot()
+                    .map_err(|error| error.to_string())?
+                    .revision;
+                if actual == expected {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "expected revision `{name}` to remain {expected}, got {actual}"
+                    ))
+                }
+            }
+            Expectation::SecretReadCount(expected) => {
+                let actual = self.platform_host.secret_read_count();
+                if actual == expected {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "expected protected secret read count {expected}, got {actual}"
+                    ))
+                }
+            }
+            Expectation::JournalIsEmpty => {
+                if self.platform_host.journal_is_empty() {
+                    Ok(())
+                } else {
+                    Err("expected the durable send journal to remain empty".to_owned())
+                }
+            }
+            Expectation::NoSubmittedMessage => {
+                if self.submitted_message().is_none() {
+                    Ok(())
+                } else {
+                    Err("expected no external message submission".to_owned())
                 }
             }
             Expectation::SubmittedMessageContainsStateInit => self

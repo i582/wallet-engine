@@ -61,6 +61,64 @@ fn reports_failure_when_both_resources_fail() {
 }
 
 #[test]
+fn cancellation_discards_late_refresh_responses_and_allows_retry() {
+    scenario("cancelled refresh responses cannot publish after cancellation")
+        .when(pause_next_account_request("account-response"))
+        .when(start("refresh", refresh_wallet()))
+        .when(wait_for_request("account-response"))
+        .when(call("cancel", cancel_refresh()))
+        .then(succeeds("cancel"))
+        .then(request_was_cancelled("account-response"))
+        .then(
+            snapshot()
+                .account_phase(ResourcePhase::Idle)
+                .activity_count(0)
+                .activity_phase(ResourcePhase::Idle),
+        )
+        .then(remember_revision("after-cancel"))
+        // Deliver a successful response after cancellation. It must not publish.
+        .when(release_request("account-response"))
+        .then(update("refresh").superseded())
+        .then(revision_is("after-cancel"))
+        .then(
+            snapshot()
+                .account_phase(ResourcePhase::Idle)
+                .activity_count(0)
+                .activity_phase(ResourcePhase::Idle),
+        )
+        // A cancelled generation must not poison the next refresh.
+        .when(call("retry", refresh_wallet()))
+        .then(update("retry").completed())
+        .then(
+            snapshot()
+                .account_phase(ResourcePhase::Ready)
+                .activity_phase(ResourcePhase::Ready),
+        )
+        .run();
+}
+
+#[test]
+fn refresh_stays_loading_until_both_provider_responses_finish() {
+    scenario("refresh completes only after both resource requests finish")
+        .when(pause_next_account_request("account-response"))
+        .when(start("refresh", refresh_wallet()))
+        .when(wait_for_request("account-response"))
+        .then(
+            snapshot()
+                .account_phase(ResourcePhase::Loading)
+                .activity_phase(ResourcePhase::Loading),
+        )
+        .when(release_request("account-response"))
+        .then(update("refresh").completed())
+        .then(
+            snapshot()
+                .account_phase(ResourcePhase::Ready)
+                .activity_phase(ResourcePhase::Ready),
+        )
+        .run();
+}
+
+#[test]
 fn loads_newly_confirmed_transactions_from_localnet() {
     scenario("refresh adds transactions confirmed after the previous snapshot")
         .given(network().localnet())

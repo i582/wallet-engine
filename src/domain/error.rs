@@ -192,6 +192,19 @@ pub enum WalletClientError {
         /// The fresh account status returned by the provider.
         status: AccountStatus,
     },
+    /// The fresh on-chain balance is smaller than the requested transfer value.
+    ///
+    /// This check excludes network fees. A transfer can still fail on-chain
+    /// when its value fits but the remaining balance cannot pay fees.
+    #[error(
+        "insufficient wallet balance: requested {requested_nanograms} nanograms, available {available_nanograms}"
+    )]
+    InsufficientBalance {
+        /// The fresh provider balance as a canonical decimal string.
+        available_nanograms: String,
+        /// The requested transfer value as a canonical decimal string.
+        requested_nanograms: String,
+    },
     /// The protected secret cannot be decoded as a valid wallet recovery phrase.
     #[error("the protected wallet secret is invalid")]
     InvalidProtectedSecret,

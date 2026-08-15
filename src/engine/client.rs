@@ -4,8 +4,9 @@ use std::sync::{Arc, Mutex};
 
 use futures::channel::oneshot;
 
-use crate::{WalletClientConfig, WalletClientError, WalletSnapshot};
+use crate::{ResourceState, SendPhase, WalletClientConfig, WalletClientError, WalletSnapshot};
 
+use super::activity::mark_loading_cancelled;
 use super::host::{WalletHttpHost, WalletPlatformHost};
 use super::state::State;
 use super::validation::validate_config;
@@ -56,6 +57,7 @@ impl WalletClient {
                 send_workflow: None,
                 waiters: Vec::new(),
                 shutdown: false,
+                closing: false,
             }),
         }))
     }
@@ -78,7 +80,7 @@ impl WalletClient {
     ) -> Result<WalletSnapshot, WalletClientError> {
         let receiver = {
             let mut state = self.lock()?;
-            if state.shutdown {
+            if state.closing || state.shutdown {
                 return Err(WalletClientError::Shutdown);
             }
 
@@ -104,48 +106,94 @@ impl WalletClient {
 
     /// Stops new work, cancels active host requests, and releases snapshot waiters.
     ///
-    /// The operation is idempotent. It returns `SendCancellationTooLate` while
-    /// a send is past its durable commit boundary. Call it again after that
-    /// send reaches a terminal phase.
+    /// The operation is idempotent. It cancels reversible work immediately.
+    /// If a send crossed its durable commit boundary, shutdown rejects new
+    /// operations and waits for that send to reach a terminal journal state.
     pub async fn shutdown(&self) -> Result<(), WalletClientError> {
-        let (request_ids, waiters) = {
-            let mut state = self.lock()?;
-            if state.shutdown {
-                return Ok(());
+        loop {
+            let shutdown = {
+                let mut state = self.lock()?;
+                if state.shutdown {
+                    return Ok(());
+                }
+
+                state.closing = true;
+                if state.active_send.is_some() && state.send_commit_started {
+                    let revision = state.snapshot.revision;
+                    let (sender, receiver) = oneshot::channel();
+                    state.waiters.push((revision, sender));
+                    ShutdownAction::Wait(receiver)
+                } else {
+                    ShutdownAction::Finish(prepare_shutdown(&mut state)?)
+                }
+            };
+
+            match shutdown {
+                ShutdownAction::Wait(receiver) => {
+                    let _ = receiver.await;
+                }
+                ShutdownAction::Finish((request_ids, waiters)) => {
+                    for request_id in request_ids {
+                        self.http_host.cancel_http(request_id).await;
+                    }
+
+                    drop(waiters);
+                    return Ok(());
+                }
             }
-
-            if state.active_send.is_some() && state.send_commit_started {
-                return Err(WalletClientError::SendCancellationTooLate);
-            }
-
-            state.shutdown = true;
-
-            let mut request_ids = state
-                .active_refresh
-                .take()
-                .map(|active| active.1)
-                .unwrap_or_default();
-            if let Some((_, request_id)) = state.active_pagination.take() {
-                request_ids.push(request_id);
-            }
-
-            if let Some((_, send_request_ids)) = state.active_send.take() {
-                request_ids.extend(send_request_ids);
-            }
-
-            state.send_commit_started = false;
-
-            (request_ids, std::mem::take(&mut state.waiters))
-        };
-
-        for request_id in request_ids {
-            self.http_host.cancel_http(request_id).await;
         }
-
-        drop(waiters);
-
-        Ok(())
     }
+}
+
+type SnapshotWaiter = (u64, oneshot::Sender<()>);
+
+enum ShutdownAction {
+    Wait(oneshot::Receiver<()>),
+    Finish((Vec<crate::HttpRequestId>, Vec<SnapshotWaiter>)),
+}
+
+fn prepare_shutdown(
+    state: &mut State,
+) -> Result<(Vec<crate::HttpRequestId>, Vec<SnapshotWaiter>), WalletClientError> {
+    let has_active_work = state.active_refresh.is_some()
+        || state.active_pagination.is_some()
+        || state.active_send.is_some();
+    if has_active_work && state.snapshot.revision == u64::MAX {
+        return Err(WalletClientError::IdentifierExhausted);
+    }
+
+    let active_refresh = state.active_refresh.take();
+    let mut request_ids = active_refresh
+        .as_ref()
+        .map(|active| active.1.clone())
+        .unwrap_or_default();
+    if active_refresh.is_some() {
+        mark_loading_cancelled(&mut state.snapshot.account_resource);
+        mark_loading_cancelled(&mut state.snapshot.activity_resource);
+    }
+
+    if let Some((_, request_id)) = state.active_pagination.take() {
+        request_ids.push(request_id);
+        state.snapshot.activity_pagination_resource = ResourceState::idle();
+    }
+
+    if let Some((_, send_request_ids)) = state.active_send.take() {
+        request_ids.extend(send_request_ids);
+        if let Some(mut workflow) = state.send_workflow.take() {
+            let _ = workflow.cancel();
+            state.snapshot.send = workflow.snapshot();
+            state.send_workflow = Some(workflow);
+        }
+        state.snapshot.send.phase = SendPhase::Cancelled;
+    }
+
+    state.send_commit_started = false;
+    if has_active_work {
+        state.next_revision()?;
+    }
+    state.shutdown = true;
+
+    Ok((request_ids, std::mem::take(&mut state.waiters)))
 }
 
 impl WalletClient {

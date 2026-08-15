@@ -10,6 +10,7 @@ use super::state::{OperationFamily, ensure_running};
 use super::validation::validate_send;
 
 use crate::domain::bounded_diagnostic;
+use crate::types::parse_positive_decimal;
 use crate::wallet::send::{FreshSendAccount, SendDirective, SendWorkflow};
 use crate::wallet::transfer::{derive_source, prepare_transfer};
 use crate::{AccountStatus, SendPhase, SendRequest, SendResult, WalletClientError};
@@ -118,6 +119,22 @@ impl WalletClient {
             .await?;
         let account = evaluate_response(&account_request, account_response, parse_account)
             .map_err(|error| self.send_failed_error(generation, error.developer_message))?;
+
+        // Reject an impossible value before reading the mnemonic or creating a signed BOC.
+        // Fees are intentionally not estimated here, so equality can still fail on-chain.
+        let available = parse_positive_decimal(&account.balance_nanograms)
+            .ok_or_else(|| self.send_failed_error(generation, "invalid fresh account balance"))?;
+        let requested = parse_positive_decimal(&request.amount_nanograms)
+            .ok_or_else(|| self.send_failed_error(generation, "invalid send amount"))?;
+        if requested > available {
+            let error = WalletClientError::InsufficientBalance {
+                available_nanograms: available.to_string(),
+                requested_nanograms: requested.to_string(),
+            };
+            self.fail_send(generation, error.to_string())?;
+            return Err(error);
+        }
+
         // Active wallets require a fresh seqno for replay protection. A wallet that is not yet
         // deployed starts at seqno zero; the workflow rejects unsupported account states later.
         let seqno = if account.status == AccountStatus::Active {

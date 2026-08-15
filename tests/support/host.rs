@@ -32,8 +32,23 @@ struct HttpState {
     activity_pages: Vec<usize>,
     activity_page_index: usize,
     submission_gate: Option<SubmissionGate>,
+    request_gate: Option<RequestGate>,
     submitted_message: Option<SubmittedMessage>,
     cancelled: HashSet<HttpRequestId>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RequestKind {
+    Account,
+    Activity,
+}
+
+struct RequestGate {
+    name: String,
+    kind: RequestKind,
+    request_id: Option<HttpRequestId>,
+    reached: bool,
+    released: bool,
 }
 
 #[derive(Clone)]
@@ -61,6 +76,7 @@ impl ScenarioHttpHost {
                     reached: false,
                     outcome: None,
                 }),
+                request_gate: None,
                 submitted_message: None,
                 cancelled: HashSet::new(),
             }),
@@ -90,6 +106,112 @@ impl ScenarioHttpHost {
             reached: false,
             outcome: None,
         });
+    }
+
+    pub(super) fn pause_next_request(&self, name: String, kind: RequestKind) {
+        lock(&self.state).request_gate = Some(RequestGate {
+            name,
+            kind,
+            request_id: None,
+            reached: false,
+            released: false,
+        });
+    }
+
+    pub(super) fn wait_for_request(&self, name: &str) -> Result<(), String> {
+        let mut state = lock(&self.state);
+        let deadline = Instant::now() + CHECKPOINT_TIMEOUT;
+        loop {
+            let gate = state
+                .request_gate
+                .as_ref()
+                .ok_or_else(|| format!("request checkpoint `{name}` does not exist"))?;
+            if gate.name != name {
+                return Err(format!(
+                    "expected request checkpoint `{}`, got `{name}`",
+                    gate.name
+                ));
+            }
+            if gate.reached {
+                return Ok(());
+            }
+
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(format!(
+                    "request checkpoint `{name}` was not reached within {CHECKPOINT_TIMEOUT:?}"
+                ));
+            }
+            state = match self.changed.wait_timeout(state, remaining) {
+                Ok((guard, _)) => guard,
+                Err(poisoned) => poisoned.into_inner().0,
+            };
+        }
+    }
+
+    pub(super) fn release_request(&self, name: &str) -> Result<(), String> {
+        self.wait_for_request(name)?;
+        let mut state = lock(&self.state);
+        let gate = state
+            .request_gate
+            .as_mut()
+            .ok_or_else(|| format!("request checkpoint `{name}` disappeared"))?;
+        gate.released = true;
+        self.changed.notify_all();
+        Ok(())
+    }
+
+    pub(super) fn request_was_cancelled(&self, name: &str) -> Result<bool, String> {
+        let state = lock(&self.state);
+        let gate = state
+            .request_gate
+            .as_ref()
+            .ok_or_else(|| format!("request checkpoint `{name}` does not exist"))?;
+        if gate.name != name {
+            return Err(format!(
+                "expected request checkpoint `{}`, got `{name}`",
+                gate.name
+            ));
+        }
+        let request_id = gate
+            .request_id
+            .ok_or_else(|| format!("request checkpoint `{name}` was not reached"))?;
+        Ok(state.cancelled.contains(&request_id))
+    }
+
+    fn wait_at_request_gate(
+        &self,
+        kind: RequestKind,
+        request_id: HttpRequestId,
+    ) -> Result<(), HttpHostError> {
+        let mut state = lock(&self.state);
+        let should_capture = matches!(
+            state.request_gate.as_ref(),
+            Some(gate) if gate.kind == kind && gate.request_id.is_none()
+        );
+        if should_capture {
+            let gate = state.request_gate.as_mut().expect("request gate exists");
+            gate.request_id = Some(request_id);
+            gate.reached = true;
+            self.changed.notify_all();
+        }
+
+        loop {
+            let Some(gate) = state.request_gate.as_ref() else {
+                return Ok(());
+            };
+            if gate.request_id != Some(request_id) {
+                return Ok(());
+            }
+            // A real transport can complete after cancellation. The gate
+            // deliberately ignores the cancellation tombstone so scenarios
+            // can release a successful late response and verify generation guards.
+            if gate.released {
+                state.request_gate = None;
+                return Ok(());
+            }
+            state = wait(&self.changed, state);
+        }
     }
 
     pub(super) fn submitted_message(&self) -> Option<SubmittedMessage> {
@@ -288,10 +410,14 @@ fn activity_transactions(page: usize, count: usize) -> Vec<Value> {
 impl WalletHttpHost for ScenarioHttpHost {
     async fn execute_http(&self, request: HttpRequest) -> Result<HttpResponse, HttpHostError> {
         if request.url.contains("getAddressInformation") {
-            return Ok(self.account_response(&request));
+            let response = self.account_response(&request);
+            self.wait_at_request_gate(RequestKind::Account, request.id)?;
+            return Ok(response);
         }
         if request.url.contains("getTransactions") {
-            return Ok(self.activity_response(&request));
+            let response = self.activity_response(&request);
+            self.wait_at_request_gate(RequestKind::Activity, request.id)?;
+            return Ok(response);
         }
 
         let body: Value = serde_json::from_slice(&request.body)
@@ -315,6 +441,7 @@ impl WalletHttpHost for ScenarioHttpHost {
 #[derive(Default)]
 pub(super) struct MemoryPlatformHost {
     secrets: Mutex<HashMap<String, Vec<u8>>>,
+    secret_reads: Mutex<u64>,
     journal: Mutex<HashMap<(String, String), JournalRecord>>,
     conflict_next_journal_write: Mutex<bool>,
 }
@@ -327,6 +454,14 @@ impl MemoryPlatformHost {
     pub(super) fn conflict_next_journal_write(&self) {
         *lock(&self.conflict_next_journal_write) = true;
     }
+
+    pub(super) fn secret_read_count(&self) -> u64 {
+        *lock(&self.secret_reads)
+    }
+
+    pub(super) fn journal_is_empty(&self) -> bool {
+        lock(&self.journal).is_empty()
+    }
 }
 
 #[async_trait]
@@ -335,6 +470,7 @@ impl WalletPlatformHost for MemoryPlatformHost {
         &self,
         request: ProtectedSecretRead,
     ) -> Result<Vec<u8>, ProtectedSecretHostError> {
+        *lock(&self.secret_reads) += 1;
         lock(&self.secrets)
             .get(&request.secret_ref.value)
             .cloned()

@@ -35,6 +35,53 @@ fn appends_an_older_page_and_stops_after_a_short_page() {
 }
 
 #[test]
+fn refresh_supersedes_an_in_flight_older_page() {
+    scenario("refresh owns the activity head and supersedes older-page work")
+        .given(activity_pages(&[10, 3, 10]))
+        .when(call("initial", refresh_wallet()))
+        .then(update("initial").completed())
+        .then(remember_activity_as("A"))
+        // Hold the older-page response after the provider has produced it.
+        .when(pause_next_activity_request("older-response"))
+        .when(start("older", load_more_activity()))
+        .when(wait_for_request("older-response"))
+        // Refresh cancels that exact request and starts a new head request.
+        .when(call("refresh", refresh_wallet()))
+        .then(update("refresh").completed())
+        .then(request_was_cancelled("older-response"))
+        .then(remember_new_activity_as("C"))
+        .then(remember_revision("after-refresh"))
+        // Simulate a transport that still delivers the cancelled successful response.
+        .when(release_request("older-response"))
+        .then(update("older").superseded())
+        .then(revision_is("after-refresh"))
+        .then(activity_is(&["A", "C"]))
+        .run();
+}
+
+#[test]
+fn cancelling_an_older_page_preserves_loaded_activity() {
+    scenario("cancelled pagination cannot publish its late provider response")
+        .given(activity_pages(&[10, 3]))
+        .when(call("initial", refresh_wallet()))
+        .then(update("initial").completed())
+        .then(remember_activity_as("A"))
+        .when(pause_next_activity_request("older-response"))
+        .when(start("older", load_more_activity()))
+        .when(wait_for_request("older-response"))
+        .when(call("cancel", cancel_load_more_activity()))
+        .then(succeeds("cancel"))
+        .then(request_was_cancelled("older-response"))
+        .then(remember_revision("after-cancel"))
+        // The provider response succeeds after cancellation and must still be ignored.
+        .when(release_request("older-response"))
+        .then(update("older").superseded())
+        .then(revision_is("after-cancel"))
+        .then(activity_is(&["A"]))
+        .run();
+}
+
+#[test]
 fn loads_older_real_transactions_from_localnet() {
     scenario("pagination loads older transactions from Acton localnet")
         .given(network().localnet())

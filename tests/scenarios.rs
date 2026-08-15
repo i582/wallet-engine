@@ -1,5 +1,7 @@
 mod support;
 
+#[path = "scenarios/lifecycle.rs"]
+mod lifecycle;
 #[path = "scenarios/pagination.rs"]
 mod pagination;
 #[path = "scenarios/refresh.rs"]
