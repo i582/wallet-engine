@@ -107,6 +107,7 @@ pub(crate) fn send() -> SendAction {
     SendAction {
         destination: Destination::SelfWallet,
         amount: SendAmount::exact(NANOGRAMS_PER_GRAM.to_string()),
+        comment: None,
     }
 }
 
@@ -669,6 +670,7 @@ impl SubmissionFixture {
 pub(crate) struct SendAction {
     destination: Destination,
     amount: SendAmount,
+    comment: Option<String>,
 }
 
 pub(crate) enum Destination {
@@ -698,6 +700,12 @@ impl SendAction {
     #[must_use]
     pub(crate) fn all(mut self) -> Self {
         self.amount = SendAmount::All;
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn comment(mut self, comment: impl Into<String>) -> Self {
+        self.comment = Some(comment.into());
         self
     }
 }
@@ -911,6 +919,7 @@ pub(crate) enum Expectation {
     NoSubmittedMessage,
     SubmittedMessageContainsStateInit,
     SubmittedMessageUsesMode(u8),
+    SubmittedMessageHasComment(String),
     SubmittedMessagePresent,
     OnChainWallet(OnChainWalletExpectation),
 }
@@ -924,6 +933,10 @@ impl SubmittedMessageExpectation {
 
     pub(crate) const fn uses_send_mode(self, mode: u8) -> Expectation {
         Expectation::SubmittedMessageUsesMode(mode)
+    }
+
+    pub(crate) fn has_comment(self, comment: impl Into<String>) -> Expectation {
+        Expectation::SubmittedMessageHasComment(comment.into())
     }
 }
 
@@ -1444,6 +1457,7 @@ impl ScenarioRunner {
                         let request = SendPreviewRequest {
                             destination,
                             amount: action.amount,
+                            comment: action.comment,
                         };
                         std::thread::spawn(move || {
                             let result = block_on(client.preview_send(request));
@@ -1459,6 +1473,7 @@ impl ScenarioRunner {
                             operation_id: format!("{name}-operation"),
                             destination,
                             amount: action.amount,
+                            comment: action.comment,
                             secret_ref: self.secret_ref.clone(),
                         };
                         std::thread::spawn(move || {
@@ -2043,6 +2058,19 @@ impl ScenarioRunner {
                 } else {
                     Err(format!(
                         "expected submitted external message mode [{expected}], actual: {actual:?}"
+                    ))
+                }
+            }
+            Expectation::SubmittedMessageHasComment(expected) => {
+                let actual = self
+                    .submitted_message()
+                    .ok_or_else(|| "expected an external message submission".to_owned())?
+                    .comment;
+                if actual.as_deref() == Some(expected.as_str()) {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "expected submitted message comment {expected:?}, actual: {actual:?}"
                     ))
                 }
             }

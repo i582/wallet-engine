@@ -29,7 +29,7 @@ use wallet_engine::{
     HttpResponse, WalletHttpHost,
 };
 
-use super::host::{RequestKind, SubmittedMessage};
+use super::host::{RequestKind, SubmittedMessage, decode_submitted_comment};
 use super::test_wallet;
 
 const READY_TIMEOUT: Duration = Duration::from_secs(45);
@@ -368,9 +368,11 @@ impl LocalnetHttpHost {
                 .map_err(|error| host_error(HttpHostErrorKind::Other, &error.to_string()))?;
             let body = WalletV5ExtMsgBody::from_cell(&message.body)
                 .map_err(|error| host_error(HttpHostErrorKind::Other, &error.to_string()))?;
+            let comment = decode_submitted_comment(&body)?;
             *lock(&self.submitted_message) = Some(SubmittedMessage {
                 contains_state_init: message.state_init().is_some(),
                 send_modes: body.msgs_modes,
+                comment,
             });
             *lock(&self.submitted_boc_base64) = Some(encoded);
             localnet

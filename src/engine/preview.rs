@@ -168,8 +168,7 @@ impl WalletClient {
             &expected_source,
             &config.public_key,
             config.network,
-            &request.destination,
-            &request.amount,
+            &request,
             &fresh,
             valid_until,
         )
@@ -252,6 +251,7 @@ impl WalletClient {
         let preview = SendPreview {
             destination: request.destination,
             amount: request.amount,
+            comment: request.comment,
             valid_until,
             message_boc_base64,
             emulation: evaluated.summary,

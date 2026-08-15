@@ -366,6 +366,7 @@ impl App {
             .preview_send(SendPreviewRequest {
                 destination: self.send_destination.clone(),
                 amount: SendAmount::exact(amount_nanograms.clone()),
+                comment: None,
             })
             .await
         {
@@ -381,6 +382,7 @@ impl App {
             operation_id: new_id("send"),
             destination: self.send_destination.clone(),
             amount: SendAmount::exact(amount_nanograms),
+            comment: None,
             secret_ref: descriptor.secret_ref,
         };
         match client.send(request).await {

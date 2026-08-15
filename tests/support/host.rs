@@ -7,6 +7,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use serde_json::{Value, json};
 use ton::block_tlb::Msg;
+use ton::tep::snake_data::SnakeData;
 use ton::ton_core::cell::TonCell;
 use ton::ton_core::traits::tlb::TLB;
 use ton::ton_core::types::TonAddress;
@@ -74,6 +75,36 @@ struct RequestGate {
 pub(super) struct SubmittedMessage {
     pub(super) contains_state_init: bool,
     pub(super) send_modes: Vec<u8>,
+    pub(super) comment: Option<String>,
+}
+
+pub(super) fn decode_submitted_comment(
+    body: &WalletV5ExtMsgBody,
+) -> Result<Option<String>, HttpHostError> {
+    let Some(message) = body.msgs.first() else {
+        return Ok(None);
+    };
+    let message = Msg::<TonCell>::from_cell(message)
+        .map_err(|error| host_error(HttpHostErrorKind::Other, error.to_string()))?;
+    let mut parser = message.body.parser();
+    if parser
+        .data_bits_left()
+        .map_err(|error| host_error(HttpHostErrorKind::Other, error.to_string()))?
+        < 32
+    {
+        return Ok(None);
+    }
+    let opcode = parser
+        .read_num::<u32>(32)
+        .map_err(|error| host_error(HttpHostErrorKind::Other, error.to_string()))?;
+    if opcode != 0 {
+        return Ok(None);
+    }
+    let comment = SnakeData::read(&mut parser)
+        .map_err(|error| host_error(HttpHostErrorKind::Other, error.to_string()))?;
+    String::from_utf8(comment.as_slice().to_vec())
+        .map(Some)
+        .map_err(|error| host_error(HttpHostErrorKind::Other, error.to_string()))
 }
 
 struct SubmissionGate {
@@ -473,11 +504,13 @@ impl ScenarioHttpHost {
             .map_err(|error| host_error(HttpHostErrorKind::Other, error.to_string()))?;
         let body = WalletV5ExtMsgBody::from_cell(&message.body)
             .map_err(|error| host_error(HttpHostErrorKind::Other, error.to_string()))?;
+        let comment = decode_submitted_comment(&body)?;
 
         let mut state = lock(&self.state);
         state.submitted_message = Some(SubmittedMessage {
             contains_state_init: message.state_init().is_some(),
             send_modes: body.msgs_modes,
+            comment,
         });
 
         let outcome = if state.submission_gate.is_some() {

@@ -68,6 +68,9 @@ pub(crate) struct PreparedTransfer {
     /// The exact-value or whole-balance policy encoded into the wallet action.
     pub amount: SendAmount,
 
+    /// The optional plaintext comment encoded into the internal message.
+    pub comment: Option<String>,
+
     /// The fresh wallet sequence number signed into the external message.
     pub seqno: u32,
 
@@ -212,6 +215,9 @@ struct DurableSendRecord {
     destination: TonAddress,
     /// The exact-value or whole-balance policy stored with the signed message.
     amount: SendAmount,
+    /// The optional plaintext comment stored with the signed message.
+    #[serde(default)]
+    comment: Option<String>,
     /// The wallet sequence number signed into the external message.
     seqno: u32,
     /// Reports whether the signed message contains the wallet `StateInit`.
@@ -533,6 +539,7 @@ impl SendWorkflow {
             source: prepared.source.clone(),
             destination: prepared.destination.clone(),
             amount: prepared.amount.clone(),
+            comment: prepared.comment.clone(),
             seqno: prepared.seqno,
             needs_state_init: prepared.needs_state_init,
             valid_until: prepared.valid_until,
@@ -580,6 +587,7 @@ impl SendWorkflow {
             || prepared.source != self.source
             || prepared.destination != request_destination
             || prepared.amount != self.request.amount
+            || prepared.comment != self.request.comment
             || prepared.seqno != account.seqno
             || prepared.needs_state_init != account.needs_state_init()
         {
@@ -800,6 +808,24 @@ mod tests {
     }
 
     #[test]
+    fn durable_records_from_before_comment_support_remain_compatible() {
+        let mut payload: serde_json::Value =
+            serde_json::from_slice(&durable_payload(SendStage::Cancelled))
+                .expect("durable fixture is JSON");
+        payload
+            .as_object_mut()
+            .expect("durable fixture is an object")
+            .remove("comment");
+        let record = JournalRecord {
+            version: 1,
+            payload: serde_json::to_vec(&payload).expect("legacy durable fixture serializes"),
+        };
+
+        let decoded = decode_durable_record(&record).expect("legacy durable record decodes");
+        assert_eq!(decoded.comment, None);
+    }
+
+    #[test]
     fn every_nonreplaceable_durable_stage_blocks_a_new_signature() {
         for stage in [
             SendStage::LoadingJournal,
@@ -916,6 +942,7 @@ mod tests {
             Box::new(|prepared| {
                 prepared.amount = SendAmount::exact("2");
             }),
+            Box::new(|prepared| prepared.comment = Some("different".to_owned())),
             Box::new(|prepared| prepared.seqno = 8),
             Box::new(|prepared| prepared.needs_state_init = true),
         ];
@@ -953,6 +980,7 @@ mod tests {
             operation_id: "operation".to_owned(),
             destination: RAW_DESTINATION.to_owned(),
             amount: SendAmount::exact("1"),
+            comment: None,
             secret_ref: ProtectedSecretRef {
                 value: "secret".to_owned(),
             },
@@ -986,6 +1014,7 @@ mod tests {
             source: source(),
             destination: destination(),
             amount: SendAmount::exact("1"),
+            comment: None,
             seqno: 7,
             needs_state_init: false,
             valid_until: 1_800_000_300,
@@ -1042,6 +1071,7 @@ mod tests {
             source: prepared.source,
             destination: prepared.destination,
             amount: prepared.amount,
+            comment: prepared.comment,
             seqno: prepared.seqno,
             needs_state_init: prepared.needs_state_init,
             valid_until: prepared.valid_until,

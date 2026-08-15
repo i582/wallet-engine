@@ -12,6 +12,7 @@ use ton::block_tlb::{
     SEND_MODE_IGNORE_ERRORS, SEND_MODE_PAY_FEES_SEPARATELY,
 };
 use ton::errors::TonError;
+use ton::tep::snake_data::SnakeData;
 use ton::ton_core::cell::TonCell;
 use ton::ton_core::errors::TonCoreError;
 use ton::ton_core::traits::tlb::TLB;
@@ -20,7 +21,7 @@ use ton::ton_core::types::tlb_core::{MsgAddressExt, TLBCoins, TLBEitherRef};
 use ton::ton_wallet::{WALLET_V5R1_ID_DEFAULT, WALLET_V5R1_ID_DEFAULT_TESTNET, WalletVersion};
 
 use crate::types::{Boc, BocError, parse_positive_decimal};
-use crate::{Base64Hash, Base64HashError, Network, SendAmount, SendRequest};
+use crate::{Base64Hash, Base64HashError, Network, SendAmount, SendPreviewRequest, SendRequest};
 
 use super::crypto::{WalletCryptoError, derive_v5r1_public_state, derive_v5r1_wallet};
 use super::send::{FreshSendAccount, PreparedTransfer};
@@ -72,7 +73,8 @@ pub(crate) fn prepare_transfer(
     let destination =
         TonAddress::from_str(&request.destination).map_err(TransferError::InvalidDestination)?;
 
-    let (internal, send_mode) = build_internal_message(&destination, &request.amount)?;
+    let (internal, send_mode) =
+        build_internal_message(&destination, &request.amount, request.comment.as_deref())?;
 
     let external = wallet
         .create_ext_in_msg_with_modes(
@@ -100,6 +102,7 @@ pub(crate) fn prepare_transfer(
         source: source.clone(),
         destination,
         amount: request.amount.clone(),
+        comment: request.comment.clone(),
         seqno: account.seqno,
         needs_state_init: account.needs_state_init(),
         valid_until,
@@ -117,14 +120,14 @@ pub(crate) fn prepare_transfer_emulation(
     source: &TonAddress,
     public_key: &[u8],
     network: Network,
-    destination: &str,
-    amount: &SendAmount,
+    request: &SendPreviewRequest,
     account: &FreshSendAccount,
     valid_until: u32,
 ) -> Result<Boc, TransferError> {
     let destination =
-        TonAddress::from_str(destination).map_err(TransferError::InvalidDestination)?;
-    let (internal, send_mode) = build_internal_message(&destination, amount)?;
+        TonAddress::from_str(&request.destination).map_err(TransferError::InvalidDestination)?;
+    let (internal, send_mode) =
+        build_internal_message(&destination, &request.amount, request.comment.as_deref())?;
     let wallet_id = match network {
         Network::Mainnet => WALLET_V5R1_ID_DEFAULT,
         Network::Testnet => WALLET_V5R1_ID_DEFAULT_TESTNET,
@@ -173,6 +176,7 @@ pub(crate) fn prepare_transfer_emulation(
 fn build_internal_message(
     destination: &TonAddress,
     amount: &SendAmount,
+    comment: Option<&str>,
 ) -> Result<(TonCell, u8), TransferError> {
     let (amount_nanograms, send_mode) = match amount {
         SendAmount::Exact { nanograms } => {
@@ -191,11 +195,25 @@ fn build_internal_message(
     // the address type. This also lets uninitialized recipients accept funds.
     info.bounce = false;
 
-    let message = Msg::new(info, TonCell::empty().to_owned())
+    let body = build_comment_body(comment)?;
+    let message = Msg::new(info, body)
         .to_cell()
         .map_err(TransferError::InternalMessage)?;
 
     Ok((message, send_mode))
+}
+
+fn build_comment_body(comment: Option<&str>) -> Result<TonCell, TransferError> {
+    let Some(comment) = comment else {
+        return Ok(TonCell::empty().to_owned());
+    };
+    let mut body = TonCell::builder();
+    body.write_bits([0_u8; 4], 32)
+        .map_err(TransferError::InternalMessage)?;
+    SnakeData::from(comment)
+        .write(&mut body)
+        .map_err(TransferError::InternalMessage)?;
+    body.build().map_err(TransferError::InternalMessage)
 }
 
 pub(crate) fn derive_source(
@@ -218,7 +236,7 @@ mod tests {
     #[test]
     fn serialized_internal_message_is_non_bounceable() {
         let destination = TonAddress::from_str(DESTINATION).expect("valid destination");
-        let (cell, mode) = build_internal_message(&destination, &SendAmount::exact("1"))
+        let (cell, mode) = build_internal_message(&destination, &SendAmount::exact("1"), None)
             .expect("internal message");
         let message = Msg::<TonCell>::from_cell(&cell).expect("decode internal message");
 
@@ -237,7 +255,7 @@ mod tests {
     fn all_balance_transfer_uses_mode_130_and_zero_placeholder_value() {
         let destination = TonAddress::from_str(DESTINATION).expect("valid destination");
         let (cell, mode) =
-            build_internal_message(&destination, &SendAmount::All).expect("internal message");
+            build_internal_message(&destination, &SendAmount::All, None).expect("internal message");
         let message = Msg::<TonCell>::from_cell(&cell).expect("decode internal message");
 
         let CommonMsgInfo::Int(info) = message.info else {
@@ -246,5 +264,42 @@ mod tests {
 
         assert_eq!(mode, ALL_BALANCE_SEND_MODE);
         assert_eq!(info.value.coins, TLBCoins::ZERO);
+    }
+
+    #[test]
+    fn plaintext_comment_is_utf8_snake_data_after_the_zero_opcode() {
+        let destination = TonAddress::from_str(DESTINATION).expect("valid destination");
+        let comment = "Привет, TON! ".repeat(20);
+        let (cell, _) =
+            build_internal_message(&destination, &SendAmount::exact("1"), Some(&comment))
+                .expect("commented internal message");
+        let message = Msg::<TonCell>::from_cell(&cell).expect("decode internal message");
+        let mut parser = message.body.parser();
+
+        assert_eq!(parser.read_num::<u32>(32).expect("comment opcode"), 0);
+        let snake = SnakeData::read(&mut parser).expect("comment snake data");
+        assert_eq!(snake.as_slice(), comment.as_bytes());
+        assert!(
+            !message.body.refs().is_empty(),
+            "a long comment must continue in a child cell"
+        );
+    }
+
+    #[test]
+    fn empty_comment_is_distinct_from_no_comment() {
+        let destination = TonAddress::from_str(DESTINATION).expect("valid destination");
+        let (without_comment, _) =
+            build_internal_message(&destination, &SendAmount::exact("1"), None)
+                .expect("internal message without comment");
+        let (with_empty_comment, _) =
+            build_internal_message(&destination, &SendAmount::exact("1"), Some(""))
+                .expect("internal message with empty comment");
+        let without_comment =
+            Msg::<TonCell>::from_cell(&without_comment).expect("decode internal message");
+        let with_empty_comment =
+            Msg::<TonCell>::from_cell(&with_empty_comment).expect("decode internal message");
+
+        assert_eq!(without_comment.body.data_len_bits(), 0);
+        assert_eq!(with_empty_comment.body.data_len_bits(), 32);
     }
 }

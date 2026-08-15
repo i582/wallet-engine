@@ -1534,6 +1534,7 @@ private struct SendWalletView: View {
                         operationId: UUID().uuidString.lowercased(),
                         destination: normalizedDestination,
                         amount: .exact(nanograms: nanograms),
+                        comment: nil,
                         secretRef: descriptor.secretRef
                     )
                 )

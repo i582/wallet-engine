@@ -207,17 +207,22 @@ export interface SendRequest {
   readonly operationId: string
   readonly destination: string
   readonly amount: SendAmount
+  /** Optional plaintext UTF-8 comment. */
+  readonly comment?: string
   readonly secretRef: ProtectedSecretRef
 }
 
 export interface SendPreviewRequest {
   readonly destination: string
   readonly amount: SendAmount
+  /** Optional plaintext UTF-8 comment. */
+  readonly comment?: string
 }
 
 export interface SendPreview {
   readonly destination: string
   readonly amount: SendAmount
+  readonly comment?: string
   readonly validUntil: number
   /** Complete fake-signed external-message BOC in standard padded Base64. */
   readonly messageBocBase64: string

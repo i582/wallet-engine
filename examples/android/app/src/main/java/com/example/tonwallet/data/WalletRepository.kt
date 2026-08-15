@@ -94,6 +94,7 @@ class WalletRepository(private val store: SecureWalletStore) {
                 operationId = UUID.randomUUID().toString().lowercase(),
                 destination = destination.trim(),
                 amount = SendAmount.Exact(nanograms = amountNanograms),
+                comment = null,
                 secretRef = wallet.descriptor().secretRef,
             ),
         )

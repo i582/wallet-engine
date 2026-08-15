@@ -39,6 +39,9 @@ pub struct SendRequest {
     pub destination: String,
     /// The exact-value or whole-balance transfer policy.
     pub amount: SendAmount,
+    /// An optional plaintext UTF-8 comment attached to the internal message.
+    #[serde(default)]
+    pub comment: Option<String>,
     /// The protected mnemonic reference for the source wallet.
     pub secret_ref: ProtectedSecretRef,
 }
@@ -54,6 +57,9 @@ pub struct SendPreviewRequest {
     pub destination: String,
     /// The exact-value or whole-balance transfer policy.
     pub amount: SendAmount,
+    /// An optional plaintext UTF-8 comment attached to the emulated message.
+    #[serde(default)]
+    pub comment: Option<String>,
 }
 
 /// An informational transfer preview produced without unlocking the wallet secret.
@@ -64,6 +70,8 @@ pub struct SendPreview {
     pub destination: String,
     /// The transfer value policy used by the emulated message.
     pub amount: SendAmount,
+    /// The optional plaintext comment encoded into the emulated message.
+    pub comment: Option<String>,
     /// The V5R1 message expiration timestamp used only by this emulation.
     /// A real send calculates a new timestamp from fresh provider state.
     pub valid_until: u32,

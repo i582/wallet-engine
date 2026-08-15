@@ -191,6 +191,23 @@ fn exact_transfer_keeps_mode_3() {
 }
 
 #[test]
+fn plaintext_comment_is_submitted_and_executed_on_localnet() {
+    let comment = "Привет, TON — localnet!";
+
+    scenario("a plaintext comment survives signing and localnet submission")
+        .given(network().localnet())
+        .given(wallet().uninitialized().balance(grams(10)))
+        .when(call(
+            "send",
+            send().to(own_address()).nanograms(1).comment(comment),
+        ))
+        .then(result("send").submitted())
+        .then(submitted_message().has_comment(comment))
+        .then(on_chain_wallet().active().seqno(1))
+        .run();
+}
+
+#[test]
 fn all_balance_transfer_uses_mode_130() {
     scenario("send all delegates the remaining-balance calculation to Wallet V5")
         .given(wallet().active().balance(grams(10)).seqno(7))
