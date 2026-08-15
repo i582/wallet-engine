@@ -81,6 +81,48 @@ describe("BrowserHttpHost", () => {
   })
 })
 
+describe("BrowserHttpHost timeout policy", () => {
+  test("aborts a request at the core-provided deadline and reports timeout", async () => {
+    let observedSignal: AbortSignal | null = null
+    const host = new BrowserHttpHost("https://testnet.toncenter.com", {
+      fetch: mockFetch(
+        (_input, init) =>
+          new Promise<Response>(() => {
+            observedSignal = init?.signal ?? null
+          }),
+      ),
+    })
+
+    await expect(host.executeHttp(httpRequest(10, {timeoutMs: 5}))).rejects.toMatchObject({
+      kind: "timeout",
+    })
+    expect((observedSignal as AbortSignal | null)?.aborted).toBe(true)
+  })
+
+  test("rejects an invalid core-provided timeout", async () => {
+    const host = new BrowserHttpHost("https://testnet.toncenter.com")
+
+    await expect(host.executeHttp(httpRequest(11, {timeoutMs: 0}))).rejects.toMatchObject({
+      kind: "policyViolation",
+    })
+  })
+
+  test("applies the same deadline while reading the response body", async () => {
+    const stalledBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1]))
+      },
+    })
+    const host = new BrowserHttpHost("https://testnet.toncenter.com", {
+      fetch: mockFetch(async () => new Response(stalledBody)),
+    })
+
+    await expect(host.executeHttp(httpRequest(12, {timeoutMs: 5}))).rejects.toMatchObject({
+      kind: "timeout",
+    })
+  })
+})
+
 describe("high-level WASM API", () => {
   const platform = new BrowserPlatformHost({
     secrets: new MemorySecrets(),
@@ -148,6 +190,7 @@ function httpRequest(id: number, overrides: Partial<HttpRequest> = {}): HttpRequ
     url: "https://testnet.toncenter.com/api/v2/getAddressInformation",
     headers: [],
     body: [],
+    timeoutMs: 15_000,
     maxResponseHeaderBytes: 64 * 1024,
     maxResponseBodyBytes: 4 * 1024 * 1024,
     ...overrides,
@@ -167,6 +210,7 @@ function walletConfig(descriptor: {
     sendValiditySeconds: 300,
     providers: {
       toncenterBaseUrl: "https://testnet.toncenter.com",
+      requestTimeoutMs: 15_000,
     },
   }
 }

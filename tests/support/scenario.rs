@@ -13,10 +13,10 @@ use ton::block_tlb::{
 use ton::ton_core::cell::TonCell;
 use ton::ton_core::traits::tlb::TLB;
 use wallet_engine::{
-    AccountStatus, ActivityCursor, DomainError, Network, ProtectedSecretRef, ProviderConfig,
-    ResourcePhase, SendAmount, SendPhase, SendPreview, SendPreviewRequest, SendRequest, SendResult,
-    WalletClient, WalletClientConfig, WalletClientError, WalletHttpHost, WalletOperationOutcome,
-    WalletUpdate,
+    AccountStatus, ActivityCursor, DomainError, HttpHostErrorKind, Network, ProtectedSecretRef,
+    ProviderConfig, ResourcePhase, SendAmount, SendPhase, SendPreview, SendPreviewRequest,
+    SendRequest, SendResult, WalletClient, WalletClientConfig, WalletClientError, WalletHttpHost,
+    WalletOperationOutcome, WalletUpdate,
 };
 
 use super::host::{MemoryPlatformHost, PlatformCallKind, RequestKind, ScenarioHttpHost};
@@ -81,10 +81,14 @@ pub(crate) const fn provider() -> ProviderFixture {
         account_status: 200,
         activity_status: 200,
         account_retry_after_seconds: None,
+        account_host_error: None,
         activity_malformed: false,
+        activity_host_error: None,
         account_redirected: false,
         seqno_status: 200,
+        seqno_host_error: None,
         emulation_status: 200,
+        emulation_host_error: None,
         emulation_rejected: false,
     }
 }
@@ -581,10 +585,14 @@ pub(crate) struct ProviderFixture {
     pub(super) account_status: u16,
     pub(super) activity_status: u16,
     pub(super) account_retry_after_seconds: Option<u64>,
+    pub(super) account_host_error: Option<HttpHostErrorKind>,
     pub(super) activity_malformed: bool,
+    pub(super) activity_host_error: Option<HttpHostErrorKind>,
     pub(super) account_redirected: bool,
     pub(super) seqno_status: u16,
+    pub(super) seqno_host_error: Option<HttpHostErrorKind>,
     pub(super) emulation_status: u16,
+    pub(super) emulation_host_error: Option<HttpHostErrorKind>,
     pub(super) emulation_rejected: bool,
 }
 
@@ -600,8 +608,20 @@ impl ProviderFixture {
     }
 
     #[must_use]
+    pub(crate) const fn account_times_out(mut self) -> Self {
+        self.account_host_error = Some(HttpHostErrorKind::Timeout);
+        self
+    }
+
+    #[must_use]
     pub(crate) const fn activity_fails(mut self, status: u16) -> Self {
         self.activity_status = status;
+        self
+    }
+
+    #[must_use]
+    pub(crate) const fn activity_times_out(mut self) -> Self {
+        self.activity_host_error = Some(HttpHostErrorKind::Timeout);
         self
     }
 
@@ -631,8 +651,20 @@ impl ProviderFixture {
     }
 
     #[must_use]
+    pub(crate) const fn seqno_times_out(mut self) -> Self {
+        self.seqno_host_error = Some(HttpHostErrorKind::Timeout);
+        self
+    }
+
+    #[must_use]
     pub(crate) const fn emulation_fails(mut self, status: u16) -> Self {
         self.emulation_status = status;
+        self
+    }
+
+    #[must_use]
+    pub(crate) const fn emulation_times_out(mut self) -> Self {
+        self.emulation_host_error = Some(HttpHostErrorKind::Timeout);
         self
     }
 
@@ -1258,10 +1290,14 @@ impl ScenarioRunner {
                         account_status: fixture.account_status,
                         activity_status: fixture.activity_status,
                         account_retry_after_seconds: fixture.account_retry_after_seconds,
+                        account_host_error: fixture.account_host_error,
                         activity_malformed: fixture.activity_malformed,
+                        activity_host_error: fixture.activity_host_error,
                         account_redirected: fixture.account_redirected,
                         seqno_status: fixture.seqno_status,
+                        seqno_host_error: fixture.seqno_host_error,
                         emulation_status: fixture.emulation_status,
+                        emulation_host_error: fixture.emulation_host_error,
                         emulation_rejected: fixture.emulation_rejected,
                     };
                 }
@@ -1346,6 +1382,7 @@ impl ScenarioRunner {
                 send_validity_seconds,
                 providers: ProviderConfig {
                     toncenter_base_url: provider_base_url,
+                    request_timeout_ms: 15_000,
                 },
             },
             client_host,

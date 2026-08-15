@@ -144,6 +144,7 @@ class WalletRepository(private val store: SecureWalletStore) {
                     sendValiditySeconds = SEND_VALIDITY_SECONDS,
                     providers = ProviderConfig(
                         toncenterBaseUrl = if (wallet.testnet) TESTNET_BASE_URL else MAINNET_BASE_URL,
+                        requestTimeoutMs = PROVIDER_REQUEST_TIMEOUT_MILLIS.toULong(),
                     ),
                 ),
                 httpHost = httpHost,
@@ -197,6 +198,7 @@ class WalletRepository(private val store: SecureWalletStore) {
     private companion object {
         const val TESTNET_BASE_URL = "https://testnet.toncenter.com"
         const val MAINNET_BASE_URL = "https://toncenter.com"
+        const val PROVIDER_REQUEST_TIMEOUT_MILLIS = 15_000
         val SEND_VALIDITY_SECONDS: UInt = 300u
     }
 }

@@ -10,15 +10,17 @@ use crate::{
 
 /// Executes bounded HTTP work for the engine.
 ///
-/// The host must enforce each response limit while it reads the response.
-/// It must reject redirects and return the observed URL in `final_url`.
+/// The host must enforce the request timeout and each response limit while it
+/// connects and reads the response. It must reject redirects and return the
+/// observed URL in `final_url`.
 #[uniffi::export(foreign)]
 #[async_trait]
 pub trait WalletHttpHost: Send + Sync {
     /// Executes one complete HTTP request and returns a bounded response.
     ///
     /// The host can add its Toncenter credential according to the actual URL
-    /// and its local security policy.
+    /// and its local security policy. It must return
+    /// [`crate::HttpHostErrorKind::Timeout`] when `request.timeout_ms` expires.
     async fn execute_http(&self, request: HttpRequest) -> Result<HttpResponse, HttpHostError>;
 
     /// Requests cancellation of the request with `request_id`.

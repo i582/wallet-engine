@@ -9,6 +9,8 @@ export type Base64Hash = string & {
 
 export interface ProviderConfig {
   readonly toncenterBaseUrl: string
+  /** End-to-end timeout for each provider request, in milliseconds. */
+  readonly requestTimeoutMs: number
 }
 
 export interface WalletClientConfig {
@@ -37,6 +39,7 @@ export interface HttpRequest {
   readonly url: string
   readonly headers: HttpHeader[]
   readonly body: number[]
+  readonly timeoutMs: number
   readonly maxResponseHeaderBytes: number
   readonly maxResponseBodyBytes: number
 }

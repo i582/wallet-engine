@@ -16,6 +16,7 @@ use wallet_engine::{
 
 const MAX_REQUEST_BODY_BYTES: usize = 256 * 1024;
 const MAX_RESPONSE_HEADERS: usize = 64;
+const MAX_REQUEST_TIMEOUT_MS: u64 = 5 * 60 * 1000;
 
 #[derive(Default)]
 struct Requests {
@@ -41,7 +42,6 @@ impl ReqwestHttpHost {
     pub(crate) fn new(api_key: Option<String>) -> Result<Self> {
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
-            .timeout(std::time::Duration::from_secs(30))
             .build()
             .context("failed to create the HTTP client")?;
         Ok(Self {
@@ -102,11 +102,18 @@ impl ReqwestHttpHost {
                 "request body is too large",
             ));
         }
+        if request.timeout_ms == 0 || request.timeout_ms > MAX_REQUEST_TIMEOUT_MS {
+            return Err(host_error(
+                HttpHostErrorKind::PolicyViolation,
+                "request timeout is invalid",
+            ));
+        }
 
         let mut builder = match request.method {
             HttpMethod::Get => self.client.get(url.clone()),
             HttpMethod::Post => self.client.post(url.clone()).body(request.body.clone()),
         };
+        builder = builder.timeout(std::time::Duration::from_millis(request.timeout_ms));
         for header in &request.headers {
             let name = HeaderName::from_bytes(header.name.as_bytes()).map_err(|_| {
                 host_error(

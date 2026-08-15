@@ -19,6 +19,9 @@ import java.net.SocketTimeoutException
 import java.net.URL
 import java.net.UnknownHostException
 import java.util.LinkedHashSet
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 class AndroidWalletHttpHost : WalletHttpHost {
     private val lock = Any()
@@ -33,8 +36,9 @@ class AndroidWalletHttpHost : WalletHttpHost {
                 HttpMethod.GET -> "GET"
                 HttpMethod.POST -> "POST"
             }
-            connectTimeout = TIMEOUT_MILLIS
-            readTimeout = TIMEOUT_MILLIS
+            val timeoutMillis = request.timeoutMs.toInt()
+            connectTimeout = timeoutMillis
+            readTimeout = timeoutMillis
             useCaches = false
             request.headers.forEach { header -> setRequestProperty(header.name, header.value) }
             if (BuildConfig.TONCENTER_TESTNET_API_KEY.isNotBlank() && url.host == TESTNET_HOST) {
@@ -53,6 +57,16 @@ class AndroidWalletHttpHost : WalletHttpHost {
             }
             active[request.id.value] = connection
         }
+
+        val deadlineExpired = AtomicBoolean(false)
+        val deadline = deadlineScheduler.schedule(
+            {
+                deadlineExpired.set(true)
+                connection.disconnect()
+            },
+            request.timeoutMs.toLong(),
+            TimeUnit.MILLISECONDS,
+        )
 
         try {
             if (request.body.isNotEmpty()) connection.outputStream.use { it.write(request.body) }
@@ -78,7 +92,7 @@ class AndroidWalletHttpHost : WalletHttpHost {
                 }
                 output.toByteArray()
             } ?: byteArrayOf()
-            HttpResponse(
+            val response = HttpResponse(
                 status = status.toUShort(),
                 headers = headers,
                 body = body,
@@ -87,6 +101,10 @@ class AndroidWalletHttpHost : WalletHttpHost {
                 // differently normalized URL string even when no redirect occurred.
                 finalUrl = request.url,
             )
+            if (deadlineExpired.get()) {
+                throw hostError(HttpHostErrorKind.TIMEOUT, "Provider request timed out")
+            }
+            response
         } catch (error: CancellationException) {
             connection.disconnect()
             throw error
@@ -97,10 +115,20 @@ class AndroidWalletHttpHost : WalletHttpHost {
         } catch (error: SocketTimeoutException) {
             throw hostError(HttpHostErrorKind.TIMEOUT, "Provider request timed out")
         } catch (error: IOException) {
-            throw hostError(HttpHostErrorKind.CONNECTION_LOST, error.message ?: "Network request failed")
+            if (deadlineExpired.get()) {
+                throw hostError(HttpHostErrorKind.TIMEOUT, "Provider request timed out")
+            }
+            if (synchronized(lock) { request.id.value !in active }) {
+                throw hostError(HttpHostErrorKind.CANCELLED, "Request was cancelled")
+            }
+            throw hostError(
+                HttpHostErrorKind.CONNECTION_LOST,
+                error.message ?: "Network request failed",
+            )
         } catch (error: Throwable) {
             throw hostError(HttpHostErrorKind.OTHER, error.message ?: "HTTP host failed")
         } finally {
+            deadline.cancel(false)
             synchronized(lock) { active.remove(request.id.value) }
             connection.disconnect()
         }
@@ -128,6 +156,9 @@ class AndroidWalletHttpHost : WalletHttpHost {
         }
         if (request.headers.any { it.name.equals("x-api-key", ignoreCase = true) }) {
             throw hostError(HttpHostErrorKind.POLICY_VIOLATION, "Credential headers are host-owned")
+        }
+        if (request.timeoutMs == 0UL || request.timeoutMs > MAX_TIMEOUT_MILLIS.toULong()) {
+            throw hostError(HttpHostErrorKind.POLICY_VIOLATION, "Request timeout is invalid")
         }
         return url
     }
@@ -159,7 +190,10 @@ class AndroidWalletHttpHost : WalletHttpHost {
 
     private companion object {
         const val TESTNET_HOST = "testnet.toncenter.com"
-        const val TIMEOUT_MILLIS = 15_000
+        const val MAX_TIMEOUT_MILLIS = 5 * 60 * 1000
         const val MAX_EARLY_CANCELLATIONS = 256
+        val deadlineScheduler = Executors.newSingleThreadScheduledExecutor { task ->
+            Thread(task, "wallet-engine-http-deadline").apply { isDaemon = true }
+        }
     }
 }

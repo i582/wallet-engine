@@ -5,6 +5,7 @@ use std::str::FromStr;
 use ton::ton_core::types::TonAddress;
 use url::{Host, Url};
 
+use crate::MAX_PROVIDER_REQUEST_TIMEOUT_MS;
 use crate::types::parse_positive_decimal;
 use crate::wallet::crypto::derive_v5r1_public_state;
 use crate::{SendAmount, SendPreviewRequest, SendRequest, WalletClientConfig, WalletClientError};
@@ -12,6 +13,8 @@ use crate::{SendAmount, SendPreviewRequest, SendRequest, WalletClientConfig, Wal
 pub(super) fn validate_config(config: &WalletClientConfig) -> Result<(), WalletClientError> {
     if config.record_id.trim().is_empty()
         || config.send_validity_seconds == 0
+        || config.providers.request_timeout_ms == 0
+        || config.providers.request_timeout_ms > MAX_PROVIDER_REQUEST_TIMEOUT_MS
         || config
             .local_secret_ref
             .as_ref()
@@ -98,7 +101,8 @@ mod tests {
     use super::{validate_config, validate_provider_url};
     use crate::wallet::crypto::derive_v5r1_public_state;
     use crate::{
-        Network, ProtectedSecretRef, ProviderConfig, WalletClientConfig, WalletClientError,
+        MAX_PROVIDER_REQUEST_TIMEOUT_MS, Network, ProtectedSecretRef, ProviderConfig,
+        WalletClientConfig, WalletClientError,
     };
 
     #[test]
@@ -139,6 +143,25 @@ mod tests {
                 "provider base unexpectedly accepted {value}"
             );
         }
+    }
+
+    #[test]
+    fn config_rejects_provider_timeouts_outside_the_supported_range() {
+        let mut config = valid_config();
+        config.providers.request_timeout_ms = 0;
+        assert_eq!(
+            validate_config(&config),
+            Err(WalletClientError::InvalidConfig)
+        );
+
+        config.providers.request_timeout_ms = MAX_PROVIDER_REQUEST_TIMEOUT_MS + 1;
+        assert_eq!(
+            validate_config(&config),
+            Err(WalletClientError::InvalidConfig)
+        );
+
+        config.providers.request_timeout_ms = MAX_PROVIDER_REQUEST_TIMEOUT_MS;
+        assert_eq!(validate_config(&config), Ok(()));
     }
 
     #[test]

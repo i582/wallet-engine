@@ -12,6 +12,7 @@ nonisolated struct AppleWalletHTTPPolicy: Sendable {
         static let maximumResponseHeaders = 64
         static let maximumResponseHeaderBytes = 64 * 1024
         static let maximumResponseBodyBytes = 4 * 1024 * 1024
+        static let maximumRequestTimeoutMs: UInt64 = 5 * 60 * 1000
     }
 
     private static let forbiddenRequestHeaderNames: Set<String> = [
@@ -56,6 +57,10 @@ nonisolated struct AppleWalletHTTPPolicy: Sendable {
               request.maxResponseHeaderBytes <= Limits.maximumResponseHeaderBytes else {
             throw Self.failure(.policyViolation, "Invalid response size limit")
         }
+        guard request.timeoutMs > 0,
+              request.timeoutMs <= Limits.maximumRequestTimeoutMs else {
+            throw Self.failure(.policyViolation, "Invalid request timeout")
+        }
         guard let url = URL(string: request.url),
               let origin = Self.normalizedHTTPSOrigin(for: url),
               allowedOrigins.contains(origin),
@@ -73,7 +78,7 @@ nonisolated struct AppleWalletHTTPPolicy: Sendable {
             urlRequest.httpMethod = "POST"
         }
         urlRequest.httpBody = request.body.isEmpty ? nil : request.body
-        urlRequest.timeoutInterval = 30
+        urlRequest.timeoutInterval = TimeInterval(request.timeoutMs) / 1_000
         urlRequest.cachePolicy = .reloadIgnoringLocalCacheData
 
         var seenHeaders = Set<String>()
@@ -218,6 +223,7 @@ nonisolated struct AppleWalletHTTPPolicy: Sendable {
 /// URLSession has created its underlying task.
 actor AppleWalletHTTPHost: WalletHttpHost {
     private static let maximumEarlyCancellations = 256
+    private static let maximumRequestTimeout: TimeInterval = 5 * 60
 
     private let policy: AppleWalletHTTPPolicy
     private let session: URLSession
@@ -233,8 +239,8 @@ actor AppleWalletHTTPHost: WalletHttpHost {
         configuration.urlCache = nil
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
-        configuration.timeoutIntervalForRequest = 30
-        configuration.timeoutIntervalForResource = 30
+        configuration.timeoutIntervalForRequest = Self.maximumRequestTimeout
+        configuration.timeoutIntervalForResource = Self.maximumRequestTimeout
         session = URLSession(configuration: configuration)
     }
 
@@ -249,8 +255,14 @@ actor AppleWalletHTTPHost: WalletHttpHost {
 
         let policy = policy
         let session = session
+        let urlRequest = try policy.prepare(request)
         let task = Task<HttpResponse, Error> {
-            try await Self.perform(request, policy: policy, session: session)
+            try await Self.performWithDeadline(
+                request,
+                urlRequest: urlRequest,
+                policy: policy,
+                session: session
+            )
         }
         tasks[id] = task
         defer { tasks[id] = nil }
@@ -280,11 +292,11 @@ actor AppleWalletHTTPHost: WalletHttpHost {
 
     private nonisolated static func perform(
         _ request: HttpRequest,
+        urlRequest: URLRequest,
         policy: AppleWalletHTTPPolicy,
         session: URLSession
     ) async throws -> HttpResponse {
         do {
-            let urlRequest = try policy.prepare(request)
             let redirectDelegate = WalletHTTPRedirectDelegate()
             let (bytes, rawResponse) = try await session.bytes(
                 for: urlRequest,
@@ -328,6 +340,36 @@ actor AppleWalletHTTPHost: WalletHttpHost {
             )
         } catch {
             throw failure(.other, String(describing: error))
+        }
+    }
+
+    private nonisolated static func performWithDeadline(
+        _ request: HttpRequest,
+        urlRequest: URLRequest,
+        policy: AppleWalletHTTPPolicy,
+        session: URLSession
+    ) async throws -> HttpResponse {
+        try await withThrowingTaskGroup(of: HttpResponse.self) { group in
+            group.addTask {
+                try await perform(
+                    request,
+                    urlRequest: urlRequest,
+                    policy: policy,
+                    session: session
+                )
+            }
+            group.addTask {
+                try await Task.sleep(
+                    nanoseconds: request.timeoutMs * 1_000_000
+                )
+                throw failure(.timeout, "Provider request timed out")
+            }
+            defer { group.cancelAll() }
+
+            guard let response = try await group.next() else {
+                throw failure(.other, "HTTP request task did not produce a result")
+            }
+            return response
         }
     }
 

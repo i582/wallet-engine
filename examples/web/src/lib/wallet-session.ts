@@ -177,6 +177,7 @@ async function createClient(
       sendValiditySeconds: 300,
       providers: {
         toncenterBaseUrl: TESTNET_BASE_URL,
+        requestTimeoutMs: 15_000,
       },
     },
     {

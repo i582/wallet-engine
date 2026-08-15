@@ -35,10 +35,14 @@ struct HttpState {
     account_status: u16,
     activity_status: u16,
     account_retry_after_seconds: Option<u64>,
+    account_host_error: Option<HttpHostErrorKind>,
     activity_malformed: bool,
+    activity_host_error: Option<HttpHostErrorKind>,
     account_redirected: bool,
     seqno_status: u16,
+    seqno_host_error: Option<HttpHostErrorKind>,
     emulation_status: u16,
+    emulation_host_error: Option<HttpHostErrorKind>,
     emulation_rejected: bool,
     activity_pages: Vec<usize>,
     activity_page_index: usize,
@@ -122,10 +126,14 @@ impl ScenarioHttpHost {
                 account_status: 200,
                 activity_status: 200,
                 account_retry_after_seconds: None,
+                account_host_error: None,
                 activity_malformed: false,
+                activity_host_error: None,
                 account_redirected: false,
                 seqno_status: 200,
+                seqno_host_error: None,
                 emulation_status: 200,
+                emulation_host_error: None,
                 emulation_rejected: false,
                 activity_pages: Vec::new(),
                 activity_page_index: 0,
@@ -153,10 +161,14 @@ impl ScenarioHttpHost {
         state.account_status = fixture.account_status;
         state.activity_status = fixture.activity_status;
         state.account_retry_after_seconds = fixture.account_retry_after_seconds;
+        state.account_host_error = fixture.account_host_error;
         state.activity_malformed = fixture.activity_malformed;
+        state.activity_host_error = fixture.activity_host_error;
         state.account_redirected = fixture.account_redirected;
         state.seqno_status = fixture.seqno_status;
+        state.seqno_host_error = fixture.seqno_host_error;
         state.emulation_status = fixture.emulation_status;
+        state.emulation_host_error = fixture.emulation_host_error;
         state.emulation_rejected = fixture.emulation_rejected;
     }
 
@@ -444,6 +456,9 @@ impl ScenarioHttpHost {
 
         self.wait_at_request_gate(RequestKind::Emulation, request.id)?;
         let state = lock(&self.state);
+        if let Some(kind) = state.emulation_host_error {
+            return Err(host_error(kind, "scripted emulation transport failure"));
+        }
         if state.emulation_status != 200 {
             return Ok(response_with_status(
                 request,
@@ -617,12 +632,20 @@ impl WalletHttpHost for ScenarioHttpHost {
         if request.url.contains("getAddressInformation") {
             let response = self.account_response(&request);
             self.wait_at_request_gate(RequestKind::Account, request.id)?;
+            let host_error_kind = lock(&self.state).account_host_error;
+            if let Some(kind) = host_error_kind {
+                return Err(host_error(kind, "scripted account transport failure"));
+            }
             return Ok(response);
         }
         if request.url.contains("getTransactions") {
             let response = self.activity_response(&request);
             self.wait_at_request_gate(RequestKind::Activity, request.id)?;
             let host_error_kind = lock(&self.state).next_activity_host_error.take();
+            if let Some(kind) = host_error_kind {
+                return Err(host_error(kind, "scripted activity transport failure"));
+            }
+            let host_error_kind = lock(&self.state).activity_host_error;
             if let Some(kind) = host_error_kind {
                 return Err(host_error(kind, "scripted activity transport failure"));
             }
@@ -638,6 +661,10 @@ impl WalletHttpHost for ScenarioHttpHost {
             Some("runGetMethod") => {
                 let response = self.seqno_response(&request);
                 self.wait_at_request_gate(RequestKind::Seqno, request.id)?;
+                let host_error_kind = lock(&self.state).seqno_host_error;
+                if let Some(kind) = host_error_kind {
+                    return Err(host_error(kind, "scripted seqno transport failure"));
+                }
                 Ok(response)
             }
             Some("sendBoc") => self.submit_response(&request, &body),

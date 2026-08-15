@@ -50,6 +50,42 @@ fn keeps_activity_resource_when_account_fails() {
 }
 
 #[test]
+fn account_timeout_keeps_the_independent_activity_result() {
+    scenario("a timed-out account request does not discard activity")
+        .given(provider().account_times_out())
+        .when(call("refresh", refresh_wallet()))
+        .then(update("refresh").partially_completed())
+        .then(
+            snapshot()
+                .account_error(DomainError {
+                    code: ErrorCode::TransportFailed,
+                    category: ErrorCategory::Transport,
+                    retry: RetryAdvice::Safe,
+                    developer_message: "scripted account transport failure".to_owned(),
+                    provider_status: None,
+                    retry_after_ms: None,
+                    host_kind: Some(HttpHostErrorKind::Timeout),
+                })
+                .activity_phase(ResourcePhase::Ready),
+        )
+        .run();
+}
+
+#[test]
+fn refresh_fails_when_both_provider_requests_time_out() {
+    scenario("refresh fails when Toncenter does not answer either request")
+        .given(provider().account_times_out().activity_times_out())
+        .when(call("refresh", refresh_wallet()))
+        .then(update("refresh").failed())
+        .then(
+            snapshot()
+                .account_phase(ResourcePhase::Failed)
+                .activity_phase(ResourcePhase::Failed),
+        )
+        .run();
+}
+
+#[test]
 fn reports_failure_when_both_resources_fail() {
     scenario("refresh fails when every requested resource fails")
         .given(provider().account_fails(503).activity_fails(503))

@@ -66,6 +66,7 @@ pub(super) fn build_toncenter_v2_request(
             value: "application/json".to_owned(),
         }],
         body: Vec::new(),
+        timeout_ms: config.providers.request_timeout_ms,
         max_response_header_bytes: MAX_RESPONSE_HEADER_BYTES,
         max_response_body_bytes: MAX_RESPONSE_BODY_BYTES,
     })
@@ -173,6 +174,7 @@ mod tests {
             url: "https://provider.example/api/v2/resource?limit=10".to_owned(),
             headers: Vec::new(),
             body: Vec::new(),
+            timeout_ms: 15_000,
             max_response_header_bytes: 32,
             max_response_body_bytes: 16,
         }
@@ -357,6 +359,7 @@ mod tests {
             send_validity_seconds: 300,
             providers: ProviderConfig {
                 toncenter_base_url: "https://provider.example/custom/".to_owned(),
+                request_timeout_ms: 12_345,
             },
         };
 
@@ -382,6 +385,7 @@ mod tests {
             }]
         );
         assert!(request.body.is_empty());
+        assert_eq!(request.timeout_ms, 12_345);
         assert_eq!(request.max_response_header_bytes, MAX_RESPONSE_HEADER_BYTES);
         assert_eq!(request.max_response_body_bytes, MAX_RESPONSE_BODY_BYTES);
     }
@@ -397,6 +401,7 @@ mod tests {
             send_validity_seconds: 300,
             providers: ProviderConfig {
                 toncenter_base_url: "mailto:provider@example.com".to_owned(),
+                request_timeout_ms: 15_000,
             },
         };
 

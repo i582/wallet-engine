@@ -105,6 +105,56 @@ fn provider_seqno_failure_releases_the_preview_slot() {
 }
 
 #[test]
+fn provider_account_timeout_releases_the_preview_slot() {
+    scenario("preview account timeout is retryable without unlocking the wallet")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(provider().account_times_out())
+        .when(call(
+            "failed",
+            preview_send(send().to(own_address()).grams(1)),
+        ))
+        .then(error(
+            "failed",
+            send_failed("scripted account transport failure"),
+        ))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .given(provider())
+        .when(call(
+            "retry",
+            preview_send(send().to(own_address()).grams(1)),
+        ))
+        .then(result("retry").previewed())
+        .run();
+}
+
+#[test]
+fn provider_seqno_timeout_releases_the_preview_slot() {
+    scenario("preview seqno timeout stops before emulation and remains retryable")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(provider().seqno_times_out())
+        .when(call(
+            "failed",
+            preview_send(send().to(own_address()).grams(1)),
+        ))
+        .then(error(
+            "failed",
+            send_failed("scripted seqno transport failure"),
+        ))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .given(provider())
+        .when(call(
+            "retry",
+            preview_send(send().to(own_address()).grams(1)),
+        ))
+        .then(result("retry").previewed())
+        .run();
+}
+
+#[test]
 fn invalid_preview_is_rejected_before_network_or_state_changes() {
     scenario("invalid preview intent does not acquire the preview slot")
         .given(wallet().active().balance(grams(10)).seqno(7))
@@ -404,6 +454,23 @@ fn provider_emulation_failure_stops_before_secret_and_journal() {
 }
 
 #[test]
+fn provider_emulation_timeout_stops_before_secret_and_journal() {
+    scenario("preview emulation timeout is a retryable transport failure")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(provider().emulation_times_out())
+        .when(call(
+            "preview",
+            preview_send(send().to(own_address()).grams(1)),
+        ))
+        .then(emulation_failed("preview"))
+        .then(snapshot().send_phase(SendPhase::Idle))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .run();
+}
+
+#[test]
 fn failed_preview_does_not_block_the_independent_send_workflow() {
     scenario("preview failure warns the client but does not gate confirmation")
         .given(wallet().active().balance(grams(10)).seqno(7))
@@ -595,6 +662,26 @@ fn cancel_before_the_durable_boundary_stops_the_request_and_releases_the_slot() 
         .when(start("retry", send().to(own_address()).grams(1)))
         .then(send_phase("retry", SendPhase::Submitting))
         .when(resume("retry-submit", submission_accepted()))
+        .then(result("retry").submitted())
+        .run();
+}
+
+#[test]
+fn account_timeout_before_the_durable_boundary_releases_the_send_slot() {
+    scenario("send account timeout cannot authorize or persist and permits retry")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(provider().account_times_out())
+        .when(call("failed", send().to(own_address()).grams(1)))
+        .then(error(
+            "failed",
+            send_failed("scripted account transport failure"),
+        ))
+        .then(snapshot().send_phase(SendPhase::Failed))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .given(provider())
+        .when(call("retry", send().to(own_address()).grams(1)))
         .then(result("retry").submitted())
         .run();
 }

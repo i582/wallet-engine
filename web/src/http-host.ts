@@ -5,6 +5,7 @@ const MAX_RESPONSE_BODY_BYTES = 4 * 1024 * 1024
 const MAX_RESPONSE_HEADER_BYTES = 64 * 1024
 const MAX_RESPONSE_HEADERS = 64
 const MAX_EARLY_CANCELLATIONS = 1024
+const MAX_REQUEST_TIMEOUT_MS = 5 * 60 * 1000
 
 export interface BrowserHttpHostOptions {
   readonly toncenterApiKey?: string
@@ -37,42 +38,27 @@ export class BrowserHttpHost {
     }
 
     const controller = new AbortController()
+    let timedOut = false
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timeoutHandle = setTimeout(() => {
+        timedOut = true
+        controller.abort()
+        reject(hostFailure("timeout", "The HTTP request timed out"))
+      }, request.timeoutMs)
+    })
     this.tasks.set(requestId, controller)
     try {
-      const url = new URL(request.url)
-      const headers = new Headers()
-      for (const header of request.headers) {
-        if (isReservedHeader(header.name)) {
-          throw hostFailure("policyViolation", "The request contains a reserved header")
-        }
-        headers.append(header.name, header.value)
-      }
-
-      if (this.toncenterApiKey !== undefined) {
-        headers.set("X-API-Key", this.toncenterApiKey)
-      }
-
-      const response = await this.fetch(url, {
-        method: request.method === "get" ? "GET" : "POST",
-        headers,
-        body: request.method === "post" ? new Uint8Array(request.body) : undefined,
-        redirect: "error",
-        credentials: "omit",
-        cache: "no-store",
-        signal: controller.signal,
-      })
-      const responseHeaders = collectHeaders(response.headers, this.toncenterApiKey)
-      enforceHeaderLimit(responseHeaders, request.maxResponseHeaderBytes)
-      const body = await collectBody(response, request.maxResponseBodyBytes, controller)
-      return {
-        status: response.status,
-        headers: responseHeaders,
-        body: [...body],
-        finalUrl: response.url || request.url,
-      }
+      return await this.perform(request, controller, timeout)
     } catch (error) {
+      if (timedOut) {
+        throw hostFailure("timeout", "The HTTP request timed out")
+      }
       throw normalizeHttpFailure(error, controller.signal.aborted)
     } finally {
+      if (timeoutHandle !== undefined) {
+        clearTimeout(timeoutHandle)
+      }
       this.tasks.delete(requestId)
     }
   }
@@ -96,6 +82,50 @@ export class BrowserHttpHost {
     }
   }
 
+  private async perform(
+    request: HttpRequest,
+    controller: AbortController,
+    timeout: Promise<never>,
+  ): Promise<HttpResponse> {
+    const url = new URL(request.url)
+    const headers = new Headers()
+    for (const header of request.headers) {
+      if (isReservedHeader(header.name)) {
+        throw hostFailure("policyViolation", "The request contains a reserved header")
+      }
+      headers.append(header.name, header.value)
+    }
+
+    if (this.toncenterApiKey !== undefined) {
+      headers.set("X-API-Key", this.toncenterApiKey)
+    }
+
+    const response = await Promise.race([
+      this.fetch(url, {
+        method: request.method === "get" ? "GET" : "POST",
+        headers,
+        body: request.method === "post" ? new Uint8Array(request.body) : undefined,
+        redirect: "error",
+        credentials: "omit",
+        cache: "no-store",
+        signal: controller.signal,
+      }),
+      timeout,
+    ])
+    const responseHeaders = collectHeaders(response.headers, this.toncenterApiKey)
+    enforceHeaderLimit(responseHeaders, request.maxResponseHeaderBytes)
+    const body = await Promise.race([
+      collectBody(response, request.maxResponseBodyBytes, controller),
+      timeout,
+    ])
+    return {
+      status: response.status,
+      headers: responseHeaders,
+      body: [...body],
+      finalUrl: response.url || request.url,
+    }
+  }
+
   private validateRequest(request: HttpRequest): void {
     const url = new URL(request.url)
     if (url.protocol !== "https:") {
@@ -106,6 +136,13 @@ export class BrowserHttpHost {
     }
     if (request.body.length > MAX_REQUEST_BODY_BYTES) {
       throw hostFailure("policyViolation", "The request body is too large")
+    }
+    if (
+      !Number.isSafeInteger(request.timeoutMs) ||
+      request.timeoutMs <= 0 ||
+      request.timeoutMs > MAX_REQUEST_TIMEOUT_MS
+    ) {
+      throw hostFailure("policyViolation", "The request timeout is invalid")
     }
     if (
       request.maxResponseBodyBytes <= 0 ||

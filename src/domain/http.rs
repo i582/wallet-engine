@@ -49,6 +49,12 @@ pub struct HttpRequest {
     pub headers: Vec<HttpHeader>,
     /// The request body. GET requests use an empty body.
     pub body: Vec<u8>,
+    /// End-to-end request timeout, in milliseconds.
+    ///
+    /// The host must enforce this deadline across connection setup, response
+    /// headers, and response-body reads. Expiry is reported as
+    /// [`HttpHostErrorKind::Timeout`].
+    pub timeout_ms: u64,
     /// The maximum total response-header size accepted by Rust.
     pub max_response_header_bytes: u64,
     /// The maximum response-body size accepted by Rust.

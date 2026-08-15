@@ -58,6 +58,7 @@ pub(super) fn build_emulation_request(
             },
         ],
         body,
+        timeout_ms: config.providers.request_timeout_ms,
         max_response_header_bytes: MAX_RESPONSE_HEADER_BYTES,
         max_response_body_bytes: MAX_RESPONSE_BODY_BYTES,
     })
@@ -482,6 +483,7 @@ mod tests {
             send_validity_seconds: 300,
             providers: ProviderConfig {
                 toncenter_base_url: base.to_owned(),
+                request_timeout_ms: 15_000,
             },
         }
     }

@@ -2,6 +2,12 @@
 
 use super::ProtectedSecretRef;
 
+/// Default end-to-end timeout for one provider request.
+pub const DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS: u64 = 15_000;
+
+/// Largest provider timeout accepted by the engine.
+pub const MAX_PROVIDER_REQUEST_TIMEOUT_MS: u64 = 300_000;
+
 /// Selects the TON network used for addresses, providers, and wallet derivation.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, uniffi::Enum,
@@ -25,6 +31,17 @@ pub struct ProviderConfig {
     /// produces paths below `/toncenter/api/...`.
     /// Loopback HTTP URLs are accepted for local development networks.
     pub toncenter_base_url: String,
+    /// End-to-end timeout applied to every provider request, in milliseconds.
+    ///
+    /// The embedding HTTP host must enforce this deadline across connection,
+    /// response headers, and response-body reads. Values must be between 1 and
+    /// [`MAX_PROVIDER_REQUEST_TIMEOUT_MS`].
+    #[serde(default = "default_provider_request_timeout_ms")]
+    pub request_timeout_ms: u64,
+}
+
+const fn default_provider_request_timeout_ms() -> u64 {
+    DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS
 }
 
 impl ProviderConfig {
@@ -38,6 +55,7 @@ impl ProviderConfig {
         };
         Self {
             toncenter_base_url: toncenter_base_url.to_owned(),
+            request_timeout_ms: DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS,
         }
     }
 }
@@ -77,7 +95,7 @@ pub struct WalletClientConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{Network, ProviderConfig};
+    use super::{DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS, Network, ProviderConfig};
 
     #[test]
     fn standard_provider_matches_each_network() {
@@ -88,6 +106,25 @@ mod tests {
         assert_eq!(
             ProviderConfig::standard(Network::Testnet).toncenter_base_url,
             "https://testnet.toncenter.com"
+        );
+        assert_eq!(
+            ProviderConfig::standard(Network::Mainnet).request_timeout_ms,
+            DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS
+        );
+    }
+
+    #[test]
+    fn provider_json_from_before_timeout_support_uses_the_standard_deadline() {
+        let provider: ProviderConfig =
+            serde_json::from_str(r#"{"toncenterBaseUrl":"https://testnet.toncenter.com"}"#)
+                .expect("the previous provider JSON shape must remain readable");
+
+        assert_eq!(
+            provider,
+            ProviderConfig {
+                toncenter_base_url: "https://testnet.toncenter.com".to_owned(),
+                request_timeout_ms: DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS,
+            }
         );
     }
 }
