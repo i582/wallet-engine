@@ -56,3 +56,20 @@ pub struct WalletClientConfig {
     /// The provider endpoint.
     pub providers: ProviderConfig,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Network, ProviderConfig};
+
+    #[test]
+    fn standard_provider_matches_each_network() {
+        assert_eq!(
+            ProviderConfig::standard(Network::Mainnet).toncenter_base_url,
+            "https://toncenter.com/api/v2"
+        );
+        assert_eq!(
+            ProviderConfig::standard(Network::Testnet).toncenter_base_url,
+            "https://testnet.toncenter.com/api/v2"
+        );
+    }
+}

@@ -1,0 +1,30 @@
+/// A stable mnemonic and the V5R1 testnet address derived from it.
+///
+/// Keep these values together. Changing one without the other would make
+/// lifecycle, signing, and localnet scenarios test different wallets.
+pub(crate) struct TestWalletFixture;
+
+impl TestWalletFixture {
+    const RECOVERY_PHRASE: &'static str = "section garden tomato dinner season dice renew length useful spin trade intact use universe what post spike keen mandate behind concert egg doll rug";
+
+    const TESTNET_V5_ADDRESS: &'static str = "0QA_6fh0aRAkD7n1MNfAUx8TvyCUw2iTQfzVM-0isMze2anN";
+
+    pub(crate) const fn recovery_phrase_bytes(&self) -> &'static [u8] {
+        Self::RECOVERY_PHRASE.as_bytes()
+    }
+
+    pub(crate) fn recovery_words(&self) -> Vec<String> {
+        Self::RECOVERY_PHRASE
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    pub(crate) const fn testnet_v5_address(&self) -> &'static str {
+        Self::TESTNET_V5_ADDRESS
+    }
+}
+
+pub(crate) const fn test_wallet() -> TestWalletFixture {
+    TestWalletFixture
+}

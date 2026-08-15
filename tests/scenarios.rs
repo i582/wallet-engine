@@ -8,3 +8,5 @@ mod pagination;
 mod refresh;
 #[path = "scenarios/send.rs"]
 mod send;
+#[path = "scenarios/wallet_lifecycle.rs"]
+mod wallet_lifecycle;

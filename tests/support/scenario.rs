@@ -6,13 +6,14 @@ use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
 use wallet_engine::{
-    AccountStatus, ActivityCursor, Network, ProtectedSecretRef, ProviderConfig, ResourcePhase,
-    SendPhase, SendRequest, SendResult, WalletClient, WalletClientConfig, WalletClientError,
-    WalletHttpHost, WalletOperationOutcome, WalletUpdate,
+    AccountStatus, ActivityCursor, DomainError, Network, ProtectedSecretRef, ProviderConfig,
+    ResourcePhase, SendPhase, SendRequest, SendResult, WalletClient, WalletClientConfig,
+    WalletClientError, WalletHttpHost, WalletOperationOutcome, WalletUpdate,
 };
 
 use super::host::{MemoryPlatformHost, RequestKind, ScenarioHttpHost};
 use super::localnet::LocalnetHttpHost;
+use super::test_wallet;
 
 // Signing is CPU-heavy in debug builds. Parallel scenarios can legitimately
 // take longer than a single isolated test without indicating a deadlock.
@@ -20,8 +21,6 @@ const STEP_TIMEOUT: Duration = Duration::from_secs(60);
 const NANOGRAMS_PER_GRAM: u64 = 1_000_000_000;
 const TEST_RECORD_ID: &str = "scenario-wallet";
 const TEST_SECRET_REF: &str = "wallet:scenario-wallet:mnemonic";
-const TESTNET_V5_ADDRESS: &str = "0QA_6fh0aRAkD7n1MNfAUx8TvyCUw2iTQfzVM-0isMze2anN";
-const TEST_MNEMONIC: &str = "section garden tomato dinner season dice renew length useful spin trade intact use universe what post spike keen mandate behind concert egg doll rug";
 
 pub(crate) fn scenario(name: impl Into<String>) -> Scenario {
     Scenario {
@@ -57,6 +56,9 @@ pub(crate) const fn provider() -> ProviderFixture {
     ProviderFixture {
         account_status: 200,
         activity_status: 200,
+        account_retry_after_seconds: None,
+        activity_malformed: false,
+        account_redirected: false,
     }
 }
 
@@ -284,6 +286,8 @@ pub(crate) const fn snapshot() -> SnapshotExpectation {
         activity_phase: None,
         activity_count: None,
         has_more: None,
+        account_error: None,
+        activity_error: None,
     }
 }
 
@@ -381,8 +385,11 @@ pub(crate) struct JournalFixture {
 }
 
 pub(crate) struct ProviderFixture {
-    account_status: u16,
-    activity_status: u16,
+    pub(super) account_status: u16,
+    pub(super) activity_status: u16,
+    pub(super) account_retry_after_seconds: Option<u64>,
+    pub(super) activity_malformed: bool,
+    pub(super) account_redirected: bool,
 }
 
 pub(crate) struct ActivityFixture {
@@ -399,6 +406,25 @@ impl ProviderFixture {
     #[must_use]
     pub(crate) const fn activity_fails(mut self, status: u16) -> Self {
         self.activity_status = status;
+        self
+    }
+
+    #[must_use]
+    pub(crate) const fn account_is_rate_limited(mut self, retry_after_seconds: u64) -> Self {
+        self.account_status = 429;
+        self.account_retry_after_seconds = Some(retry_after_seconds);
+        self
+    }
+
+    #[must_use]
+    pub(crate) const fn activity_returns_malformed_json(mut self) -> Self {
+        self.activity_malformed = true;
+        self
+    }
+
+    #[must_use]
+    pub(crate) const fn account_redirects(mut self) -> Self {
+        self.account_redirected = true;
         self
     }
 }
@@ -734,6 +760,8 @@ pub(crate) struct SnapshotExpectation {
     activity_phase: Option<ResourcePhase>,
     activity_count: Option<usize>,
     has_more: Option<bool>,
+    account_error: Option<DomainError>,
+    activity_error: Option<DomainError>,
 }
 
 impl SnapshotExpectation {
@@ -762,6 +790,17 @@ impl SnapshotExpectation {
 
     pub(crate) const fn has_more(mut self, has_more: bool) -> Expectation {
         self.has_more = Some(has_more);
+        Expectation::Snapshot(self)
+    }
+
+    #[must_use]
+    pub(crate) fn account_error(mut self, error: DomainError) -> Self {
+        self.account_error = Some(error);
+        self
+    }
+
+    pub(crate) fn activity_error(mut self, error: DomainError) -> Expectation {
+        self.activity_error = Some(error);
         Expectation::Snapshot(self)
     }
 }
@@ -858,7 +897,7 @@ impl ScenarioRunner {
         let mut use_localnet = false;
         let mut valid_secret = true;
         let mut journal_conflict = false;
-        let mut resource_statuses = (200, 200);
+        let mut provider_fixture = provider();
         let mut pages = Vec::new();
 
         for step in steps {
@@ -873,7 +912,13 @@ impl ScenarioRunner {
                     journal_conflict = fixture.conflict_next_write;
                 }
                 Step::Given(Given::Provider(fixture)) => {
-                    resource_statuses = (fixture.account_status, fixture.activity_status);
+                    provider_fixture = ProviderFixture {
+                        account_status: fixture.account_status,
+                        activity_status: fixture.activity_status,
+                        account_retry_after_seconds: fixture.account_retry_after_seconds,
+                        activity_malformed: fixture.activity_malformed,
+                        account_redirected: fixture.account_redirected,
+                    };
                 }
                 Step::Given(Given::Activity(fixture)) => pages.clone_from(&fixture.pages),
                 Step::When(_) | Step::Then(_) => break,
@@ -885,7 +930,7 @@ impl ScenarioRunner {
             value: TEST_SECRET_REF.to_owned(),
         };
         let secret = if valid_secret {
-            TEST_MNEMONIC.as_bytes()
+            test_wallet().recovery_phrase_bytes()
         } else {
             b"invalid recovery phrase"
         };
@@ -902,7 +947,7 @@ impl ScenarioRunner {
             }
 
             let host = Arc::new(LocalnetHttpHost::start(
-                TESTNET_V5_ADDRESS,
+                test_wallet().testnet_v5_address(),
                 &wallet.balance_nanograms,
             )?);
             let provider_base_url = host.provider_base_url();
@@ -914,7 +959,7 @@ impl ScenarioRunner {
             }
         } else {
             let host = Arc::new(ScenarioHttpHost::new(wallet, paused_submission));
-            host.set_resource_statuses(resource_statuses.0, resource_statuses.1);
+            host.set_provider_behavior(&provider_fixture);
             host.set_activity_pages(pages);
             ScenarioTransport {
                 client_host: host.clone(),
@@ -932,7 +977,7 @@ impl ScenarioRunner {
         let client = WalletClient::new(
             WalletClientConfig {
                 record_id: TEST_RECORD_ID.to_owned(),
-                address: TESTNET_V5_ADDRESS.to_owned(),
+                address: test_wallet().testnet_v5_address().to_owned(),
                 network: Network::Testnet,
                 send_validity_seconds: 300,
                 providers: ProviderConfig {
@@ -951,7 +996,7 @@ impl ScenarioRunner {
             scripted_http_host: scripted_host,
             localnet_http_host: localnet_host,
             secret_ref,
-            address: TESTNET_V5_ADDRESS.to_owned(),
+            address: test_wallet().testnet_v5_address().to_owned(),
             operations: HashMap::new(),
             results: HashMap::new(),
             activity_cursors: HashMap::new(),
@@ -1007,7 +1052,7 @@ impl ScenarioRunner {
             }
             Given::Secret(secret) => {
                 let bytes = if secret.valid {
-                    TEST_MNEMONIC.as_bytes()
+                    test_wallet().recovery_phrase_bytes()
                 } else {
                     b"invalid recovery phrase"
                 };
@@ -1025,7 +1070,7 @@ impl ScenarioRunner {
                 let host = self.scripted_http_host.as_ref().ok_or_else(|| {
                     "localnet scenarios cannot script provider failures".to_owned()
                 })?;
-                host.set_resource_statuses(provider.account_status, provider.activity_status);
+                host.set_provider_behavior(&provider);
                 Ok(())
             }
             Given::Activity(activity) => {
@@ -1272,6 +1317,22 @@ impl ScenarioRunner {
                     return Err(format!(
                         "expected activity_has_more={expected}\nactual: {}",
                         snapshot.activity_has_more
+                    ));
+                }
+                if let Some(expected) = expectation.account_error
+                    && snapshot.account_resource.error.as_ref() != Some(&expected)
+                {
+                    return Err(format!(
+                        "expected account error {expected:#?}\nactual: {:#?}",
+                        snapshot.account_resource.error
+                    ));
+                }
+                if let Some(expected) = expectation.activity_error
+                    && snapshot.activity_resource.error.as_ref() != Some(&expected)
+                {
+                    return Err(format!(
+                        "expected activity error {expected:#?}\nactual: {:#?}",
+                        snapshot.activity_resource.error
                     ));
                 }
                 Ok(())

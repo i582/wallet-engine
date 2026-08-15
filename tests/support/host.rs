@@ -10,13 +10,15 @@ use ton::block_tlb::Msg;
 use ton::ton_core::cell::TonCell;
 use ton::ton_core::traits::tlb::TLB;
 use wallet_engine::{
-    HttpHostError, HttpHostErrorKind, HttpRequest, HttpRequestId, HttpResponse,
+    HttpHeader, HttpHostError, HttpHostErrorKind, HttpRequest, HttpRequestId, HttpResponse,
     JournalCompareExchange, JournalCompareExchangeResult, JournalHostError, JournalKey,
     JournalRecord, ProtectedSecretHostError, ProtectedSecretHostErrorKind, ProtectedSecretRead,
-    ProtectedSecretRef, ProtectedSecretStore, WalletHttpHost, WalletPlatformHost,
+    ProtectedSecretRef, ProtectedSecretStore, SecretAccessReason, WalletHttpHost,
+    WalletPlatformHost,
 };
 
 use super::scenario::{SubmissionOutcome, WalletFixture};
+use super::test_wallet;
 
 const CHECKPOINT_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -29,6 +31,9 @@ struct HttpState {
     wallet: WalletFixture,
     account_status: u16,
     activity_status: u16,
+    account_retry_after_seconds: Option<u64>,
+    activity_malformed: bool,
+    account_redirected: bool,
     activity_pages: Vec<usize>,
     activity_page_index: usize,
     submission_gate: Option<SubmissionGate>,
@@ -69,6 +74,9 @@ impl ScenarioHttpHost {
                 wallet,
                 account_status: 200,
                 activity_status: 200,
+                account_retry_after_seconds: None,
+                activity_malformed: false,
+                account_redirected: false,
                 activity_pages: Vec::new(),
                 activity_page_index: 0,
                 submission_gate: paused_submission.map(|name| SubmissionGate {
@@ -88,10 +96,13 @@ impl ScenarioHttpHost {
         lock(&self.state).wallet = wallet;
     }
 
-    pub(super) fn set_resource_statuses(&self, account_status: u16, activity_status: u16) {
+    pub(super) fn set_provider_behavior(&self, fixture: &super::scenario::ProviderFixture) {
         let mut state = lock(&self.state);
-        state.account_status = account_status;
-        state.activity_status = activity_status;
+        state.account_status = fixture.account_status;
+        state.activity_status = fixture.activity_status;
+        state.account_retry_after_seconds = fixture.account_retry_after_seconds;
+        state.activity_malformed = fixture.activity_malformed;
+        state.account_redirected = fixture.account_redirected;
     }
 
     pub(super) fn set_activity_pages(&self, pages: Vec<usize>) {
@@ -263,18 +274,32 @@ impl ScenarioHttpHost {
 
     fn account_response(&self, request: &HttpRequest) -> HttpResponse {
         let state = lock(&self.state);
-        response_with_status(
+        let mut response = response_with_status(
             request,
             state.account_status,
-            json!({
-                "ok": true,
-                "result": {
-                    "balance": state.wallet.balance_nanograms,
-                    "state": state.wallet.status,
-                    "sync_utime": state.wallet.sync_utime,
-                }
-            }),
-        )
+            if state.account_status == 429 {
+                json!({ "ok": false, "error": "account rate limited" })
+            } else {
+                json!({
+                    "ok": true,
+                    "result": {
+                        "balance": state.wallet.balance_nanograms,
+                        "state": state.wallet.status,
+                        "sync_utime": state.wallet.sync_utime,
+                    }
+                })
+            },
+        );
+        if let Some(seconds) = state.account_retry_after_seconds {
+            response.headers.push(HttpHeader {
+                name: "Retry-After".to_owned(),
+                value: seconds.to_string(),
+            });
+        }
+        if state.account_redirected {
+            response.final_url = format!("{}/redirected", request.url);
+        }
+        response
     }
 
     fn activity_response(&self, request: &HttpRequest) -> HttpResponse {
@@ -282,6 +307,14 @@ impl ScenarioHttpHost {
         let page_index = state.activity_page_index;
         state.activity_page_index = state.activity_page_index.saturating_add(1);
         let count = state.activity_pages.get(page_index).copied().unwrap_or(0);
+        if state.activity_malformed {
+            return HttpResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: b"not-json".to_vec(),
+                final_url: request.url.clone(),
+            };
+        }
         response_with_status(
             request,
             state.activity_status,
@@ -388,7 +421,7 @@ impl ScenarioHttpHost {
 }
 
 fn activity_transactions(page: usize, count: usize) -> Vec<Value> {
-    const ADDRESS: &str = "0QA_6fh0aRAkD7n1MNfAUx8TvyCUw2iTQfzVM-0isMze2anN";
+    let address = test_wallet().testnet_v5_address();
     (0..count)
         .map(|index| {
             let ordinal = page.saturating_mul(10).saturating_add(index);
@@ -399,7 +432,7 @@ fn activity_transactions(page: usize, count: usize) -> Vec<Value> {
                     "lt": lt.to_string(),
                     "hash": STANDARD.encode([ordinal as u8; 32]),
                 },
-                "in_msg": { "source": ADDRESS, "value": "1" },
+                "in_msg": { "source": address, "value": "1" },
                 "out_msgs": [],
             })
         })
@@ -442,6 +475,8 @@ impl WalletHttpHost for ScenarioHttpHost {
 pub(super) struct MemoryPlatformHost {
     secrets: Mutex<HashMap<String, Vec<u8>>>,
     secret_reads: Mutex<u64>,
+    secret_user_presence: Mutex<HashMap<String, bool>>,
+    secret_read_reasons: Mutex<Vec<(String, SecretAccessReason)>>,
     journal: Mutex<HashMap<(String, String), JournalRecord>>,
     conflict_next_journal_write: Mutex<bool>,
 }
@@ -462,6 +497,47 @@ impl MemoryPlatformHost {
     pub(super) fn journal_is_empty(&self) -> bool {
         lock(&self.journal).is_empty()
     }
+
+    pub(super) fn secret_exists(&self, secret_ref: &ProtectedSecretRef) -> bool {
+        lock(&self.secrets).contains_key(&secret_ref.value)
+    }
+
+    pub(super) fn stored_secret_count(&self) -> usize {
+        lock(&self.secrets).len()
+    }
+
+    pub(super) fn replace_secret(
+        &self,
+        target: &ProtectedSecretRef,
+        source: &ProtectedSecretRef,
+    ) -> Result<(), String> {
+        let mut secrets = lock(&self.secrets);
+        let bytes = secrets
+            .get(&source.value)
+            .cloned()
+            .ok_or_else(|| format!("source secret `{}` does not exist", source.value))?;
+        secrets.insert(target.value.clone(), bytes);
+        Ok(())
+    }
+
+    pub(super) fn secret_requires_user_presence(
+        &self,
+        secret_ref: &ProtectedSecretRef,
+    ) -> Option<bool> {
+        lock(&self.secret_user_presence)
+            .get(&secret_ref.value)
+            .copied()
+    }
+
+    pub(super) fn secret_was_read_for(
+        &self,
+        secret_ref: &ProtectedSecretRef,
+        reason: SecretAccessReason,
+    ) -> bool {
+        lock(&self.secret_read_reasons)
+            .iter()
+            .any(|entry| entry == &(secret_ref.value.clone(), reason))
+    }
 }
 
 #[async_trait]
@@ -471,6 +547,7 @@ impl WalletPlatformHost for MemoryPlatformHost {
         request: ProtectedSecretRead,
     ) -> Result<Vec<u8>, ProtectedSecretHostError> {
         *lock(&self.secret_reads) += 1;
+        lock(&self.secret_read_reasons).push((request.secret_ref.value.clone(), request.reason));
         lock(&self.secrets)
             .get(&request.secret_ref.value)
             .cloned()
@@ -481,7 +558,9 @@ impl WalletPlatformHost for MemoryPlatformHost {
         &self,
         request: ProtectedSecretStore,
     ) -> Result<(), ProtectedSecretHostError> {
-        lock(&self.secrets).insert(request.secret_ref.value, request.bytes);
+        let secret_ref = request.secret_ref.value;
+        lock(&self.secret_user_presence).insert(secret_ref.clone(), request.require_user_presence);
+        lock(&self.secrets).insert(secret_ref, request.bytes);
         Ok(())
     }
 
@@ -490,6 +569,7 @@ impl WalletPlatformHost for MemoryPlatformHost {
         secret_ref: ProtectedSecretRef,
     ) -> Result<(), ProtectedSecretHostError> {
         lock(&self.secrets).remove(&secret_ref.value);
+        lock(&self.secret_user_presence).remove(&secret_ref.value);
         Ok(())
     }
 

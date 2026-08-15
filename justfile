@@ -46,6 +46,19 @@ test: test-c
     cargo test --locked --manifest-path c-bindings/Cargo.toml
     cargo test --locked --manifest-path xtask/Cargo.toml
 
+coverage-setup:
+    cargo install cargo-llvm-cov --locked
+    rustup component add llvm-tools-preview
+
+coverage:
+    cargo llvm-cov --locked --all-features --all-targets --ignore-filename-regex '(^|/)vendor/' --lcov --output-path lcov.info -- --test-threads 1
+
+coverage-html:
+    cargo llvm-cov --locked --all-features --all-targets --ignore-filename-regex '(^|/)vendor/' --html --output-dir coverage/html -- --test-threads 1
+
+coverage-clean:
+    cargo llvm-cov clean
+
 check-wasm:
     cargo check --locked --target wasm32-unknown-unknown
 

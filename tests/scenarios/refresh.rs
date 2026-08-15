@@ -1,5 +1,8 @@
 use super::support::*;
-use wallet_engine::{AccountStatus, ResourcePhase};
+use wallet_engine::{
+    AccountStatus, DomainError, ErrorCategory, ErrorCode, HttpHostErrorKind, ResourcePhase,
+    RetryAdvice,
+};
 
 #[test]
 fn publishes_account_and_activity_together() {
@@ -136,5 +139,72 @@ fn loads_newly_confirmed_transactions_from_localnet() {
         .then(update("latest-refresh").completed())
         .then(remember_new_activity_as("B"))
         .then(activity_is(&["A", "B"]))
+        .run();
+}
+
+#[test]
+fn preserves_provider_retry_advice_from_rate_limiting() {
+    scenario("refresh exposes provider backoff as structured resource state")
+        .given(provider().account_is_rate_limited(7))
+        .when(call("refresh", refresh_wallet()))
+        .then(update("refresh").partially_completed())
+        .then(
+            snapshot()
+                .account_phase(ResourcePhase::Failed)
+                .account_error(DomainError {
+                    code: ErrorCode::RateLimited,
+                    category: ErrorCategory::RateLimit,
+                    retry: RetryAdvice::AfterDelay,
+                    developer_message: "account rate limited".to_owned(),
+                    provider_status: Some(429),
+                    retry_after_ms: Some(7_000),
+                    host_kind: None,
+                })
+                .activity_phase(ResourcePhase::Ready),
+        )
+        .run();
+}
+
+#[test]
+fn malformed_activity_json_is_a_non_retryable_protocol_error() {
+    scenario("malformed provider JSON cannot become an empty activity page")
+        .given(provider().activity_returns_malformed_json())
+        .when(call("refresh", refresh_wallet()))
+        .then(update("refresh").partially_completed())
+        .then(
+            snapshot()
+                .account_phase(ResourcePhase::Ready)
+                .activity_error(DomainError {
+                    code: ErrorCode::InvalidProviderResponse,
+                    category: ErrorCategory::ProviderProtocol,
+                    retry: RetryAdvice::None,
+                    developer_message: "expected ident at line 1 column 2".to_owned(),
+                    provider_status: None,
+                    retry_after_ms: None,
+                    host_kind: None,
+                }),
+        )
+        .run();
+}
+
+#[test]
+fn redirected_account_response_is_rejected_by_the_engine_boundary() {
+    scenario("the host cannot redirect a wallet request to another URL")
+        .given(provider().account_redirects())
+        .when(call("refresh", refresh_wallet()))
+        .then(update("refresh").partially_completed())
+        .then(
+            snapshot()
+                .account_error(DomainError {
+                    code: ErrorCode::HostPolicyViolation,
+                    category: ErrorCategory::HostPolicy,
+                    retry: RetryAdvice::None,
+                    developer_message: "HTTP redirect or mismatched final URL".to_owned(),
+                    provider_status: None,
+                    retry_after_ms: None,
+                    host_kind: Some(HttpHostErrorKind::PolicyViolation),
+                })
+                .activity_phase(ResourcePhase::Ready),
+        )
         .run();
 }
