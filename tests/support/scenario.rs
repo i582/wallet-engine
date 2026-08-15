@@ -79,6 +79,7 @@ pub(crate) const fn provider() -> ProviderFixture {
     ProviderFixture {
         account_status: 200,
         activity_status: 200,
+        jettons_status: 200,
         account_retry_after_seconds: None,
         activity_malformed: false,
         account_redirected: false,
@@ -149,6 +150,13 @@ pub(crate) fn pause_next_activity_request(name: impl Into<String>) -> ControlSte
     ControlStep::PauseRequest {
         name: name.into(),
         kind: RequestKind::Activity,
+    }
+}
+
+pub(crate) fn pause_next_jettons_request(name: impl Into<String>) -> ControlStep {
+    ControlStep::PauseRequest {
+        name: name.into(),
+        kind: RequestKind::Jettons,
     }
 }
 
@@ -425,8 +433,10 @@ pub(crate) const fn snapshot() -> SnapshotExpectation {
         send_phase: None,
         account_phase: None,
         activity_phase: None,
+        jettons_phase: None,
         pagination_phase: None,
         activity_count: None,
+        jettons_count: None,
         has_more: None,
         account_error: None,
         activity_error: None,
@@ -570,6 +580,7 @@ impl ClientFixture {
 pub(crate) struct ProviderFixture {
     pub(super) account_status: u16,
     pub(super) activity_status: u16,
+    pub(super) jettons_status: u16,
     pub(super) account_retry_after_seconds: Option<u64>,
     pub(super) activity_malformed: bool,
     pub(super) account_redirected: bool,
@@ -591,6 +602,12 @@ impl ProviderFixture {
     #[must_use]
     pub(crate) const fn activity_fails(mut self, status: u16) -> Self {
         self.activity_status = status;
+        self
+    }
+
+    #[must_use]
+    pub(crate) const fn jettons_fail(mut self, status: u16) -> Self {
+        self.jettons_status = status;
         self
     }
 
@@ -1047,8 +1064,10 @@ pub(crate) struct SnapshotExpectation {
     send_phase: Option<SendPhase>,
     account_phase: Option<ResourcePhase>,
     activity_phase: Option<ResourcePhase>,
+    jettons_phase: Option<ResourcePhase>,
     pagination_phase: Option<ResourcePhase>,
     activity_count: Option<usize>,
+    jettons_count: Option<usize>,
     has_more: Option<bool>,
     account_error: Option<DomainError>,
     activity_error: Option<DomainError>,
@@ -1074,6 +1093,12 @@ impl SnapshotExpectation {
     }
 
     #[must_use]
+    pub(crate) const fn jettons_phase(mut self, phase: ResourcePhase) -> Self {
+        self.jettons_phase = Some(phase);
+        self
+    }
+
+    #[must_use]
     pub(crate) const fn pagination_phase(mut self, phase: ResourcePhase) -> Self {
         self.pagination_phase = Some(phase);
         self
@@ -1082,6 +1107,12 @@ impl SnapshotExpectation {
     #[must_use]
     pub(crate) const fn activity_count(mut self, count: usize) -> Self {
         self.activity_count = Some(count);
+        self
+    }
+
+    #[must_use]
+    pub(crate) const fn jettons_count(mut self, count: usize) -> Self {
+        self.jettons_count = Some(count);
         self
     }
 
@@ -1228,6 +1259,7 @@ impl ScenarioRunner {
                     provider_fixture = ProviderFixture {
                         account_status: fixture.account_status,
                         activity_status: fixture.activity_status,
+                        jettons_status: fixture.jettons_status,
                         account_retry_after_seconds: fixture.account_retry_after_seconds,
                         activity_malformed: fixture.activity_malformed,
                         account_redirected: fixture.account_redirected,
@@ -1779,6 +1811,14 @@ impl ScenarioRunner {
                         snapshot.activity_resource.phase
                     ));
                 }
+                if let Some(expected) = expectation.jettons_phase
+                    && snapshot.jettons_resource.phase != expected
+                {
+                    return Err(format!(
+                        "expected jettons phase {expected:?}\nactual: {:?}",
+                        snapshot.jettons_resource.phase
+                    ));
+                }
                 if let Some(expected) = expectation.pagination_phase
                     && snapshot.activity_pagination_resource.phase != expected
                 {
@@ -1793,6 +1833,14 @@ impl ScenarioRunner {
                     return Err(format!(
                         "expected {expected} activity items\nactual: {}",
                         snapshot.activity.len()
+                    ));
+                }
+                if let Some(expected) = expectation.jettons_count
+                    && snapshot.jettons.len() != expected
+                {
+                    return Err(format!(
+                        "expected {expected} jettons\nactual: {}",
+                        snapshot.jettons.len()
                     ));
                 }
                 if let Some(expected) = expectation.has_more

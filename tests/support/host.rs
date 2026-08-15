@@ -23,6 +23,10 @@ use super::scenario::{SubmissionOutcome, WalletFixture};
 use super::test_wallet;
 
 const CHECKPOINT_TIMEOUT: Duration = Duration::from_secs(15);
+const JETTON_WALLET_ADDRESS: &str =
+    "0:2222222222222222222222222222222222222222222222222222222222222222";
+const JETTON_MASTER_ADDRESS: &str =
+    "0:3333333333333333333333333333333333333333333333333333333333333333";
 
 pub(super) struct ScenarioHttpHost {
     state: Mutex<HttpState>,
@@ -33,6 +37,7 @@ struct HttpState {
     wallet: WalletFixture,
     account_status: u16,
     activity_status: u16,
+    jettons_status: u16,
     account_retry_after_seconds: Option<u64>,
     activity_malformed: bool,
     account_redirected: bool,
@@ -52,6 +57,7 @@ struct HttpState {
 pub(crate) enum RequestKind {
     Account,
     Activity,
+    Jettons,
     Seqno,
     Emulation,
 }
@@ -89,6 +95,7 @@ impl ScenarioHttpHost {
                 wallet,
                 account_status: 200,
                 activity_status: 200,
+                jettons_status: 200,
                 account_retry_after_seconds: None,
                 activity_malformed: false,
                 account_redirected: false,
@@ -119,6 +126,7 @@ impl ScenarioHttpHost {
         let mut state = lock(&self.state);
         state.account_status = fixture.account_status;
         state.activity_status = fixture.activity_status;
+        state.jettons_status = fixture.jettons_status;
         state.account_retry_after_seconds = fixture.account_retry_after_seconds;
         state.activity_malformed = fixture.activity_malformed;
         state.account_redirected = fixture.account_redirected;
@@ -359,6 +367,41 @@ impl ScenarioHttpHost {
         )
     }
 
+    fn jettons_response(&self, request: &HttpRequest) -> HttpResponse {
+        let state = lock(&self.state);
+        response_with_status(
+            request,
+            state.jettons_status,
+            if state.jettons_status == 200 {
+                json!({
+                    "jetton_wallets": [{
+                        "address": JETTON_WALLET_ADDRESS,
+                        "balance": "1234500000",
+                        "owner": test_wallet().testnet_v5_address(),
+                        "jetton": JETTON_MASTER_ADDRESS
+                    }],
+                    "metadata": {
+                        (JETTON_MASTER_ADDRESS): {
+                            "token_info": [{
+                                "valid": true,
+                                "type": "jetton_masters",
+                                "symbol": "JET",
+                                "is_scam": false,
+                                "extra": {
+                                    "name": "Scenario Jetton",
+                                    "decimals": "9",
+                                    "image": "https://example.com/jetton.png"
+                                }
+                            }]
+                        }
+                    }
+                })
+            } else {
+                json!({ "error": "scripted jetton failure" })
+            },
+        )
+    }
+
     fn seqno_response(&self, request: &HttpRequest) -> HttpResponse {
         let state = lock(&self.state);
         response(
@@ -585,6 +628,11 @@ impl WalletHttpHost for ScenarioHttpHost {
             if let Some(kind) = host_error_kind {
                 return Err(host_error(kind, "scripted activity transport failure"));
             }
+            return Ok(response);
+        }
+        if request.url.contains("/api/v3/jetton/wallets") {
+            let response = self.jettons_response(&request);
+            self.wait_at_request_gate(RequestKind::Jettons, request.id)?;
             return Ok(response);
         }
         if request.url.contains("/api/emulate/v1/emulateTrace") {

@@ -390,6 +390,19 @@ impl LocalnetHttpHost {
 #[async_trait]
 impl WalletHttpHost for LocalnetHttpHost {
     async fn execute_http(&self, request: HttpRequest) -> Result<HttpResponse, HttpHostError> {
+        if request.url.contains("/api/v3/jetton/wallets") {
+            self.wait_at_request_gate(RequestKind::Jettons, request.id)?;
+            return Ok(HttpResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: serde_json::to_vec(&json!({
+                    "jetton_wallets": [],
+                    "metadata": {}
+                }))
+                .map_err(|error| host_error(HttpHostErrorKind::Other, &error.to_string()))?,
+                final_url: request.url,
+            });
+        }
         if request.url.contains("getAddressInformation") {
             self.wait_at_request_gate(RequestKind::Account, request.id)?;
         } else if request.url.contains("getTransactions") {

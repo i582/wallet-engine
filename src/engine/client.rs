@@ -173,6 +173,7 @@ fn prepare_shutdown(
     if active_refresh.is_some() {
         mark_loading_cancelled(&mut state.snapshot.account_resource);
         mark_loading_cancelled(&mut state.snapshot.activity_resource);
+        mark_loading_cancelled(&mut state.snapshot.jettons_resource);
     }
 
     if let Some((_, request_id)) = state.active_pagination.take() {

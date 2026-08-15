@@ -174,27 +174,6 @@ pub(super) fn apply_refreshed_activity_page(state: &mut State, page: ActivityPag
     state.sync_activity_snapshot();
 }
 
-pub(super) fn build_refresh_requests(
-    config: &WalletClientConfig,
-    account_id: HttpRequestId,
-    activity_id: HttpRequestId,
-) -> Result<(HttpRequest, HttpRequest), WalletClientError> {
-    Ok((
-        build_toncenter_v2_request(
-            config,
-            account_id,
-            "getAddressInformation",
-            &[("address", config.address.as_str())],
-        )?,
-        build_toncenter_v2_request(
-            config,
-            activity_id,
-            "getTransactions",
-            &[("address", config.address.as_str()), ("limit", "10")],
-        )?,
-    ))
-}
-
 pub(super) fn build_activity_page_request(
     config: &WalletClientConfig,
     cursor: &ActivityPageCursor,
@@ -341,6 +320,9 @@ mod tests {
                 activity_pagination_resource: ResourceState::idle(),
                 activity_cursor: None,
                 activity_has_more: false,
+                jettons: Vec::new(),
+                jettons_resource: ResourceState::idle(),
+                jettons_has_more: false,
                 send: SendSnapshot {
                     operation_id: None,
                     phase: SendPhase::Idle,

@@ -57,10 +57,31 @@ pub(super) fn build_toncenter_v2_request(
     query: &[(&str, &str)],
 ) -> Result<HttpRequest, WalletClientError> {
     let path = ["api", "v2", path];
+    build_toncenter_get_request(config, id, &path, query)
+}
+
+pub(super) fn build_toncenter_v3_request(
+    config: &WalletClientConfig,
+    id: HttpRequestId,
+    path: &[&str],
+    query: &[(&str, &str)],
+) -> Result<HttpRequest, WalletClientError> {
+    let mut full_path = Vec::with_capacity(path.len().saturating_add(2));
+    full_path.extend(["api", "v3"]);
+    full_path.extend_from_slice(path);
+    build_toncenter_get_request(config, id, &full_path, query)
+}
+
+fn build_toncenter_get_request(
+    config: &WalletClientConfig,
+    id: HttpRequestId,
+    path: &[&str],
+    query: &[(&str, &str)],
+) -> Result<HttpRequest, WalletClientError> {
     Ok(HttpRequest {
         id,
         method: HttpMethod::Get,
-        url: build_toncenter_url(config, &path, query)?,
+        url: build_toncenter_url(config, path, query)?,
         headers: vec![HttpHeader {
             name: "Accept".to_owned(),
             value: "application/json".to_owned(),
@@ -383,6 +404,33 @@ mod tests {
         assert!(request.body.is_empty());
         assert_eq!(request.max_response_header_bytes, MAX_RESPONSE_HEADER_BYTES);
         assert_eq!(request.max_response_body_bytes, MAX_RESPONSE_BODY_BYTES);
+    }
+
+    #[test]
+    fn builds_a_toncenter_v3_request_from_the_same_base() {
+        let config = WalletClientConfig {
+            record_id: "record".to_owned(),
+            address: "address".to_owned(),
+            public_key: vec![0; 32],
+            network: Network::Testnet,
+            send_validity_seconds: 300,
+            providers: ProviderConfig {
+                toncenter_base_url: "https://provider.example/custom/".to_owned(),
+            },
+        };
+
+        let request = build_toncenter_v3_request(
+            &config,
+            HttpRequestId { value: 10 },
+            &["jetton", "wallets"],
+            &[("owner_address", "0:abc"), ("exclude_zero_balance", "true")],
+        )
+        .expect("the provider URL is valid");
+
+        assert_eq!(
+            request.url,
+            "https://provider.example/custom/api/v3/jetton/wallets?owner_address=0%3Aabc&exclude_zero_balance=true"
+        );
     }
 
     #[test]

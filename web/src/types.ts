@@ -127,6 +127,26 @@ export interface SendEmulation {
   readonly isIncomplete: boolean
 }
 
+/** Untrusted display metadata reported for a Jetton master contract. */
+export interface JettonMetadata {
+  readonly name?: string
+  readonly symbol?: string
+  readonly description?: string
+  readonly imageUrl?: string
+  readonly decimals?: number
+  readonly isScam?: boolean
+  readonly isNsfw?: boolean
+}
+
+/** Exact Jetton balance owned by the configured wallet. */
+export interface JettonBalance {
+  readonly walletAddress: string
+  readonly masterAddress: string
+  /** Integer amount in the Jetton's smallest units. */
+  readonly balanceUnits: string
+  readonly metadata?: JettonMetadata
+}
+
 export interface WalletSnapshot {
   readonly revision: number
   readonly recordId: string
@@ -139,6 +159,9 @@ export interface WalletSnapshot {
   readonly activityPaginationResource: ResourceState
   readonly activityCursor?: ActivityCursor
   readonly activityHasMore: boolean
+  readonly jettons: JettonBalance[]
+  readonly jettonsResource: ResourceState
+  readonly jettonsHasMore: boolean
   readonly send: SendSnapshot
 }
 

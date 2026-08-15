@@ -115,7 +115,7 @@ describe("high-level WASM API", () => {
 
     const update = await client.refresh()
 
-    expect(fetchCount).toBe(2)
+    expect(fetchCount).toBe(3)
     expect(update.outcome).toBe("failed")
     expect(update.snapshot.accountResource.phase).toBe("failed")
     expect(update.snapshot.accountResource.error?.hostKind).toBe("connectionLost")

@@ -5,7 +5,7 @@ use wallet_engine::{
 };
 
 #[test]
-fn publishes_account_and_activity_together() {
+fn publishes_account_activity_and_jettons_together() {
     scenario("refresh loads independent wallet resources")
         .given(wallet().active().balance(grams(10)).seqno(7))
         .when(call("refresh", refresh_wallet()))
@@ -14,6 +14,8 @@ fn publishes_account_and_activity_together() {
         .then(
             snapshot()
                 .account_phase(ResourcePhase::Ready)
+                .jettons_phase(ResourcePhase::Ready)
+                .jettons_count(1)
                 .activity_phase(ResourcePhase::Ready),
         )
         .run();
@@ -50,14 +52,36 @@ fn keeps_activity_resource_when_account_fails() {
 }
 
 #[test]
-fn reports_failure_when_both_resources_fail() {
+fn keeps_account_and_activity_when_jettons_fail() {
+    scenario("jetton failure does not discard other refreshed resources")
+        .given(provider().jettons_fail(503))
+        .when(call("refresh", refresh_wallet()))
+        .then(update("refresh").partially_completed())
+        .then(
+            snapshot()
+                .account_phase(ResourcePhase::Ready)
+                .jettons_phase(ResourcePhase::Failed)
+                .jettons_count(0)
+                .activity_phase(ResourcePhase::Ready),
+        )
+        .run();
+}
+
+#[test]
+fn reports_failure_when_all_resources_fail() {
     scenario("refresh fails when every requested resource fails")
-        .given(provider().account_fails(503).activity_fails(503))
+        .given(
+            provider()
+                .account_fails(503)
+                .activity_fails(503)
+                .jettons_fail(503),
+        )
         .when(call("refresh", refresh_wallet()))
         .then(update("refresh").failed())
         .then(
             snapshot()
                 .account_phase(ResourcePhase::Failed)
+                .jettons_phase(ResourcePhase::Failed)
                 .activity_phase(ResourcePhase::Failed),
         )
         .run();
@@ -76,6 +100,7 @@ fn cancellation_discards_late_refresh_responses_and_allows_retry() {
             snapshot()
                 .account_phase(ResourcePhase::Idle)
                 .activity_count(0)
+                .jettons_phase(ResourcePhase::Idle)
                 .activity_phase(ResourcePhase::Idle),
         )
         .then(remember_revision("after-cancel"))
@@ -87,6 +112,7 @@ fn cancellation_discards_late_refresh_responses_and_allows_retry() {
             snapshot()
                 .account_phase(ResourcePhase::Idle)
                 .activity_count(0)
+                .jettons_phase(ResourcePhase::Idle)
                 .activity_phase(ResourcePhase::Idle),
         )
         // A cancelled generation must not poison the next refresh.
@@ -95,27 +121,30 @@ fn cancellation_discards_late_refresh_responses_and_allows_retry() {
         .then(
             snapshot()
                 .account_phase(ResourcePhase::Ready)
+                .jettons_phase(ResourcePhase::Ready)
                 .activity_phase(ResourcePhase::Ready),
         )
         .run();
 }
 
 #[test]
-fn refresh_stays_loading_until_both_provider_responses_finish() {
-    scenario("refresh completes only after both resource requests finish")
-        .when(pause_next_account_request("account-response"))
+fn refresh_stays_loading_until_all_provider_responses_finish() {
+    scenario("refresh completes only after all resource requests finish")
+        .when(pause_next_jettons_request("jettons-response"))
         .when(start("refresh", refresh_wallet()))
-        .when(wait_for_request("account-response"))
+        .when(wait_for_request("jettons-response"))
         .then(
             snapshot()
                 .account_phase(ResourcePhase::Loading)
+                .jettons_phase(ResourcePhase::Loading)
                 .activity_phase(ResourcePhase::Loading),
         )
-        .when(release_request("account-response"))
+        .when(release_request("jettons-response"))
         .then(update("refresh").completed())
         .then(
             snapshot()
                 .account_phase(ResourcePhase::Ready)
+                .jettons_phase(ResourcePhase::Ready)
                 .activity_phase(ResourcePhase::Ready),
         )
         .run();

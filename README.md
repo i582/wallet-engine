@@ -70,7 +70,7 @@ Read [WASM.md](WASM.md) for browser setup and security requirements.
 
 For a small React integration, see the
 [web wallet example](examples/web/README.md). It creates a V5R1 testnet wallet,
-shows the recovery phrase, refreshes the balance and activity, and loads more
+shows the recovery phrase, refreshes the balance, jettons, and activity, and loads more
 history. The engine integration is kept separate from the interface code.
 
 ### C
@@ -157,8 +157,9 @@ needs these values after a restart. The public key is not a secret.
 `WalletSnapshot` is the only state that the user interface needs. It contains:
 
 - the account balance and status.
+- exact nonzero jetton balances with optional untrusted display metadata.
 - recent activity and its pagination cursor.
-- independent states for account, activity, and pagination resources.
+- independent states for account, jetton, activity, and pagination resources.
 - the latest send state.
 - a monotonic revision number.
 

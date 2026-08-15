@@ -1,8 +1,8 @@
 //! Immutable wallet snapshots and operation results.
 
 use super::{
-    AccountSnapshot, ActivityCursor, ActivityItem, Network, ResourceState, SendPhase, SendSnapshot,
-    WalletClientConfig,
+    AccountSnapshot, ActivityCursor, ActivityItem, JettonBalance, Network, ResourceState,
+    SendPhase, SendSnapshot, WalletClientConfig,
 };
 
 /// An immutable view of all observable state in one wallet client.
@@ -34,6 +34,12 @@ pub struct WalletSnapshot {
     pub activity_cursor: Option<ActivityCursor>,
     /// Whether the provider can have another activity page.
     pub activity_has_more: bool,
+    /// Indexed nonzero jetton balances owned by this wallet.
+    pub jettons: Vec<JettonBalance>,
+    /// The load state for `jettons`.
+    pub jettons_resource: ResourceState,
+    /// Whether the provider can have jetton balances beyond the refresh limit.
+    pub jettons_has_more: bool,
     /// The current transfer workflow state.
     pub send: SendSnapshot,
 }
@@ -52,6 +58,9 @@ impl WalletSnapshot {
             activity_pagination_resource: ResourceState::idle(),
             activity_cursor: None,
             activity_has_more: false,
+            jettons: Vec::new(),
+            jettons_resource: ResourceState::idle(),
+            jettons_has_more: false,
             send: SendSnapshot {
                 operation_id: None,
                 phase: SendPhase::Idle,

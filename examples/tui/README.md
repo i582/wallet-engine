@@ -9,7 +9,7 @@ The application can:
 - create a V5R1 testnet wallet;
 - import 24 recovery words;
 - restore the wallet after a restart;
-- refresh the balance and activity;
+- refresh the balance, jettons, and activity;
 - load older activity;
 - sign and submit a testnet transfer;
 - delete the local wallet.

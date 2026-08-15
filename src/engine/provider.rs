@@ -1,19 +1,22 @@
 //! Toncenter response parsing and domain-error normalization.
 //!
 //! The wallet client uses this private module to convert provider JSON into
-//! stable account and activity records. It also sanitizes external diagnostics.
+//! stable account, activity, and jetton records. It also sanitizes external diagnostics.
+
+use std::collections::HashMap;
+use std::str::FromStr;
 
 use num_bigint::BigUint;
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::Value;
-use std::str::FromStr;
 use ton::ton_core::types::TonAddress;
 
 use crate::domain::bounded_diagnostic;
 use crate::types::TonAddressExt as _;
 use crate::{
     AccountSnapshot, AccountStatus, ActivityCursor, ActivityDirection, ActivityItem, Base64Hash,
-    DomainError, ErrorCategory, ErrorCode, HttpHeader, Network, RetryAdvice,
+    DomainError, ErrorCategory, ErrorCode, HttpHeader, JettonBalance, JettonMetadata, Network,
+    RetryAdvice,
 };
 
 #[derive(Debug, Deserialize)]
@@ -63,6 +66,44 @@ struct Message {
     destination: Value,
     #[serde(default)]
     value: Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawJettonWalletsResponse {
+    jetton_wallets: Vec<RawJettonWallet>,
+    #[serde(default)]
+    metadata: HashMap<String, RawMetadata>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawJettonWallet {
+    address: String,
+    balance: Value,
+    owner: String,
+    jetton: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawMetadata {
+    #[serde(default)]
+    token_info: Vec<RawTokenInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawTokenInfo {
+    #[serde(default)]
+    valid: Option<bool>,
+    #[serde(rename = "type", default)]
+    kind: String,
+    name: Option<String>,
+    symbol: Option<String>,
+    description: Option<String>,
+    image: Option<String>,
+    decimals: Option<Value>,
+    is_scam: Option<bool>,
+    is_nsfw: Option<bool>,
+    #[serde(default)]
+    extra: Value,
 }
 
 /// Parsed activity kept inside Rust before it crosses an FFI boundary.
@@ -146,6 +187,12 @@ impl ActivityPageCursor {
 pub(crate) struct ActivityPage {
     pub items: Vec<ActivityRecord>,
     pub cursor: Option<ActivityPageCursor>,
+    pub has_more: bool,
+}
+
+#[derive(Debug)]
+pub(crate) struct JettonPage {
+    pub items: Vec<JettonBalance>,
     pub has_more: bool,
 }
 
@@ -256,6 +303,59 @@ pub(crate) fn parse_activity(body: &[u8], page_size: u32) -> Result<ActivityPage
     Ok(ActivityPage {
         items,
         cursor,
+        has_more: raw_count >= page_size as usize,
+    })
+}
+
+pub(crate) fn parse_jettons(
+    body: &[u8],
+    expected_owner: &TonAddress,
+    network: Network,
+    page_size: u32,
+) -> Result<JettonPage, DomainError> {
+    let response: RawJettonWalletsResponse =
+        serde_json::from_slice(body).map_err(|error| invalid_response(error.to_string()))?;
+    let raw_count = response.jetton_wallets.len();
+    let metadata = response
+        .metadata
+        .into_iter()
+        .filter_map(|(address, metadata)| {
+            TonAddress::from_str(&address)
+                .ok()
+                .map(|address| (address.to_hex(), metadata))
+        })
+        .collect::<HashMap<_, _>>();
+
+    let items = response
+        .jetton_wallets
+        .into_iter()
+        .map(|wallet| {
+            let owner = parse_address(&wallet.owner, "jetton owner")?;
+            if &owner != expected_owner {
+                return Err(invalid_response(
+                    "jetton wallet belongs to an unexpected owner",
+                ));
+            }
+
+            let wallet_address = parse_address(&wallet.address, "jetton wallet address")?;
+            let master_address = parse_address(&wallet.jetton, "jetton master address")?;
+            let balance_units =
+                parse_unsigned_decimal(&wallet.balance, "jetton balance")?.to_string();
+            let metadata = metadata
+                .get(&master_address.to_hex())
+                .and_then(parse_jetton_metadata);
+
+            Ok(JettonBalance {
+                wallet_address: wallet_address.to_user_friendly(network),
+                master_address: master_address.to_user_friendly(network),
+                balance_units,
+                metadata,
+            })
+        })
+        .collect::<Result<Vec<_>, DomainError>>()?;
+
+    Ok(JettonPage {
+        items,
         has_more: raw_count >= page_size as usize,
     })
 }
@@ -450,6 +550,55 @@ fn parse_unsigned_decimal(value: &Value, field: &str) -> Result<BigUint, DomainE
         .map_err(|_| invalid_response(format!("{field} is not an unsigned decimal")))
 }
 
+fn parse_address(value: &str, field: &str) -> Result<TonAddress, DomainError> {
+    TonAddress::from_str(value).map_err(|_| invalid_response(format!("{field} is invalid")))
+}
+
+fn parse_jetton_metadata(metadata: &RawMetadata) -> Option<JettonMetadata> {
+    let info = metadata
+        .token_info
+        .iter()
+        .find(|info| info.valid != Some(false) && info.kind == "jetton_masters")?;
+    let extra = info.extra.as_object();
+    let decimals = info
+        .decimals
+        .as_ref()
+        .or_else(|| extra?.get("decimals"))
+        .and_then(|value| match value {
+            Value::String(value) => value.parse().ok(),
+            Value::Number(value) => value.as_u64().and_then(|value| u8::try_from(value).ok()),
+            _ => None,
+        });
+
+    Some(JettonMetadata {
+        name: metadata_string(info.name.as_deref(), extra, "name"),
+        symbol: metadata_string(info.symbol.as_deref(), extra, "symbol"),
+        description: metadata_string(info.description.as_deref(), extra, "description"),
+        image_url: metadata_string(info.image.as_deref(), extra, "image"),
+        decimals,
+        is_scam: info
+            .is_scam
+            .or_else(|| extra?.get("is_scam").and_then(Value::as_bool)),
+        is_nsfw: info
+            .is_nsfw
+            .or_else(|| extra?.get("is_nsfw").and_then(Value::as_bool)),
+    })
+}
+
+fn metadata_string(
+    direct: Option<&str>,
+    extra: Option<&serde_json::Map<String, Value>>,
+    field: &str,
+) -> Option<String> {
+    nonempty(direct).or_else(|| nonempty(extra?.get(field)?.as_str()))
+}
+
+fn nonempty(value: Option<&str>) -> Option<String> {
+    value
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_owned)
+}
+
 fn message_address(value: &Value, field: &str) -> Result<TonAddress, DomainError> {
     let address = value
         .as_str()
@@ -489,16 +638,25 @@ fn parse_retry_after_ms(headers: &[HttpHeader]) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use base64::Engine as _;
     use base64::engine::general_purpose::STANDARD;
     use serde_json::{Value, json};
 
-    use super::{parse_account, parse_activity, response_error};
+    use super::{parse_account, parse_activity, parse_jettons, response_error};
+    use crate::types::TonAddressExt as _;
     use crate::{
-        AccountStatus, ActivityDirection, ErrorCategory, ErrorCode, HttpHeader, RetryAdvice,
+        AccountStatus, ActivityDirection, ErrorCategory, ErrorCode, HttpHeader, Network,
+        RetryAdvice,
     };
+    use ton::ton_core::types::TonAddress;
 
     const ADDRESS: &str = "0:0000000000000000000000000000000000000000000000000000000000000001";
+    const JETTON_WALLET: &str =
+        "0:2222222222222222222222222222222222222222222222222222222222222222";
+    const JETTON_MASTER: &str =
+        "0:3333333333333333333333333333333333333333333333333333333333333333";
 
     #[test]
     fn parses_every_account_status_and_numeric_balance_shape() {
@@ -741,6 +899,88 @@ mod tests {
             assert_eq!(error.code, ErrorCode::InvalidProviderResponse);
             assert_eq!(error.retry, RetryAdvice::None);
         }
+    }
+
+    #[test]
+    fn parses_jetton_balances_and_metadata_without_losing_precision() {
+        let owner = TonAddress::from_str(ADDRESS).expect("owner address is valid");
+        let body = json!({
+            "jetton_wallets": [{
+                "address": JETTON_WALLET,
+                "balance": "340282366920938463463374607431768211456",
+                "owner": ADDRESS,
+                "jetton": JETTON_MASTER
+            }],
+            "metadata": {
+                (JETTON_MASTER): {
+                    "token_info": [{
+                        "valid": true,
+                        "type": "jetton_masters",
+                        "symbol": "JET",
+                        "is_scam": false,
+                        "extra": {
+                            "name": "Scenario Jetton",
+                            "description": "metadata from extra",
+                            "image": "https://example.com/jetton.png",
+                            "decimals": "18",
+                            "is_nsfw": true
+                        }
+                    }]
+                }
+            }
+        });
+
+        let page = parse_jettons(&encode(body), &owner, Network::Testnet, 1)
+            .expect("jetton response must parse");
+
+        assert!(page.has_more);
+        assert_eq!(page.items.len(), 1);
+        let balance = &page.items[0];
+        assert_eq!(
+            balance.balance_units,
+            "340282366920938463463374607431768211456"
+        );
+        assert_eq!(
+            balance.wallet_address,
+            TonAddress::from_str(JETTON_WALLET)
+                .expect("wallet address is valid")
+                .to_user_friendly(Network::Testnet)
+        );
+        assert_eq!(
+            balance.master_address,
+            TonAddress::from_str(JETTON_MASTER)
+                .expect("master address is valid")
+                .to_user_friendly(Network::Testnet)
+        );
+        let metadata = balance.metadata.as_ref().expect("metadata must attach");
+        assert_eq!(metadata.name.as_deref(), Some("Scenario Jetton"));
+        assert_eq!(metadata.symbol.as_deref(), Some("JET"));
+        assert_eq!(metadata.decimals, Some(18));
+        assert_eq!(metadata.is_scam, Some(false));
+        assert_eq!(metadata.is_nsfw, Some(true));
+    }
+
+    #[test]
+    fn rejects_a_jetton_wallet_for_another_owner() {
+        let owner = TonAddress::from_str(ADDRESS).expect("owner address is valid");
+        let body = json!({
+            "jetton_wallets": [{
+                "address": JETTON_WALLET,
+                "balance": "1",
+                "owner": JETTON_MASTER,
+                "jetton": JETTON_MASTER
+            }],
+            "metadata": {}
+        });
+
+        let error = parse_jettons(&encode(body), &owner, Network::Testnet, 1)
+            .expect_err("another owner's wallet must be rejected");
+
+        assert_eq!(error.code, ErrorCode::InvalidProviderResponse);
+        assert_eq!(
+            error.developer_message,
+            "jetton wallet belongs to an unexpected owner"
+        );
     }
 
     fn hash(byte: u8) -> String {
