@@ -158,12 +158,23 @@ const created = await lifecycle.createWallet({
   network: "testnet",
 })
 
-showRecoveryPhrase(created.recoveryPhrase.words)
+showRecoveryPhrase(created.recoveryPhrase.phrase)
 saveWalletDescriptor(created.descriptor)
 ```
 
 Discard the recovery phrase after the required user flow. Persist only the
 wallet descriptor.
+
+## Clear client secret copies
+
+Rust clears the secret buffers that it owns. JavaScript strings are immutable,
+so the application cannot reliably clear `RecoveryPhrase.phrase` in memory.
+
+Keep the phrase only while the user needs it. Do not write it to logs, errors,
+analytics, state snapshots, or browser storage.
+
+Use a `Uint8Array` for mutable secret copies. Call `fill(0)` in a `finally`
+block after the host callback finishes.
 
 ## Store send records
 

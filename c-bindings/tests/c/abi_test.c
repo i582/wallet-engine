@@ -105,8 +105,7 @@ static int test_create_wallet_types(void) {
     static const char address[] = "UQExampleAddress";
     static const char secret_ref[] = "wallet:wallet-1:mnemonic";
     static const uint8_t secret_bytes[] = {0x73, 0x65, 0x63, 0x72, 0x65, 0x74};
-    static const char first_word[] = "first";
-    static const char second_word[] = "second";
+    static const char phrase[] = "first second";
 
     const WalletEngineStringView record_id_view = {record_id, sizeof(record_id) - 1};
     const WalletEngineProtectedSecretRefView secret_ref_view = {
@@ -127,14 +126,10 @@ static int test_create_wallet_types(void) {
         .network = WALLET_ENGINE_NETWORK_TESTNET,
         .secret_ref = secret_ref_view,
     };
-    const WalletEngineStringView words[] = {
-        {first_word, sizeof(first_word) - 1},
-        {second_word, sizeof(second_word) - 1},
-    };
     const WalletEngineCreatedWalletView created = {
         .descriptor = descriptor,
         .recovery_phrase = {
-            .words = {words, sizeof(words) / sizeof(words[0])},
+            .phrase = {phrase, sizeof(phrase) - 1},
         },
     };
     const WalletEngineWalletLifecycleErrorView error = {
@@ -151,9 +146,8 @@ static int test_create_wallet_types(void) {
     CHECK(store.bytes.len == sizeof(secret_bytes));
     CHECK(store.require_user_presence);
     CHECK(created.descriptor.address.data == address);
-    CHECK(created.recovery_phrase.words.len == 2);
-    CHECK(created.recovery_phrase.words.data[0].data == first_word);
-    CHECK(created.recovery_phrase.words.data[1].data == second_word);
+    CHECK(created.recovery_phrase.phrase.data == phrase);
+    CHECK(created.recovery_phrase.phrase.len == sizeof(phrase) - 1);
     CHECK(error.has_protected_secret_host_error_kind);
     CHECK(
         error.protected_secret_host_error_kind ==

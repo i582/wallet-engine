@@ -123,11 +123,11 @@ describe("high-level WASM API", () => {
       recordId: "browser-lifecycle-wallet",
       network: "testnet",
     })
-    expect(created.recoveryPhrase.words).toHaveLength(24)
+    expect(created.recoveryPhrase.phrase.split(" ")).toHaveLength(24)
     expect(created.descriptor.address).toStartWith("0Q")
 
     const revealed = await lifecycle.revealRecoveryPhrase(created.descriptor)
-    expect(revealed.words).toEqual(created.recoveryPhrase.words)
+    expect(revealed.phrase).toEqual(created.recoveryPhrase.phrase)
 
     await lifecycle.deleteWallet(created.descriptor)
     await expect(lifecycle.revealRecoveryPhrase(created.descriptor)).rejects.toBeInstanceOf(Error)

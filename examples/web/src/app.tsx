@@ -77,7 +77,7 @@ export function App(): ReactElement {
       const created = await WalletSession.create()
       setSession(created.session)
       setSnapshot(created.session.snapshot())
-      setRecoveryWords(created.recoveryPhrase.words)
+      setRecoveryWords(created.recoveryPhrase.phrase.trim().split(/\s+/u))
     } catch (cause) {
       setError(errorMessage(cause))
     } finally {

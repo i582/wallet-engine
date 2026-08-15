@@ -27,3 +27,14 @@ The application must package the generated Swift and C modules and link the
 matching `libwallet_engine.a` for its target. The generated `WalletHttpHost`
 and `WalletPlatformHost` protocols use Swift `async` methods. The generator
 adds the annotations required by Swift 6 strict concurrency.
+
+## Clear client secret copies
+
+Rust clears the secret buffers that it owns. Swift `String` values are
+immutable, so the application cannot reliably clear `RecoveryPhrase.phrase`.
+
+Keep the phrase only while the recovery screen is visible. Do not write it to
+logs, errors, analytics, state restoration, or application storage.
+
+Use `Data` for mutable secret copies in the platform host. Reset every byte in
+a `defer` block after the callback finishes.

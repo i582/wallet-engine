@@ -18,7 +18,6 @@
 #endif
 
 #define INPUT_CAPACITY 256
-#define RECOVERY_WORD_COUNT 24
 #define WALLET_METADATA_FILE "wallet_engine_wallets.tsv"
 #define WALLET_SECRETS_FILE "wallet_engine_secrets.tsv"
 
@@ -161,17 +160,12 @@ static bool print_created_wallet(const WalletEngineCreatedWalletView *wallet) {
     valid = print_view(wallet->descriptor.secret_ref.value) && valid;
     fputc('\n', stdout);
 
-    const WalletEngineStringViewSlice words = wallet->recovery_phrase.words;
-    if (words.data == NULL || words.len != RECOVERY_WORD_COUNT) {
+    const WalletEngineStringView phrase = wallet->recovery_phrase.phrase;
+    if (phrase.data == NULL || phrase.len == 0) {
         return false;
     }
     puts("Recovery phrase (display once and keep private):");
-    for (size_t index = 0; index < words.len; ++index) {
-        if (index != 0) {
-            fputc(' ', stdout);
-        }
-        valid = print_view(words.data[index]) && valid;
-    }
+    valid = print_view(phrase) && valid;
     fputc('\n', stdout);
     return valid;
 }

@@ -44,7 +44,7 @@ class WalletRepository(private val store: SecureWalletStore) {
         )
         return try {
             val wallet = store.saveWallet(created.descriptor, name)
-            wallet to created.recoveryPhrase.words.joinToString(" ")
+            wallet to created.recoveryPhrase.phrase
         } catch (error: Throwable) {
             runCatching { lifecycle.deleteWallet(created.descriptor) }
             throw error

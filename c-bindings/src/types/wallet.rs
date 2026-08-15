@@ -101,8 +101,8 @@ impl From<&WalletDescriptor> for WalletEngineWalletDescriptorView {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct WalletEngineRecoveryPhraseView {
-    /// Recovery words in order. A successful creation contains exactly 24.
-    pub words: WalletEngineStringViewSlice,
+    /// Recovery words in order, separated by one ASCII space.
+    pub phrase: WalletEngineStringView,
 }
 
 /// A borrowed result of creating a wallet.
@@ -123,16 +123,10 @@ pub fn with_created_wallet_view<R>(
     value: &CreatedWallet,
     callback: impl FnOnce(WalletEngineCreatedWalletView) -> R,
 ) -> R {
-    let word_views = value
-        .recovery_phrase
-        .words
-        .iter()
-        .map(|word| WalletEngineStringView::from(word.as_str()))
-        .collect::<Vec<_>>();
     let view = WalletEngineCreatedWalletView {
         descriptor: WalletEngineWalletDescriptorView::from(&value.descriptor),
         recovery_phrase: WalletEngineRecoveryPhraseView {
-            words: WalletEngineStringViewSlice::from(word_views.as_slice()),
+            phrase: WalletEngineStringView::from(value.recovery_phrase.phrase.as_str()),
         },
     };
     callback(view)

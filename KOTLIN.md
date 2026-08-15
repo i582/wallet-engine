@@ -34,3 +34,14 @@ implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
 The generated `WalletHttpHost` and `WalletPlatformHost` callbacks and the
 exported engine methods use Kotlin `suspend` functions. No handwritten JNI
 adapter is required.
+
+## Clear client secret copies
+
+Rust clears the secret buffers that it owns. Kotlin `String` values are
+immutable, so the application cannot reliably clear `RecoveryPhrase.phrase`.
+
+Keep the phrase only while the recovery screen is visible. Do not write it to
+logs, errors, analytics, saved state, or application storage.
+
+Use `ByteArray` for mutable secret copies in the platform host. Call `fill(0)`
+in a `finally` block after the callback finishes.

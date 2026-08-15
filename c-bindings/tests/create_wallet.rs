@@ -41,7 +41,7 @@ struct CreatedWallet {
     address: String,
     network: WalletEngineNetwork,
     secret_ref: String,
-    words: Vec<String>,
+    phrase: String,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -191,28 +191,15 @@ unsafe fn copy_wallet(wallet: *const WalletEngineCreatedWalletView) -> Option<Cr
     let address = unsafe { wallet.descriptor.address.try_to_string().ok()? };
     // SAFETY: All nested strings remain live for the callback.
     let secret_ref = unsafe { wallet.descriptor.secret_ref.value.try_to_string().ok()? };
-    let word_views = wallet.recovery_phrase.words;
-    if word_views.len > isize::MAX as usize || (word_views.data.is_null() && word_views.len != 0) {
-        return None;
-    }
-    // SAFETY: The callback contract keeps the complete word-view slice live.
-    let word_views = unsafe { std::slice::from_raw_parts(word_views.data, word_views.len) };
-    let words = word_views
-        .iter()
-        .copied()
-        .map(|word| {
-            // SAFETY: Each nested string remains live for the callback.
-            unsafe { word.try_to_string() }
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .ok()?;
+    // SAFETY: The callback contract keeps the phrase view live.
+    let phrase = unsafe { wallet.recovery_phrase.phrase.try_to_string().ok()? };
 
     Some(CreatedWallet {
         record_id,
         address,
         network: wallet.descriptor.network,
         secret_ref,
-        words,
+        phrase,
     })
 }
 
@@ -474,8 +461,7 @@ fn run_success_case(store: WalletEngineStoreProtectedSecretFn, network: WalletEn
     assert!(!wallet.address.is_empty());
     assert_eq!(wallet.network, network);
     assert_eq!(wallet.secret_ref, "wallet:wallet-1:mnemonic");
-    assert_eq!(wallet.words.len(), 24);
-    assert!(wallet.words.iter().all(|word| !word.is_empty()));
+    assert_eq!(wallet.phrase.split_ascii_whitespace().count(), 24);
 
     assert_eq!(context.stores.load(Ordering::Relaxed), 1);
     let stored_guard = lock(&context.stored_secret);

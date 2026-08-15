@@ -200,7 +200,7 @@ export interface ImportWalletRequest extends CreateWalletRequest {
 }
 
 export interface RecoveryPhrase {
-  readonly words: string[]
+  readonly phrase: string
 }
 
 export interface CreatedWallet {

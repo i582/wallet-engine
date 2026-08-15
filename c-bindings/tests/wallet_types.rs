@@ -92,7 +92,10 @@ fn created_wallet_view_borrows_descriptor_and_words_for_the_callback() {
             },
         },
         recovery_phrase: RecoveryPhrase {
-            words: (1..=24).map(|index| format!("word{index}")).collect(),
+            phrase: (1..=24)
+                .map(|index| format!("word{index}"))
+                .collect::<Vec<_>>()
+                .join(" "),
         },
     };
 
@@ -108,16 +111,9 @@ fn created_wallet_view_borrows_descriptor_and_words_for_the_callback() {
         assert_eq!(view.descriptor.network, WALLET_ENGINE_NETWORK_TESTNET);
         assert_eq!(secret_ref.as_deref(), Ok("wallet:wallet-1:mnemonic"));
 
-        let words = view.recovery_phrase.words;
-        assert_eq!(words.len, 24);
-        // SAFETY: `with_created_wallet_view` keeps its word-view array alive
-        // until this callback returns.
-        let words = unsafe { std::slice::from_raw_parts(words.data, words.len) };
-        for (index, word) in words.iter().copied().enumerate() {
-            // SAFETY: Every word view borrows a live word in `wallet`.
-            let word = unsafe { word.try_to_string() };
-            assert_eq!(word, Ok(format!("word{}", index + 1)));
-        }
+        // SAFETY: The phrase view borrows the live `wallet` value.
+        let phrase = unsafe { view.recovery_phrase.phrase.try_to_string() };
+        assert_eq!(phrase, Ok(wallet.recovery_phrase.phrase.clone()));
     });
 }
 

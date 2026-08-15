@@ -27,7 +27,7 @@ class WalletEngineInstrumentedTest {
             ),
         )
 
-        assertEquals(24, created.recoveryPhrase.words.size)
+        assertEquals(24, created.recoveryPhrase.phrase.split(" ").size)
         assertTrue(created.descriptor.address.startsWith("0Q"))
 
         val wallet = store.saveWallet(created.descriptor, "Instrumented wallet")

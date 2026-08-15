@@ -74,7 +74,7 @@ struct CreateWalletView: View {
         if let pendingDescriptor {
             RecoveryPhraseView(
                 descriptor: pendingDescriptor,
-                words: lifecycle.recoveryPhrase?.words ?? [],
+                words: recoveryWords,
                 hasSavedRecoveryPhrase: $hasSavedRecoveryPhrase,
                 errorMessage: errorMessage
             )
@@ -108,6 +108,12 @@ struct CreateWalletView: View {
         walletName.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private var recoveryWords: [String] {
+        lifecycle.recoveryPhrase?.phrase
+            .split(separator: " ")
+            .map(String.init) ?? []
+    }
+
     private var isBusy: Bool {
         operation != .idle || lifecycle.isWorking
     }
@@ -138,7 +144,7 @@ struct CreateWalletView: View {
             }
 
             pendingDescriptor = descriptor
-            guard lifecycle.recoveryPhrase?.words.count == 24 else {
+            guard recoveryWords.count == 24 else {
                 await removeInvalidWallet(descriptor)
                 return
             }

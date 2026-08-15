@@ -188,7 +188,11 @@ fn render_recovery(frame: &mut Frame<'_>, area: Rect, created: &CreatedWallet) {
         warning,
     );
 
-    let phrase = &created.recovery_phrase.words;
+    let phrase = created
+        .recovery_phrase
+        .phrase
+        .split_ascii_whitespace()
+        .collect::<Vec<_>>();
     let rows = (0..8).map(|row_index| {
         let cells = (0..3).map(|column_index| {
             let index = row_index + column_index * 8;

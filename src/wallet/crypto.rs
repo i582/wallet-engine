@@ -9,7 +9,7 @@ use ton::ton_wallet::{
     Mnemonic, TonWallet, WALLET_V5R1_ID_DEFAULT, WALLET_V5R1_ID_DEFAULT_TESTNET, WORDLIST_EN_SET,
     WalletVersion,
 };
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 use crate::Network;
 
@@ -34,7 +34,7 @@ pub(crate) struct SensitiveMnemonic {
     bytes: Zeroizing<Vec<u8>>,
 }
 
-/// A derived wallet whose Rust-owned private key is wiped on drop.
+/// A derived wallet whose vendored key pair wipes itself on drop.
 pub(crate) struct SensitiveWallet(TonWallet);
 
 impl Deref for SensitiveWallet {
@@ -42,12 +42,6 @@ impl Deref for SensitiveWallet {
 
     fn deref(&self) -> &Self::Target {
         &self.0
-    }
-}
-
-impl Drop for SensitiveWallet {
-    fn drop(&mut self) {
-        self.0.key_pair.secret_key.zeroize();
     }
 }
 
@@ -99,10 +93,6 @@ impl SensitiveMnemonic {
         std::str::from_utf8(&self.bytes).map_err(|_| WalletCryptoError::InvalidMnemonic)
     }
 
-    pub(crate) fn words(&self) -> Result<Vec<String>, WalletCryptoError> {
-        Ok(self.as_str()?.split(' ').map(str::to_owned).collect())
-    }
-
     fn validate(&self) -> Result<(), WalletCryptoError> {
         let phrase = self.as_str()?;
         Mnemonic::from_str(phrase, None)
@@ -138,8 +128,9 @@ pub(crate) fn generate_mnemonic() -> Result<SensitiveMnemonic, WalletCryptoError
 
         debug_assert_eq!(words.len(), MNEMONIC_WORD_COUNT);
 
-        if Mnemonic::new(words.clone(), None).is_ok() {
-            return Ok(SensitiveMnemonic::from_generated_words(&words));
+        let candidate = SensitiveMnemonic::from_generated_words(&words);
+        if Mnemonic::new(words, None).is_ok() {
+            return Ok(candidate);
         }
     }
 }

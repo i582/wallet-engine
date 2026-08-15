@@ -67,8 +67,12 @@ pub struct ImportWalletRequest {
 #[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct RecoveryPhrase {
-    /// The 24 recovery words in order.
-    pub words: Vec<String>,
+    /// The 24 recovery words in order, separated by one ASCII space.
+    ///
+    /// Keeping the phrase in one allocation avoids 24 separately allocated
+    /// secret strings at the FFI boundary. Split it only while presenting
+    /// individual words, then release those temporary views.
+    pub phrase: String,
 }
 
 /// Result of creating a wallet.
@@ -197,7 +201,7 @@ impl WalletLifecycle {
     /// Authorizes secret access and returns a verified recovery phrase.
     ///
     /// Rust derives an address from the returned secret and compares it with
-    /// the descriptor. Release the returned words after the UI closes.
+    /// the descriptor. Release the returned phrase after the UI closes.
     pub async fn reveal_recovery_phrase(
         &self,
         descriptor: WalletDescriptor,
@@ -293,9 +297,10 @@ fn derive_address(
 
 fn recovery_phrase(secret: &SensitiveMnemonic) -> Result<RecoveryPhrase, WalletLifecycleError> {
     Ok(RecoveryPhrase {
-        words: secret
-            .words()
-            .map_err(|_| WalletLifecycleError::InvalidRecoveryPhrase)?,
+        phrase: secret
+            .as_str()
+            .map_err(|_| WalletLifecycleError::InvalidRecoveryPhrase)?
+            .to_owned(),
     })
 }
 

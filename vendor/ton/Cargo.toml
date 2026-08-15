@@ -83,6 +83,7 @@ version = "0.22"
 
 [dependencies.ed25519-dalek]
 version = "2.2.0"
+features = ["zeroize"]
 
 [dependencies.fastnum]
 version = "0.7"
@@ -172,6 +173,10 @@ version = "0.1"
 version = "2026.4.0"
 features = ["with_debug_info"]
 optional = true
+
+[dependencies.zeroize]
+version = "1"
+features = ["derive"]
 
 [dependencies.tower]
 version = "0.5"

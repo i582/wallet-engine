@@ -19,7 +19,7 @@ use ton_core::traits::tlb::TLB;
 use ton_core::types::TonAddress;
 use ton_core::types::tlb_core::*;
 
-#[derive(Debug, PartialEq, Eq, Clone, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct TonWallet {
     pub version: WalletVersion,
     pub key_pair: KeyPair,
@@ -138,30 +138,27 @@ mod tests {
 
     #[test]
     fn test_ton_wallet_create() -> anyhow::Result<()> {
-        let key_pair = make_keypair(MNEMONIC_STR);
-
-        let wallet_v3 = TonWallet::new(WalletVersion::V3R1, key_pair.clone())?;
+        let wallet_v3 = TonWallet::new(WalletVersion::V3R1, make_keypair(MNEMONIC_STR))?;
         let expected_v3 = TonAddress::from_str("EQBiMfDMivebQb052Z6yR3jHrmwNhw1kQ5bcAUOBYsK_VPuK")?;
         assert_eq!(wallet_v3.address, expected_v3);
 
-        let wallet_v3r2 = TonWallet::new(WalletVersion::V3R2, key_pair.clone())?;
+        let wallet_v3r2 = TonWallet::new(WalletVersion::V3R2, make_keypair(MNEMONIC_STR))?;
         let expected_v3r2 =
             TonAddress::from_str("EQA-RswW9QONn88ziVm4UKnwXDEot5km7GEEXsfie_0TFOCO")?;
         assert_eq!(wallet_v3r2.address, expected_v3r2);
 
-        let wallet_v4r2 = TonWallet::new(WalletVersion::V4R2, key_pair.clone())?;
+        let wallet_v4r2 = TonWallet::new(WalletVersion::V4R2, make_keypair(MNEMONIC_STR))?;
         let expected_v4r2 =
             TonAddress::from_str("EQCDM_QGggZ3qMa_f3lRPk4_qLDnLTqdi6OkMAV2NB9r5TG3")?;
         assert_eq!(wallet_v4r2.address, expected_v4r2);
 
-        let key_pair_v5 = make_keypair(MNEMONIC_STR_V5);
-        let wallet_v5 = TonWallet::new(WalletVersion::V5R1, key_pair_v5.clone())?;
+        let wallet_v5 = TonWallet::new(WalletVersion::V5R1, make_keypair(MNEMONIC_STR_V5))?;
         let expected_v5 = TonAddress::from_str("UQDv2YSmlrlLH3hLNOVxC8FcQf4F9eGNs4vb2zKma4txo6i3")?;
         assert_eq!(wallet_v5.address, expected_v5);
 
         let wallet_v5_testnet = TonWallet::new_with_params(
             WalletVersion::V5R1,
-            key_pair_v5.clone(),
+            make_keypair(MNEMONIC_STR_V5),
             0,
             WALLET_V5R1_ID_DEFAULT_TESTNET,
         )?;

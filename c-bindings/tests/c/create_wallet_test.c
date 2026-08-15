@@ -45,6 +45,20 @@ static bool copy_string(
     return true;
 }
 
+static size_t count_phrase_words(WalletEngineStringView phrase) {
+    size_t count = 0;
+    bool in_word = false;
+    for (size_t index = 0; index < phrase.len; ++index) {
+        if (phrase.data[index] == ' ') {
+            in_word = false;
+        } else if (!in_word) {
+            ++count;
+            in_word = true;
+        }
+    }
+    return count;
+}
+
 static void retain_context(void *context) {
     TestContext *test = context;
     atomic_fetch_add_explicit(&test->retains, 1, memory_order_relaxed);
@@ -89,22 +103,16 @@ static void create_wallet_complete(
         return;
     }
 
-    const WalletEngineStringViewSlice words = wallet->recovery_phrase.words;
+    const WalletEngineStringView phrase = wallet->recovery_phrase.phrase;
     if (!copy_string(test->record_id, wallet->descriptor.record_id) ||
         !copy_string(test->address, wallet->descriptor.address) ||
         !copy_string(test->result_secret_ref, wallet->descriptor.secret_ref.value) ||
-        words.data == NULL || words.len != 24) {
+        phrase.data == NULL || phrase.len == 0) {
         test->valid = false;
-    } else {
-        for (size_t index = 0; index < words.len; ++index) {
-            if (words.data[index].data == NULL || words.data[index].len == 0) {
-                test->valid = false;
-            }
-        }
     }
 
     test->network = wallet->descriptor.network;
-    test->recovery_word_count = words.len;
+    test->recovery_word_count = count_phrase_words(phrase);
     atomic_store_explicit(&test->done, true, memory_order_release);
 }
 

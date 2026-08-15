@@ -221,9 +221,15 @@ refresh when its product behavior requires new wallet data.
 - Honor `cancelHttp` for requests that have not completed.
 - Store wallet descriptors separately from protected recovery phrases.
 
-The engine clears its temporary recovery-phrase buffer. The host language and
-the FFI boundary can create additional memory copies. The host must limit the
-lifetime of these copies.
+The engine clears the secret buffers that it owns. The FFI boundary and the
+host language can create additional copies.
+
+The host must limit the lifetime of these copies. The host must clear mutable
+byte buffers after each callback. Immutable client strings cannot be reliably
+cleared, so release them immediately after the recovery screen closes.
+
+See [Swift](SWIFT.md), [Kotlin](KOTLIN.md), and [WebAssembly](WASM.md) for the
+client-specific rules.
 
 ## Build from source
 

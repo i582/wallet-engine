@@ -391,7 +391,7 @@ impl WalletLifecycleRunner {
                 }
             }
             LifecycleExpectation::PhraseHasWords { operation, count } => {
-                let actual = self.phrase(&operation)?.len();
+                let actual = self.phrase(&operation)?.split_ascii_whitespace().count();
                 if actual == count {
                     Ok(())
                 } else {
@@ -400,7 +400,7 @@ impl WalletLifecycleRunner {
             }
             LifecycleExpectation::PhraseIs { operation, words } => {
                 let actual = self.phrase(&operation)?;
-                if actual == words {
+                if actual == words.join(" ") {
                     Ok(())
                 } else {
                     Err(format!(
@@ -484,10 +484,10 @@ impl WalletLifecycleRunner {
         }
     }
 
-    fn phrase(&self, operation: &str) -> Result<&[String], String> {
+    fn phrase(&self, operation: &str) -> Result<&str, String> {
         match self.results.get(operation) {
-            Some(LifecycleResult::Created(Ok(created))) => Ok(&created.recovery_phrase.words),
-            Some(LifecycleResult::Phrase(Ok(phrase))) => Ok(&phrase.words),
+            Some(LifecycleResult::Created(Ok(created))) => Ok(&created.recovery_phrase.phrase),
+            Some(LifecycleResult::Phrase(Ok(phrase))) => Ok(&phrase.phrase),
             Some(_) => Err(format!("operation `{operation}` has no recovery phrase")),
             None => Err(format!("operation `{operation}` does not exist")),
         }
