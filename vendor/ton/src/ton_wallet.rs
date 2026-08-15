@@ -69,7 +69,19 @@ impl TonWallet {
         expire_at: u32,
         add_state_init: bool,
     ) -> Result<TonCell, TonError> {
-        let body = self.create_ext_in_body(expire_at, seqno, int_msgs)?;
+        let modes = vec![SEND_MODE_PAY_FEES_SEPARATELY | SEND_MODE_IGNORE_ERRORS; int_msgs.len()];
+        self.create_ext_in_msg_with_modes(int_msgs, modes, seqno, expire_at, add_state_init)
+    }
+
+    pub fn create_ext_in_msg_with_modes(
+        &self,
+        int_msgs: Vec<TonCell>,
+        int_msg_modes: Vec<u8>,
+        seqno: u32,
+        expire_at: u32,
+        add_state_init: bool,
+    ) -> Result<TonCell, TonError> {
+        let body = self.create_ext_in_body_with_modes(expire_at, seqno, int_msgs, int_msg_modes)?;
         let signed = self.sign_ext_in_body(&body)?;
         let external = self.create_ext_in_msg_from_body(signed, add_state_init)?;
         Ok(external)
@@ -82,6 +94,23 @@ impl TonWallet {
         int_msgs: Vec<TonCell>,
     ) -> Result<TonCell, TonError> {
         WalletVersion::build_ext_in_body(self.version, expire_at, seqno, self.wallet_id, int_msgs)
+    }
+
+    pub fn create_ext_in_body_with_modes(
+        &self,
+        expire_at: u32,
+        seqno: u32,
+        int_msgs: Vec<TonCell>,
+        int_msg_modes: Vec<u8>,
+    ) -> Result<TonCell, TonError> {
+        WalletVersion::build_ext_in_body_with_modes(
+            self.version,
+            expire_at,
+            seqno,
+            self.wallet_id,
+            int_msgs,
+            int_msg_modes,
+        )
     }
 
     pub fn sign_ext_in_body(&self, ext_in_body: &TonCell) -> Result<TonCell, TonError> {

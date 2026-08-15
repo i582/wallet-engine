@@ -7,7 +7,10 @@
 use std::str::FromStr;
 use std::str::Utf8Error;
 
-use ton::block_tlb::{CommonMsgInfo, CommonMsgInfoExtIn, CommonMsgInfoInt, Msg};
+use ton::block_tlb::{
+    CommonMsgInfo, CommonMsgInfoExtIn, CommonMsgInfoInt, Msg, SEND_MODE_CARRY_ALL_BALANCE,
+    SEND_MODE_IGNORE_ERRORS, SEND_MODE_PAY_FEES_SEPARATELY,
+};
 use ton::errors::TonError;
 use ton::ton_core::cell::TonCell;
 use ton::ton_core::errors::TonCoreError;
@@ -17,10 +20,13 @@ use ton::ton_core::types::tlb_core::{MsgAddressExt, TLBCoins, TLBEitherRef};
 use ton::ton_wallet::{WALLET_V5R1_ID_DEFAULT, WALLET_V5R1_ID_DEFAULT_TESTNET, WalletVersion};
 
 use crate::types::{Boc, BocError, parse_positive_decimal};
-use crate::{Base64Hash, Base64HashError, Network, SendRequest};
+use crate::{Base64Hash, Base64HashError, Network, SendAmount, SendRequest};
 
 use super::crypto::{WalletCryptoError, derive_v5r1_public_state, derive_v5r1_wallet};
 use super::send::{FreshSendAccount, PreparedTransfer};
+
+const EXACT_AMOUNT_SEND_MODE: u8 = SEND_MODE_PAY_FEES_SEPARATELY | SEND_MODE_IGNORE_ERRORS;
+const ALL_BALANCE_SEND_MODE: u8 = SEND_MODE_CARRY_ALL_BALANCE | SEND_MODE_IGNORE_ERRORS;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum TransferError {
@@ -66,16 +72,12 @@ pub(crate) fn prepare_transfer(
     let destination =
         TonAddress::from_str(&request.destination).map_err(TransferError::InvalidDestination)?;
 
-    let amount_nanograms =
-        parse_positive_decimal(&request.amount_nanograms).ok_or(TransferError::InvalidAmount)?;
-    let tlb_amount =
-        u128::try_from(amount_nanograms.clone()).map_err(|_| TransferError::AmountOutOfRange)?;
-
-    let internal = build_internal_message(&destination, tlb_amount)?;
+    let (internal, send_mode) = build_internal_message(&destination, &request.amount)?;
 
     let external = wallet
-        .create_ext_in_msg(
+        .create_ext_in_msg_with_modes(
             vec![internal],
+            vec![send_mode],
             account.seqno,
             valid_until,
             account.needs_state_init(),
@@ -97,7 +99,7 @@ pub(crate) fn prepare_transfer(
         record_id: record_id.to_owned(),
         source: source.clone(),
         destination,
-        amount_nanograms,
+        amount: request.amount.clone(),
         seqno: account.seqno,
         needs_state_init: account.needs_state_init(),
         valid_until,
@@ -116,27 +118,24 @@ pub(crate) fn prepare_transfer_emulation(
     public_key: &[u8],
     network: Network,
     destination: &str,
-    amount_nanograms: &str,
+    amount: &SendAmount,
     account: &FreshSendAccount,
     valid_until: u32,
 ) -> Result<Boc, TransferError> {
     let destination =
         TonAddress::from_str(destination).map_err(TransferError::InvalidDestination)?;
-    let amount_nanograms =
-        parse_positive_decimal(amount_nanograms).ok_or(TransferError::InvalidAmount)?;
-    let tlb_amount =
-        u128::try_from(amount_nanograms).map_err(|_| TransferError::AmountOutOfRange)?;
-    let internal = build_internal_message(&destination, tlb_amount)?;
+    let (internal, send_mode) = build_internal_message(&destination, amount)?;
     let wallet_id = match network {
         Network::Mainnet => WALLET_V5R1_ID_DEFAULT,
         Network::Testnet => WALLET_V5R1_ID_DEFAULT_TESTNET,
     };
-    let body = WalletVersion::build_ext_in_body(
+    let body = WalletVersion::build_ext_in_body_with_modes(
         WalletVersion::V5R1,
         valid_until,
         account.seqno,
         wallet_id,
         vec![internal],
+        vec![send_mode],
     )
     .map_err(TransferError::ExternalMessage)?;
 
@@ -173,8 +172,16 @@ pub(crate) fn prepare_transfer_emulation(
 
 fn build_internal_message(
     destination: &TonAddress,
-    amount_nanograms: u128,
-) -> Result<TonCell, TransferError> {
+    amount: &SendAmount,
+) -> Result<(TonCell, u8), TransferError> {
+    let (amount_nanograms, send_mode) = match amount {
+        SendAmount::Exact { nanograms } => {
+            let amount = parse_positive_decimal(nanograms).ok_or(TransferError::InvalidAmount)?;
+            let amount = u128::try_from(amount).map_err(|_| TransferError::AmountOutOfRange)?;
+            (amount, EXACT_AMOUNT_SEND_MODE)
+        }
+        SendAmount::All => (0, ALL_BALANCE_SEND_MODE),
+    };
     let mut info = CommonMsgInfoInt::new(
         destination.to_msg_address(),
         TLBCoins::new(amount_nanograms),
@@ -184,9 +191,11 @@ fn build_internal_message(
     // the address type. This also lets uninitialized recipients accept funds.
     info.bounce = false;
 
-    Msg::new(info, TonCell::empty().to_owned())
+    let message = Msg::new(info, TonCell::empty().to_owned())
         .to_cell()
-        .map_err(TransferError::InternalMessage)
+        .map_err(TransferError::InternalMessage)?;
+
+    Ok((message, send_mode))
 }
 
 pub(crate) fn derive_source(
@@ -209,7 +218,8 @@ mod tests {
     #[test]
     fn serialized_internal_message_is_non_bounceable() {
         let destination = TonAddress::from_str(DESTINATION).expect("valid destination");
-        let cell = build_internal_message(&destination, 1).expect("internal message");
+        let (cell, mode) = build_internal_message(&destination, &SendAmount::exact("1"))
+            .expect("internal message");
         let message = Msg::<TonCell>::from_cell(&cell).expect("decode internal message");
 
         let CommonMsgInfo::Int(info) = message.info else {
@@ -220,5 +230,21 @@ mod tests {
         assert!(!info.bounced, "a new transfer cannot already be bounced");
         assert_eq!(info.dst, destination.to_msg_address());
         assert_eq!(info.value.coins, TLBCoins::new(1));
+        assert_eq!(mode, EXACT_AMOUNT_SEND_MODE);
+    }
+
+    #[test]
+    fn all_balance_transfer_uses_mode_130_and_zero_placeholder_value() {
+        let destination = TonAddress::from_str(DESTINATION).expect("valid destination");
+        let (cell, mode) =
+            build_internal_message(&destination, &SendAmount::All).expect("internal message");
+        let message = Msg::<TonCell>::from_cell(&cell).expect("decode internal message");
+
+        let CommonMsgInfo::Int(info) = message.info else {
+            panic!("transfer must contain an internal message");
+        };
+
+        assert_eq!(mode, ALL_BALANCE_SEND_MODE);
+        assert_eq!(info.value.coins, TLBCoins::ZERO);
     }
 }

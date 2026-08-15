@@ -13,7 +13,7 @@ use crate::domain::bounded_diagnostic;
 use crate::types::parse_positive_decimal;
 use crate::wallet::send::{FreshSendAccount, SendDirective, SendWorkflow};
 use crate::wallet::transfer::{derive_source, prepare_transfer};
-use crate::{AccountStatus, SendPhase, SendRequest, SendResult, WalletClientError};
+use crate::{AccountStatus, SendAmount, SendPhase, SendRequest, SendResult, WalletClientError};
 
 use super::provider::parse_account;
 
@@ -125,15 +125,17 @@ impl WalletClient {
         // Fees are intentionally not estimated here, so equality can still fail on-chain.
         let available = parse_positive_decimal(&account.balance_nanograms)
             .ok_or_else(|| self.send_failed_error(generation, "invalid fresh account balance"))?;
-        let requested = parse_positive_decimal(&request.amount_nanograms)
-            .ok_or_else(|| self.send_failed_error(generation, "invalid send amount"))?;
-        if requested > available {
-            let error = WalletClientError::InsufficientBalance {
-                available_nanograms: available.to_string(),
-                requested_nanograms: requested.to_string(),
-            };
-            self.fail_send(generation, error.to_string())?;
-            return Err(error);
+        if let SendAmount::Exact { nanograms } = &request.amount {
+            let requested = parse_positive_decimal(nanograms)
+                .ok_or_else(|| self.send_failed_error(generation, "invalid send amount"))?;
+            if requested > available {
+                let error = WalletClientError::InsufficientBalance {
+                    available_nanograms: available.to_string(),
+                    requested_nanograms: requested.to_string(),
+                };
+                self.fail_send(generation, error.to_string())?;
+                return Err(error);
+            }
         }
 
         // Active wallets require a fresh seqno for replay protection. A wallet that is not yet

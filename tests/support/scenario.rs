@@ -7,11 +7,14 @@ use std::time::{Duration, Instant};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use futures::executor::block_on;
+use ton::block_tlb::{
+    SEND_MODE_CARRY_ALL_BALANCE, SEND_MODE_IGNORE_ERRORS, SEND_MODE_PAY_FEES_SEPARATELY,
+};
 use ton::ton_core::cell::TonCell;
 use ton::ton_core::traits::tlb::TLB;
 use wallet_engine::{
     AccountStatus, ActivityCursor, DomainError, Network, ProtectedSecretRef, ProviderConfig,
-    ResourcePhase, SendPhase, SendPreview, SendPreviewRequest, SendRequest, SendResult,
+    ResourcePhase, SendAmount, SendPhase, SendPreview, SendPreviewRequest, SendRequest, SendResult,
     WalletClient, WalletClientConfig, WalletClientError, WalletHttpHost, WalletOperationOutcome,
     WalletUpdate,
 };
@@ -24,6 +27,9 @@ use super::test_wallet;
 // take longer than a single isolated test without indicating a deadlock.
 const DEFAULT_STEP_TIMEOUT: Duration = Duration::from_secs(60);
 const NANOGRAMS_PER_GRAM: u64 = 1_000_000_000;
+pub(crate) const EXACT_AMOUNT_SEND_MODE: u8 =
+    SEND_MODE_PAY_FEES_SEPARATELY | SEND_MODE_IGNORE_ERRORS;
+pub(crate) const ALL_BALANCE_SEND_MODE: u8 = SEND_MODE_CARRY_ALL_BALANCE | SEND_MODE_IGNORE_ERRORS;
 const TEST_RECORD_ID: &str = "scenario-wallet";
 const TEST_SECRET_REF: &str = "wallet:scenario-wallet:mnemonic";
 
@@ -100,7 +106,7 @@ pub(crate) const fn network() -> NetworkFixtureBuilder {
 pub(crate) fn send() -> SendAction {
     SendAction {
         destination: Destination::SelfWallet,
-        amount_nanograms: NANOGRAMS_PER_GRAM.to_string(),
+        amount: SendAmount::exact(NANOGRAMS_PER_GRAM.to_string()),
     }
 }
 
@@ -208,6 +214,10 @@ pub(crate) const fn replay_last_submission() -> UserAction {
 
 pub(crate) const fn own_address() -> Destination {
     Destination::SelfWallet
+}
+
+pub(crate) fn address(value: impl Into<String>) -> Destination {
+    Destination::Address(value.into())
 }
 
 pub(crate) fn invalid_address() -> Destination {
@@ -658,7 +668,7 @@ impl SubmissionFixture {
 
 pub(crate) struct SendAction {
     destination: Destination,
-    amount_nanograms: String,
+    amount: SendAmount,
 }
 
 pub(crate) enum Destination {
@@ -675,13 +685,19 @@ impl SendAction {
 
     #[must_use]
     pub(crate) fn grams(mut self, value: u64) -> Self {
-        self.amount_nanograms = grams(value).nanograms;
+        self.amount = SendAmount::exact(grams(value).nanograms);
         self
     }
 
     #[must_use]
     pub(crate) fn nanograms(mut self, value: u64) -> Self {
-        self.amount_nanograms = value.to_string();
+        self.amount = SendAmount::exact(value.to_string());
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn all(mut self) -> Self {
+        self.amount = SendAmount::All;
         self
     }
 }
@@ -894,6 +910,7 @@ pub(crate) enum Expectation {
     JournalIsEmpty,
     NoSubmittedMessage,
     SubmittedMessageContainsStateInit,
+    SubmittedMessageUsesMode(u8),
     SubmittedMessagePresent,
     OnChainWallet(OnChainWalletExpectation),
 }
@@ -903,6 +920,10 @@ pub(crate) struct SubmittedMessageExpectation;
 impl SubmittedMessageExpectation {
     pub(crate) const fn contains_state_init(self) -> Expectation {
         Expectation::SubmittedMessageContainsStateInit
+    }
+
+    pub(crate) const fn uses_send_mode(self, mode: u8) -> Expectation {
+        Expectation::SubmittedMessageUsesMode(mode)
     }
 }
 
@@ -1422,7 +1443,7 @@ impl ScenarioRunner {
                         };
                         let request = SendPreviewRequest {
                             destination,
-                            amount_nanograms: action.amount_nanograms,
+                            amount: action.amount,
                         };
                         std::thread::spawn(move || {
                             let result = block_on(client.preview_send(request));
@@ -1437,7 +1458,7 @@ impl ScenarioRunner {
                         let request = SendRequest {
                             operation_id: format!("{name}-operation"),
                             destination,
-                            amount_nanograms: action.amount_nanograms,
+                            amount: action.amount,
                             secret_ref: self.secret_ref.clone(),
                         };
                         std::thread::spawn(move || {
@@ -2012,6 +2033,19 @@ impl ScenarioRunner {
                 .map_err(|message| {
                     format!("expected submitted external message to contain StateInit\n{message}")
                 }),
+            Expectation::SubmittedMessageUsesMode(expected) => {
+                let actual = self
+                    .submitted_message()
+                    .ok_or_else(|| "expected an external message submission".to_owned())?
+                    .send_modes;
+                if actual == [expected] {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "expected submitted external message mode [{expected}], actual: {actual:?}"
+                    ))
+                }
+            }
             Expectation::SubmittedMessagePresent => {
                 if self.submitted_message().is_some() {
                     Ok(())

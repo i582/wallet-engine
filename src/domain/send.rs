@@ -3,6 +3,32 @@
 use super::ProtectedSecretRef;
 use crate::Base64Hash;
 
+/// The transfer value policy applied by the wallet contract.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Enum)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SendAmount {
+    /// Send one exact positive value and pay network fees separately.
+    Exact {
+        /// The exact value in canonical base-10 nanograms.
+        nanograms: String,
+    },
+    /// Send the complete remaining wallet balance after network fees.
+    All,
+}
+
+impl SendAmount {
+    /// Creates an exact-value transfer intent.
+    ///
+    /// Public request validation still rejects zero, noncanonical, and
+    /// nonnumeric values at the wallet-client boundary.
+    #[must_use]
+    pub fn exact(nanograms: impl Into<String>) -> Self {
+        Self::Exact {
+            nanograms: nanograms.into(),
+        }
+    }
+}
+
 /// Requests one signed V5R1 transfer.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
@@ -11,8 +37,8 @@ pub struct SendRequest {
     pub operation_id: String,
     /// A friendly or raw TON destination address.
     pub destination: String,
-    /// A positive canonical unsigned amount in nanograms.
-    pub amount_nanograms: String,
+    /// The exact-value or whole-balance transfer policy.
+    pub amount: SendAmount,
     /// The protected mnemonic reference for the source wallet.
     pub secret_ref: ProtectedSecretRef,
 }
@@ -26,8 +52,8 @@ pub struct SendRequest {
 pub struct SendPreviewRequest {
     /// A friendly or raw TON destination address.
     pub destination: String,
-    /// A positive canonical unsigned amount in nanograms.
-    pub amount_nanograms: String,
+    /// The exact-value or whole-balance transfer policy.
+    pub amount: SendAmount,
 }
 
 /// An informational transfer preview produced without unlocking the wallet secret.
@@ -36,8 +62,8 @@ pub struct SendPreviewRequest {
 pub struct SendPreview {
     /// The destination that was emulated.
     pub destination: String,
-    /// The exact emulated transfer value in nanograms.
-    pub amount_nanograms: String,
+    /// The transfer value policy used by the emulated message.
+    pub amount: SendAmount,
     /// The V5R1 message expiration timestamp used only by this emulation.
     /// A real send calculates a new timestamp from fresh provider state.
     pub valid_until: u32,

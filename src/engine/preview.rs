@@ -1,12 +1,12 @@
 //! Pre-authorization transfer previews built from fresh provider state.
 
 use crate::domain::bounded_diagnostic;
-use crate::types::parse_positive_decimal;
+use crate::types::{parse_canonical_decimal, parse_positive_decimal};
 use crate::wallet::send::FreshSendAccount;
 use crate::wallet::transfer::prepare_transfer_emulation;
 use crate::{
-    AccountStatus, HttpHostError, HttpRequest, HttpRequestId, HttpResponse, SendPreview,
-    SendPreviewRequest, WalletClientError,
+    AccountStatus, HttpHostError, HttpRequest, HttpRequestId, HttpResponse, SendAmount,
+    SendPreview, SendPreviewRequest, WalletClientError,
 };
 
 use super::WalletClient;
@@ -98,16 +98,19 @@ impl WalletClient {
                 },
             )
         })?;
-        let requested = parse_positive_decimal(&request.amount_nanograms)
-            .ok_or_else(|| self.preview_error(generation, WalletClientError::InvalidSendRequest))?;
-        if requested > available {
-            return Err(self.preview_error(
-                generation,
-                WalletClientError::InsufficientBalance {
-                    available_nanograms: available.to_string(),
-                    requested_nanograms: requested.to_string(),
-                },
-            ));
+        if let SendAmount::Exact { nanograms } = &request.amount {
+            let requested = parse_positive_decimal(nanograms).ok_or_else(|| {
+                self.preview_error(generation, WalletClientError::InvalidSendRequest)
+            })?;
+            if requested > available {
+                return Err(self.preview_error(
+                    generation,
+                    WalletClientError::InsufficientBalance {
+                        available_nanograms: available.to_string(),
+                        requested_nanograms: requested.to_string(),
+                    },
+                ));
+            }
         }
 
         let seqno = match account.status {
@@ -166,7 +169,7 @@ impl WalletClient {
             &config.public_key,
             config.network,
             &request.destination,
-            &request.amount_nanograms,
+            &request.amount,
             &fresh,
             valid_until,
         )
@@ -218,9 +221,37 @@ impl WalletClient {
             ));
         }
 
+        if let SendAmount::Exact { nanograms } = &request.amount {
+            let requested = parse_positive_decimal(nanograms).ok_or_else(|| {
+                self.preview_error(generation, WalletClientError::InvalidSendRequest)
+            })?;
+            let estimated_fee = parse_canonical_decimal(&evaluated.summary.wallet_fees_nanograms)
+                .ok_or_else(|| {
+                self.preview_error(
+                    generation,
+                    WalletClientError::EmulationFailed {
+                        diagnostic: "emulation returned an invalid wallet fee".to_owned(),
+                    },
+                )
+            })?;
+            // Exact sends must leave a positive remainder after the emulated
+            // wallet fee. Use `SendAmount::All` when the intent is to drain
+            // the wallet with carry-all-balance mode instead.
+            if &requested + &estimated_fee >= available {
+                return Err(self.preview_error(
+                    generation,
+                    WalletClientError::InsufficientBalanceForFees {
+                        available_nanograms: available.to_string(),
+                        requested_nanograms: requested.to_string(),
+                        estimated_fee_nanograms: estimated_fee.to_string(),
+                    },
+                ));
+            }
+        }
+
         let preview = SendPreview {
             destination: request.destination,
-            amount_nanograms: request.amount_nanograms,
+            amount: request.amount,
             valid_until,
             message_boc_base64,
             emulation: evaluated.summary,

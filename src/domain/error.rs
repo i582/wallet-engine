@@ -208,6 +208,18 @@ pub enum WalletClientError {
         /// The requested transfer value as a canonical decimal string.
         requested_nanograms: String,
     },
+    /// The requested exact value fits, but the value and emulated wallet fee do not.
+    #[error(
+        "insufficient wallet balance including fees: requested {requested_nanograms} nanograms, estimated fee {estimated_fee_nanograms} nanograms, available {available_nanograms} nanograms"
+    )]
+    InsufficientBalanceForFees {
+        /// The fresh provider balance as a canonical decimal string.
+        available_nanograms: String,
+        /// The exact requested value as a canonical decimal string.
+        requested_nanograms: String,
+        /// The wallet transaction fee returned by emulation.
+        estimated_fee_nanograms: String,
+    },
     /// The protected secret cannot be decoded as a valid wallet recovery phrase.
     #[error("the protected wallet secret is invalid")]
     InvalidProtectedSecret,

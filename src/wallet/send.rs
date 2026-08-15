@@ -9,15 +9,15 @@ use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use ton::ton_core::types::TonAddress;
 
-use crate::Base64Hash;
 use crate::domain::{
     AccountStatus, JournalCompareExchange, JournalCompareExchangeResult, JournalKey, JournalRecord,
     ProtectedSecretRead, SecretAccessReason, SendPhase, SendRequest, SendSnapshot,
     bounded_diagnostic,
 };
 use crate::types::{Boc, parse_positive_decimal};
+use crate::{Base64Hash, SendAmount};
 
-const JOURNAL_SCHEMA_VERSION: u32 = 1;
+const JOURNAL_SCHEMA_VERSION: u32 = 2;
 const FIRST_JOURNAL_VERSION: u64 = 1;
 pub(crate) const SEND_SLOT: &str = "outgoing-transfer";
 
@@ -65,9 +65,8 @@ pub(crate) struct PreparedTransfer {
     /// The validated destination TON address from the request.
     pub destination: TonAddress,
 
-    /// The exact transfer value in nanograms.
-    /// Arbitrary precision prevents truncation before public or journal serialization.
-    pub amount_nanograms: BigUint,
+    /// The exact-value or whole-balance policy encoded into the wallet action.
+    pub amount: SendAmount,
 
     /// The fresh wallet sequence number signed into the external message.
     pub seqno: u32,
@@ -211,8 +210,8 @@ struct DurableSendRecord {
     /// Serde stores it as raw `workchain:hex` and accepts friendly values.
     #[serde(with = "crate::types::raw_address_serde")]
     destination: TonAddress,
-    /// The exact transfer value as a canonical base-10 nanogram string.
-    amount_nanograms: String,
+    /// The exact-value or whole-balance policy stored with the signed message.
+    amount: SendAmount,
     /// The wallet sequence number signed into the external message.
     seqno: u32,
     /// Reports whether the signed message contains the wallet `StateInit`.
@@ -533,7 +532,7 @@ impl SendWorkflow {
             record_id: prepared.record_id.clone(),
             source: prepared.source.clone(),
             destination: prepared.destination.clone(),
-            amount_nanograms: prepared.amount_nanograms.to_string(),
+            amount: prepared.amount.clone(),
             seqno: prepared.seqno,
             needs_state_init: prepared.needs_state_init,
             valid_until: prepared.valid_until,
@@ -576,14 +575,11 @@ impl SendWorkflow {
             .ok_or(SendWorkflowError::PreparedTransferMismatch)?;
         let request_destination = TonAddress::from_str(&self.request.destination)
             .map_err(|_| SendWorkflowError::PreparedTransferMismatch)?;
-        let request_amount = parse_amount_nanograms(&self.request.amount_nanograms)
-            .map_err(|_| SendWorkflowError::PreparedTransferMismatch)?;
-
         if prepared.operation_id != self.request.operation_id
             || prepared.record_id != self.record_id
             || prepared.source != self.source
             || prepared.destination != request_destination
-            || prepared.amount_nanograms != request_amount
+            || prepared.amount != self.request.amount
             || prepared.seqno != account.seqno
             || prepared.needs_state_init != account.needs_state_init()
         {
@@ -633,7 +629,7 @@ fn validate_request(record_id: &str, request: &SendRequest) -> Result<(), SendWo
         ));
     }
 
-    parse_amount_nanograms(&request.amount_nanograms)?;
+    validate_amount(&request.amount)?;
 
     if request.secret_ref.value.trim().is_empty() {
         return Err(SendWorkflowError::InvalidRequest(
@@ -662,7 +658,7 @@ fn decode_durable_record(record: &JournalRecord) -> Result<DurableSendRecord, Se
 
     if durable.operation_id.trim().is_empty()
         || durable.record_id.trim().is_empty()
-        || parse_positive_decimal(&durable.amount_nanograms).is_none()
+        || validate_amount(&durable.amount).is_err()
     {
         return Err(SendWorkflowError::InvalidJournal(
             "record fields are invalid".to_owned(),
@@ -676,6 +672,13 @@ fn parse_amount_nanograms(value: &str) -> Result<BigUint, SendWorkflowError> {
     parse_positive_decimal(value).ok_or_else(|| {
         SendWorkflowError::InvalidRequest("amount must be positive canonical nanograms".to_owned())
     })
+}
+
+fn validate_amount(amount: &SendAmount) -> Result<(), SendWorkflowError> {
+    match amount {
+        SendAmount::Exact { nanograms } => parse_amount_nanograms(nanograms).map(drop),
+        SendAmount::All => Ok(()),
+    }
 }
 
 fn next_journal_version(current: Option<u64>) -> Result<u64, SendWorkflowError> {
@@ -729,7 +732,7 @@ mod tests {
             (
                 "record",
                 SendRequest {
-                    amount_nanograms: "01".to_owned(),
+                    amount: SendAmount::exact("01"),
                     ..request()
                 },
                 "amount must be positive canonical nanograms",
@@ -769,7 +772,9 @@ mod tests {
             },
             JournalRecord {
                 version: 1,
-                payload: durable_payload_with(|record| record.schema_version = 2),
+                payload: durable_payload_with(|record| {
+                    record.schema_version = JOURNAL_SCHEMA_VERSION + 1;
+                }),
             },
             JournalRecord {
                 version: 1,
@@ -908,7 +913,9 @@ mod tests {
             Box::new(|prepared| prepared.record_id = "other-record".to_owned()),
             Box::new(|prepared| prepared.source = other_address()),
             Box::new(|prepared| prepared.destination = other_address()),
-            Box::new(|prepared| prepared.amount_nanograms = BigUint::from(2_u8)),
+            Box::new(|prepared| {
+                prepared.amount = SendAmount::exact("2");
+            }),
             Box::new(|prepared| prepared.seqno = 8),
             Box::new(|prepared| prepared.needs_state_init = true),
         ];
@@ -945,7 +952,7 @@ mod tests {
         SendRequest {
             operation_id: "operation".to_owned(),
             destination: RAW_DESTINATION.to_owned(),
-            amount_nanograms: "1".to_owned(),
+            amount: SendAmount::exact("1"),
             secret_ref: ProtectedSecretRef {
                 value: "secret".to_owned(),
             },
@@ -978,7 +985,7 @@ mod tests {
             record_id: "record".to_owned(),
             source: source(),
             destination: destination(),
-            amount_nanograms: BigUint::from(1_u8),
+            amount: SendAmount::exact("1"),
             seqno: 7,
             needs_state_init: false,
             valid_until: 1_800_000_300,
@@ -1034,7 +1041,7 @@ mod tests {
             record_id: prepared.record_id,
             source: prepared.source,
             destination: prepared.destination,
-            amount_nanograms: prepared.amount_nanograms.to_string(),
+            amount: prepared.amount,
             seqno: prepared.seqno,
             needs_state_init: prepared.needs_state_init,
             valid_until: prepared.valid_until,

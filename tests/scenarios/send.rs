@@ -1,6 +1,9 @@
 use super::support::*;
 use wallet_engine::{AccountStatus, SendPhase, WalletClientError};
 
+const EMPTY_DESTINATION: &str =
+    "0:2222222222222222222222222222222222222222222222222222222222222222";
+
 #[test]
 fn second_send_is_rejected_while_first_is_in_progress() {
     scenario("second send while first is in progress")
@@ -125,6 +128,95 @@ fn rejected_emulation_exposes_tvm_phase_codes_without_unlocking_secret() {
         .then(protected_secret_was_not_read())
         .then(journal_is_empty())
         .then(no_message_was_submitted())
+        .run();
+}
+
+#[test]
+fn exact_preview_rejects_a_value_that_leaves_no_balance_for_fees() {
+    scenario("an exact transfer must leave enough balance for its emulated wallet fee")
+        .given(wallet().active().balance(grams(1)).seqno(7))
+        // The amount itself fits exactly, but the scripted emulation reports a
+        // 1_000_000 nanogram source-wallet fee.
+        .when(call(
+            "preview",
+            preview_send(send().to(own_address()).grams(1)),
+        ))
+        .then(error(
+            "preview",
+            WalletClientError::InsufficientBalanceForFees {
+                available_nanograms: "1000000000".to_owned(),
+                requested_nanograms: "1000000000".to_owned(),
+                estimated_fee_nanograms: "1000000".to_owned(),
+            },
+        ))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .run();
+}
+
+#[test]
+fn exact_preview_requires_a_positive_remainder_after_the_estimated_fee() {
+    scenario("an exact transfer cannot consume the balance exactly after fees")
+        .given(wallet().active().balance(grams(1)).seqno(7))
+        // The scripted wallet fee is 1_000_000 nanograms. Together with the
+        // requested 999_000_000 nanograms it consumes the complete balance.
+        // Send-all mode is the explicit policy for that intent.
+        .when(call(
+            "preview",
+            preview_send(send().to(own_address()).nanograms(999_000_000)),
+        ))
+        .then(error(
+            "preview",
+            WalletClientError::InsufficientBalanceForFees {
+                available_nanograms: "1000000000".to_owned(),
+                requested_nanograms: "999000000".to_owned(),
+                estimated_fee_nanograms: "1000000".to_owned(),
+            },
+        ))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .run();
+}
+
+#[test]
+fn exact_transfer_keeps_mode_3() {
+    scenario("an exact transfer preserves its value and pays fees separately")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .when(call("send", send().to(own_address()).grams(1)))
+        .then(result("send").submitted())
+        .then(submitted_message().uses_send_mode(EXACT_AMOUNT_SEND_MODE))
+        .run();
+}
+
+#[test]
+fn all_balance_transfer_uses_mode_130() {
+    scenario("send all delegates the remaining-balance calculation to Wallet V5")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .when(call("send", send().to(own_address()).all()))
+        .then(result("send").submitted())
+        .then(submitted_message().uses_send_mode(ALL_BALANCE_SEND_MODE))
+        .run();
+}
+
+#[test]
+fn all_balance_transfer_executes_on_localnet() {
+    scenario("send all deploys the wallet and transfers its remaining balance")
+        .given(network().localnet())
+        .given(wallet().uninitialized().balance(grams(10)))
+        .when(call(
+            "preview",
+            preview_send(send().to(address(EMPTY_DESTINATION)).all()),
+        ))
+        // Localnet can omit the high-level action list for a carry-all message.
+        // A decoded successful trace is still required before confirmation.
+        .then(result("preview").previewed())
+        .when(call("send", send().to(address(EMPTY_DESTINATION)).all()))
+        .then(result("send").submitted())
+        .then(submitted_message().contains_state_init())
+        .then(submitted_message().uses_send_mode(ALL_BALANCE_SEND_MODE))
+        .then(on_chain_wallet().active().seqno(1))
         .run();
 }
 

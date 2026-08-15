@@ -21,7 +21,9 @@ use ton::ton_core::cell::TonCell;
 use ton::ton_core::traits::tlb::TLB;
 use ton::ton_core::types::TonAddress;
 use ton::ton_core::types::tlb_core::TLBCoins;
-use ton::ton_wallet::{Mnemonic, TonWallet, WALLET_V5R1_ID_DEFAULT_TESTNET, WalletVersion};
+use ton::ton_wallet::{
+    Mnemonic, TonWallet, WALLET_V5R1_ID_DEFAULT_TESTNET, WalletV5ExtMsgBody, WalletVersion,
+};
 use wallet_engine::{
     HttpHeader, HttpHostError, HttpHostErrorKind, HttpMethod, HttpRequest, HttpRequestId,
     HttpResponse, WalletHttpHost,
@@ -364,8 +366,11 @@ impl LocalnetHttpHost {
                 .map_err(|error| host_error(HttpHostErrorKind::Other, &error.to_string()))?;
             let message = Msg::<TonCell>::from_cell(&cell)
                 .map_err(|error| host_error(HttpHostErrorKind::Other, &error.to_string()))?;
+            let body = WalletV5ExtMsgBody::from_cell(&message.body)
+                .map_err(|error| host_error(HttpHostErrorKind::Other, &error.to_string()))?;
             *lock(&self.submitted_message) = Some(SubmittedMessage {
                 contains_state_init: message.state_init().is_some(),
+                send_modes: body.msgs_modes,
             });
             *lock(&self.submitted_boc_base64) = Some(encoded);
             localnet

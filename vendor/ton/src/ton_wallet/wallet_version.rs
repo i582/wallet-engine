@@ -1,3 +1,4 @@
+use crate::block_tlb::{SEND_MODE_IGNORE_ERRORS, SEND_MODE_PAY_FEES_SEPARATELY};
 use crate::errors::TonError;
 use crate::ton_wallet::WalletVersion::*;
 use crate::ton_wallet::*;
@@ -66,11 +67,23 @@ impl WalletVersion {
         wallet_id: i32,
         msgs: Vec<TonCell>,
     ) -> Result<TonCell, TonError> {
+        let modes = vec![SEND_MODE_PAY_FEES_SEPARATELY | SEND_MODE_IGNORE_ERRORS; msgs.len()];
+        Self::build_ext_in_body_with_modes(version, valid_until, msg_seqno, wallet_id, msgs, modes)
+    }
+
+    pub fn build_ext_in_body_with_modes(
+        version: WalletVersion,
+        valid_until: u32,
+        msg_seqno: u32,
+        wallet_id: i32,
+        msgs: Vec<TonCell>,
+        msgs_modes: Vec<u8>,
+    ) -> Result<TonCell, TonError> {
         let res = match version {
             V2R1 | V2R2 => WalletV2ExtMsgBody {
                 msg_seqno,
                 valid_until,
-                msgs_modes: vec![3u8; msgs.len()],
+                msgs_modes,
                 msgs,
             }
             .to_cell(),
@@ -78,7 +91,7 @@ impl WalletVersion {
                 subwallet_id: wallet_id,
                 msg_seqno,
                 valid_until,
-                msgs_modes: vec![3u8; msgs.len()],
+                msgs_modes,
                 msgs,
             }
             .to_cell(),
@@ -87,7 +100,7 @@ impl WalletVersion {
                 valid_until,
                 msg_seqno,
                 opcode: 0,
-                msgs_modes: vec![3u8; msgs.len()],
+                msgs_modes,
                 msgs,
             }
             .to_cell(),
@@ -95,7 +108,7 @@ impl WalletVersion {
                 wallet_id,
                 valid_until,
                 msg_seqno,
-                msgs_modes: vec![3u8; msgs.len()],
+                msgs_modes,
                 msgs,
             }
             .to_cell(),

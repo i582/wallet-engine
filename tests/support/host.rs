@@ -10,6 +10,7 @@ use ton::block_tlb::Msg;
 use ton::ton_core::cell::TonCell;
 use ton::ton_core::traits::tlb::TLB;
 use ton::ton_core::types::TonAddress;
+use ton::ton_wallet::WalletV5ExtMsgBody;
 use wallet_engine::{
     HttpHeader, HttpHostError, HttpHostErrorKind, HttpRequest, HttpRequestId, HttpResponse,
     JournalCompareExchange, JournalCompareExchangeResult, JournalHostError, JournalHostErrorKind,
@@ -72,6 +73,7 @@ struct RequestGate {
 #[derive(Clone)]
 pub(super) struct SubmittedMessage {
     pub(super) contains_state_init: bool,
+    pub(super) send_modes: Vec<u8>,
 }
 
 struct SubmissionGate {
@@ -469,10 +471,13 @@ impl ScenarioHttpHost {
             .map_err(|error| host_error(HttpHostErrorKind::Other, error.to_string()))?;
         let message = Msg::<TonCell>::from_cell(&cell)
             .map_err(|error| host_error(HttpHostErrorKind::Other, error.to_string()))?;
+        let body = WalletV5ExtMsgBody::from_cell(&message.body)
+            .map_err(|error| host_error(HttpHostErrorKind::Other, error.to_string()))?;
 
         let mut state = lock(&self.state);
         state.submitted_message = Some(SubmittedMessage {
             contains_state_init: message.state_init().is_some(),
+            send_modes: body.msgs_modes,
         });
 
         let outcome = if state.submission_gate.is_some() {

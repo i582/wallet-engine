@@ -6,6 +6,19 @@ use ton_core::errors::TonCoreError;
 use ton_core::traits::tlb::TLB;
 use ton_core::types::tlb_core::{TLBEither, TLBRef};
 
+/// Sends the message with its explicitly encoded value.
+pub const SEND_MODE_REGULAR: u8 = 0;
+/// Pays message forwarding fees from the sender account balance.
+pub const SEND_MODE_PAY_FEES_SEPARATELY: u8 = 1;
+/// Continues the action phase when the send action encounters an eligible error.
+pub const SEND_MODE_IGNORE_ERRORS: u8 = 2;
+/// Carries all value remaining from the inbound message.
+pub const SEND_MODE_CARRY_ALL_REMAINING_MESSAGE_VALUE: u8 = 64;
+/// Carries the complete remaining account balance.
+pub const SEND_MODE_CARRY_ALL_BALANCE: u8 = 128;
+/// Destroys the account when mode 128 leaves a zero balance.
+pub const SEND_MODE_DESTROY_ACCOUNT: u8 = 32;
+
 // https://github.com/ton-blockchain/ton/blob/2a68c8610bf28b43b2019a479a70d0606c2a0aa1/crypto/block/block.tlb#L399
 #[derive(Debug, PartialEq, Clone, Default)]
 pub struct OutList {
