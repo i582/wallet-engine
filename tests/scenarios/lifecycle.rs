@@ -39,6 +39,37 @@ fn shutdown_releases_snapshot_waiters() {
 }
 
 #[test]
+fn wait_for_change_returns_an_already_published_snapshot_immediately() {
+    scenario("a caller behind the current revision does not register a waiter")
+        .when(call("refresh", refresh_wallet()))
+        .then(update("refresh").completed())
+        .then(remember_revision("refreshed"))
+        .when(call("wait", wait_for_change(0)))
+        .then(returned_snapshot_revision_is("wait", "refreshed"))
+        .run();
+}
+
+#[test]
+fn wait_for_change_is_released_by_a_newly_published_revision() {
+    scenario("a pending snapshot waiter is released by the next state publication")
+        .when(start("wait", wait_for_change(0)))
+        .when(call("refresh", refresh_wallet()))
+        .then(update("refresh").completed())
+        .then(returned_snapshot_revision_is_greater_than("wait", 0))
+        .run();
+}
+
+#[test]
+fn wait_for_change_rejects_calls_after_shutdown_without_registering_a_waiter() {
+    scenario("a closed client rejects new snapshot waiters immediately")
+        .when(call("shutdown", shutdown_client()))
+        .then(succeeds("shutdown"))
+        .when(call("wait", wait_for_change(0)))
+        .then(error("wait", WalletClientError::Shutdown))
+        .run();
+}
+
+#[test]
 fn shutdown_cancels_a_send_before_the_durable_boundary() {
     scenario("shutdown cancels a send that has not persisted a signed message")
         .given(wallet().active().balance(grams(10)).seqno(7))

@@ -150,6 +150,14 @@ pub(crate) fn release_request(name: impl Into<String>) -> ControlStep {
     ControlStep::ReleaseRequest { name: name.into() }
 }
 
+pub(crate) const fn fail_next_activity_request(status: u16) -> ControlStep {
+    ControlStep::FailNextActivityRequest { status }
+}
+
+pub(crate) const fn cancel_next_activity_request_at_host() -> ControlStep {
+    ControlStep::CancelNextActivityRequestAtHost
+}
+
 pub(crate) const fn spam_transfers(count: u32) -> UserAction {
     UserAction::SpamTransfers { count }
 }
@@ -299,6 +307,26 @@ pub(crate) fn revision_is(name: impl Into<String>) -> Expectation {
     Expectation::RevisionIs(name.into())
 }
 
+pub(crate) fn returned_snapshot_revision_is(
+    operation: impl Into<String>,
+    revision: impl Into<String>,
+) -> Expectation {
+    Expectation::ReturnedSnapshotRevisionIs {
+        operation: operation.into(),
+        revision: revision.into(),
+    }
+}
+
+pub(crate) fn returned_snapshot_revision_is_greater_than(
+    operation: impl Into<String>,
+    after_revision: u64,
+) -> Expectation {
+    Expectation::ReturnedSnapshotRevisionIsGreaterThan {
+        operation: operation.into(),
+        after_revision,
+    }
+}
+
 pub(crate) const fn protected_secret_was_not_read() -> Expectation {
     Expectation::SecretReadCount(0)
 }
@@ -331,6 +359,7 @@ pub(crate) const fn snapshot() -> SnapshotExpectation {
         send_phase: None,
         account_phase: None,
         activity_phase: None,
+        pagination_phase: None,
         activity_count: None,
         has_more: None,
         account_error: None,
@@ -636,6 +665,10 @@ pub(crate) enum ControlStep {
     ReleaseRequest {
         name: String,
     },
+    FailNextActivityRequest {
+        status: u16,
+    },
+    CancelNextActivityRequestAtHost,
 }
 
 pub(crate) enum Given {
@@ -754,6 +787,14 @@ pub(crate) enum Expectation {
     RequestWasCancelled(String),
     RememberRevision(String),
     RevisionIs(String),
+    ReturnedSnapshotRevisionIs {
+        operation: String,
+        revision: String,
+    },
+    ReturnedSnapshotRevisionIsGreaterThan {
+        operation: String,
+        after_revision: u64,
+    },
     SecretReadCount(u64),
     JournalIsEmpty,
     NoSubmittedMessage,
@@ -816,6 +857,10 @@ impl UpdateExpectation {
         self.outcome(WalletOperationOutcome::Failed)
     }
 
+    pub(crate) fn cancelled(self) -> Expectation {
+        self.outcome(WalletOperationOutcome::Cancelled)
+    }
+
     pub(crate) fn skipped(self) -> Expectation {
         self.outcome(WalletOperationOutcome::Skipped)
     }
@@ -873,6 +918,7 @@ pub(crate) struct SnapshotExpectation {
     send_phase: Option<SendPhase>,
     account_phase: Option<ResourcePhase>,
     activity_phase: Option<ResourcePhase>,
+    pagination_phase: Option<ResourcePhase>,
     activity_count: Option<usize>,
     has_more: Option<bool>,
     account_error: Option<DomainError>,
@@ -896,6 +942,12 @@ impl SnapshotExpectation {
     pub(crate) const fn activity_phase(mut self, phase: ResourcePhase) -> Expectation {
         self.activity_phase = Some(phase);
         Expectation::Snapshot(self)
+    }
+
+    #[must_use]
+    pub(crate) const fn pagination_phase(mut self, phase: ResourcePhase) -> Self {
+        self.pagination_phase = Some(phase);
+        self
     }
 
     #[must_use]
@@ -1363,6 +1415,20 @@ impl ScenarioRunner {
                     Err("scenario has no HTTP host".to_owned())
                 }
             }
+            When::Control(ControlStep::FailNextActivityRequest { status }) => {
+                let host = self.scripted_http_host.as_ref().ok_or_else(|| {
+                    "localnet scenarios cannot script provider failures".to_owned()
+                })?;
+                host.fail_next_activity_response(status);
+                Ok(())
+            }
+            When::Control(ControlStep::CancelNextActivityRequestAtHost) => {
+                let host = self.scripted_http_host.as_ref().ok_or_else(|| {
+                    "localnet scenarios cannot script transport cancellation".to_owned()
+                })?;
+                host.cancel_next_activity_response();
+                Ok(())
+            }
         }
     }
 
@@ -1473,6 +1539,14 @@ impl ScenarioRunner {
                     return Err(format!(
                         "expected activity phase {expected:?}\nactual: {:?}",
                         snapshot.activity_resource.phase
+                    ));
+                }
+                if let Some(expected) = expectation.pagination_phase
+                    && snapshot.activity_pagination_resource.phase != expected
+                {
+                    return Err(format!(
+                        "expected pagination phase {expected:?}\nactual: {:?}",
+                        snapshot.activity_pagination_resource.phase
                     ));
                 }
                 if let Some(expected) = expectation.activity_count
@@ -1653,6 +1727,39 @@ impl ScenarioRunner {
                     Err(format!(
                         "expected revision `{name}` to remain {expected}, got {actual}"
                     ))
+                }
+            }
+            Expectation::ReturnedSnapshotRevisionIs {
+                operation,
+                revision,
+            } => {
+                self.finish_operation(&operation)?;
+                let expected = self
+                    .named_revisions
+                    .get(&revision)
+                    .copied()
+                    .ok_or_else(|| format!("revision `{revision}` was not remembered"))?;
+                match self.results.get(&operation) {
+                    Some(OperationResult::Snapshot(result)) if matches!(result.as_ref(), Ok(snapshot) if snapshot.revision == expected) => {
+                        Ok(())
+                    }
+                    actual => Err(format!(
+                        "expected `{operation}` to return remembered revision `{revision}` ({expected})\nactual: {actual:?}"
+                    )),
+                }
+            }
+            Expectation::ReturnedSnapshotRevisionIsGreaterThan {
+                operation,
+                after_revision,
+            } => {
+                self.finish_operation(&operation)?;
+                match self.results.get(&operation) {
+                    Some(OperationResult::Snapshot(result)) if matches!(result.as_ref(), Ok(snapshot) if snapshot.revision > after_revision) => {
+                        Ok(())
+                    }
+                    actual => Err(format!(
+                        "expected `{operation}` to return a revision greater than {after_revision}\nactual: {actual:?}"
+                    )),
                 }
             }
             Expectation::SecretReadCount(expected) => {

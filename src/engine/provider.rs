@@ -577,6 +577,56 @@ mod tests {
     }
 
     #[test]
+    fn rate_limit_retry_after_is_converted_to_milliseconds() {
+        let error = response_error(
+            429,
+            &[HttpHeader {
+                name: "retry-after".to_owned(),
+                value: "7".to_owned(),
+            }],
+            br#"{"error":"slow down"}"#,
+        )
+        .expect("429 must be an error");
+
+        assert_eq!(error.code, ErrorCode::RateLimited);
+        assert_eq!(error.retry, RetryAdvice::AfterDelay);
+        assert_eq!(error.retry_after_ms, Some(7_000));
+        assert_eq!(error.developer_message, "slow down");
+    }
+
+    #[test]
+    fn rejects_non_decimal_json_types_before_publishing_provider_data() {
+        let account = parse_account(&encode(json!({
+            "ok": true,
+            "result": { "balance": true, "state": "active" }
+        })))
+        .expect_err("a boolean balance must fail");
+        assert_eq!(account.code, ErrorCode::InvalidProviderResponse);
+        assert_eq!(
+            account.developer_message,
+            "account balance is not a decimal value"
+        );
+
+        let activity = parse_activity(
+            &encode(json!({
+                "ok": true,
+                "result": [{
+                    "utime": 1,
+                    "transaction_id": { "lt": {}, "hash": hash(1) },
+                    "in_msg": { "source": ADDRESS, "value": "1" }
+                }]
+            })),
+            10,
+        )
+        .expect_err("an object logical time must fail");
+        assert_eq!(activity.code, ErrorCode::InvalidProviderResponse);
+        assert_eq!(
+            activity.developer_message,
+            "logical time is not a decimal value"
+        );
+    }
+
+    #[test]
     fn activity_uses_bigints_and_stable_outgoing_order() {
         let transaction_hash = hash(9);
         let body = json!({

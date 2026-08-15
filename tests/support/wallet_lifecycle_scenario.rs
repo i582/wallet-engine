@@ -76,6 +76,18 @@ pub(crate) fn replace_protected_secret(
     }
 }
 
+pub(crate) const fn fail_next_protected_secret_store() -> LifecycleAction {
+    LifecycleAction::FailNextProtectedSecretStore
+}
+
+pub(crate) const fn fail_next_protected_secret_read() -> LifecycleAction {
+    LifecycleAction::FailNextProtectedSecretRead
+}
+
+pub(crate) const fn fail_next_protected_secret_delete() -> LifecycleAction {
+    LifecycleAction::FailNextProtectedSecretDelete
+}
+
 pub(crate) fn descriptor_is(
     operation: impl Into<String>,
     record_id: impl Into<String>,
@@ -197,6 +209,9 @@ pub(crate) enum LifecycleAction {
         target_descriptor: String,
         source_descriptor: String,
     },
+    FailNextProtectedSecretStore,
+    FailNextProtectedSecretRead,
+    FailNextProtectedSecretDelete,
 }
 
 pub(crate) enum LifecycleExpectation {
@@ -340,6 +355,18 @@ impl WalletLifecycleRunner {
                 let target = self.descriptor(&target_descriptor)?.secret_ref.clone();
                 let source = self.descriptor(&source_descriptor)?.secret_ref.clone();
                 self.host.replace_secret(&target, &source)?;
+                return Ok(());
+            }
+            LifecycleAction::FailNextProtectedSecretStore => {
+                self.host.fail_next_secret_store();
+                return Ok(());
+            }
+            LifecycleAction::FailNextProtectedSecretRead => {
+                self.host.fail_next_secret_read();
+                return Ok(());
+            }
+            LifecycleAction::FailNextProtectedSecretDelete => {
+                self.host.fail_next_secret_delete();
                 return Ok(());
             }
         };

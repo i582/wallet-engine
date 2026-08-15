@@ -214,3 +214,154 @@ pub(super) fn build_activity_page_request(
         ],
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use num_bigint::BigUint;
+    use ton::ton_core::types::TonAddress;
+
+    use super::*;
+    use crate::engine::provider::ActivityRecord;
+    use crate::{
+        ActivityDirection, Base64Hash, Network, ProviderConfig, SendPhase, SendSnapshot,
+        WalletSnapshot,
+    };
+
+    const ADDRESS: &str = "0:1111111111111111111111111111111111111111111111111111111111111111";
+
+    #[test]
+    fn a_nonadvancing_page_stops_pagination_without_mutating_loaded_rows() {
+        let mut state = state();
+        state.activity = vec![record("existing", 10, 1)];
+        state.activity_cursor = Some(cursor(10, 1));
+        state.activity_has_more = true;
+        state.sync_activity_snapshot();
+        let before = state.snapshot.activity.clone();
+
+        let added = apply_activity_page(
+            &mut state,
+            ActivityPage {
+                items: vec![record("unexpected", 11, 2)],
+                cursor: Some(cursor(11, 2)),
+                has_more: true,
+            },
+        );
+
+        assert_eq!(added, 0);
+        assert_eq!(state.snapshot.activity, before);
+        assert_eq!(
+            state.activity_cursor.as_ref().map(|value| &value.hash),
+            Some(&hash(1))
+        );
+        assert!(!state.activity_has_more);
+        assert!(!state.snapshot.activity_has_more);
+    }
+
+    #[test]
+    fn the_first_refreshed_page_initializes_rows_cursor_and_has_more_together() {
+        let mut state = state();
+        let expected_cursor = cursor(20, 3);
+
+        apply_refreshed_activity_page(
+            &mut state,
+            ActivityPage {
+                items: vec![record("first", 20, 3)],
+                cursor: Some(expected_cursor.clone()),
+                has_more: true,
+            },
+        );
+
+        assert_eq!(state.activity.len(), 1);
+        assert_eq!(state.snapshot.activity[0].id, "first");
+        assert_eq!(
+            state.activity_cursor.as_ref().map(|value| &value.hash),
+            Some(&expected_cursor.hash)
+        );
+        assert!(state.activity_has_more);
+        assert!(state.snapshot.activity_has_more);
+    }
+
+    #[test]
+    fn cancelling_loading_changes_only_a_loading_resource() {
+        let mut loading = ResourceState::loading();
+        mark_loading_cancelled(&mut loading);
+        assert_eq!(loading, ResourceState::idle());
+
+        let mut ready = ResourceState::ready();
+        mark_loading_cancelled(&mut ready);
+        assert_eq!(ready, ResourceState::ready());
+    }
+
+    fn state() -> State {
+        let config = WalletClientConfig {
+            record_id: "activity-tests".to_owned(),
+            address: ADDRESS.to_owned(),
+            network: Network::Testnet,
+            send_validity_seconds: 300,
+            providers: ProviderConfig::standard(Network::Testnet),
+        };
+        State {
+            snapshot: WalletSnapshot {
+                revision: 0,
+                record_id: config.record_id.clone(),
+                address: config.address.clone(),
+                network: config.network,
+                account: None,
+                account_resource: ResourceState::idle(),
+                activity: Vec::new(),
+                activity_resource: ResourceState::idle(),
+                activity_pagination_resource: ResourceState::idle(),
+                activity_cursor: None,
+                activity_has_more: false,
+                send: SendSnapshot {
+                    operation_id: None,
+                    phase: SendPhase::Idle,
+                    error_message: None,
+                },
+            },
+            config,
+            activity: Vec::new(),
+            activity_cursor: None,
+            activity_has_more: false,
+            next_id: 1,
+            refresh_generation: 0,
+            pagination_generation: 0,
+            send_generation: 0,
+            active_refresh: None,
+            active_pagination: None,
+            active_send: None,
+            send_commit_started: false,
+            send_workflow: None,
+            waiters: Vec::new(),
+            shutdown: false,
+            closing: false,
+        }
+    }
+
+    fn record(id: &str, logical_time: u64, hash_byte: u8) -> ActivityRecord {
+        ActivityRecord {
+            id: id.to_owned(),
+            transaction_hash: hash(hash_byte),
+            logical_time: BigUint::from(logical_time),
+            timestamp: logical_time,
+            direction: ActivityDirection::Received,
+            amount_nanograms: BigUint::from(1_u8),
+            counterparty: Some(
+                TonAddress::from_str(ADDRESS).expect("activity test address must be valid"),
+            ),
+        }
+    }
+
+    fn cursor(logical_time: u64, hash_byte: u8) -> ActivityPageCursor {
+        ActivityPageCursor {
+            logical_time: BigUint::from(logical_time),
+            hash: hash(hash_byte),
+        }
+    }
+
+    fn hash(byte: u8) -> Base64Hash {
+        Base64Hash::from_bytes(&[byte; 32]).expect("activity test hash must be 256 bits")
+    }
+}

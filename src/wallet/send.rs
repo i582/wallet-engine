@@ -873,6 +873,7 @@ mod tests {
     #[test]
     fn successful_terminal_persistence_keeps_the_provider_reference() {
         let mut workflow = ready_to_submit_workflow();
+        assert_eq!(workflow.snapshot().phase, SendPhase::ReadyToSubmit);
         assert_eq!(workflow.submission_started(), Ok(()));
         assert!(matches!(
             workflow.submission_succeeded(Some("receipt-7".to_owned())),

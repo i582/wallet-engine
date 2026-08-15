@@ -1,4 +1,4 @@
-use wallet_engine::{Network, WalletLifecycleError};
+use wallet_engine::{Network, ProtectedSecretHostErrorKind, WalletLifecycleError};
 
 use crate::support::*;
 
@@ -122,5 +122,70 @@ fn reveal_rejects_a_valid_secret_from_another_wallet() {
             WalletLifecycleError::SecretWalletMismatch,
         ))
         .then(protected_secret_was_revealed("expected"))
+        .run();
+}
+
+#[test]
+fn protected_storage_failure_during_import_leaves_no_wallet_secret() {
+    wallet_lifecycle_scenario("import publishes the exact protected-storage failure")
+        .when(fail_next_protected_secret_store())
+        .when(import_wallet(
+            "import",
+            "store-failure",
+            Network::Testnet,
+            test_wallet().recovery_words(),
+        ))
+        .then(lifecycle_error(
+            "import",
+            WalletLifecycleError::ProtectedSecretHost {
+                kind: ProtectedSecretHostErrorKind::Other,
+                diagnostic: "scripted protected secret store failure".to_owned(),
+            },
+        ))
+        .then(no_protected_secrets_were_stored())
+        .run();
+}
+
+#[test]
+fn protected_storage_failure_during_reveal_preserves_the_secret() {
+    wallet_lifecycle_scenario("reveal reports authorization storage failure without deleting data")
+        .when(import_wallet(
+            "import",
+            "read-failure",
+            Network::Testnet,
+            test_wallet().recovery_words(),
+        ))
+        .when(fail_next_protected_secret_read())
+        .when(reveal_wallet("reveal", "import"))
+        .then(lifecycle_error(
+            "reveal",
+            WalletLifecycleError::ProtectedSecretHost {
+                kind: ProtectedSecretHostErrorKind::Other,
+                diagnostic: "scripted protected secret failure".to_owned(),
+            },
+        ))
+        .then(protected_secret_is_stored("import"))
+        .run();
+}
+
+#[test]
+fn protected_storage_failure_during_delete_preserves_application_recovery() {
+    wallet_lifecycle_scenario("metadata can be retained when protected-secret deletion fails")
+        .when(import_wallet(
+            "import",
+            "delete-failure",
+            Network::Testnet,
+            test_wallet().recovery_words(),
+        ))
+        .when(fail_next_protected_secret_delete())
+        .when(delete_wallet("delete", "import"))
+        .then(lifecycle_error(
+            "delete",
+            WalletLifecycleError::ProtectedSecretHost {
+                kind: ProtectedSecretHostErrorKind::Other,
+                diagnostic: "scripted protected secret delete failure".to_owned(),
+            },
+        ))
+        .then(protected_secret_is_stored("import"))
         .run();
 }

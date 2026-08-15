@@ -36,6 +36,8 @@ struct HttpState {
     account_redirected: bool,
     activity_pages: Vec<usize>,
     activity_page_index: usize,
+    next_activity_status: Option<u16>,
+    next_activity_host_error: Option<HttpHostErrorKind>,
     submission_gate: Option<SubmissionGate>,
     request_gate: Option<RequestGate>,
     submitted_message: Option<SubmittedMessage>,
@@ -80,6 +82,8 @@ impl ScenarioHttpHost {
                 account_redirected: false,
                 activity_pages: Vec::new(),
                 activity_page_index: 0,
+                next_activity_status: None,
+                next_activity_host_error: None,
                 submission_gate: paused_submission.map(|name| SubmissionGate {
                     name,
                     reached: false,
@@ -110,6 +114,14 @@ impl ScenarioHttpHost {
         let mut state = lock(&self.state);
         state.activity_pages = pages;
         state.activity_page_index = 0;
+    }
+
+    pub(super) fn fail_next_activity_response(&self, status: u16) {
+        lock(&self.state).next_activity_status = Some(status);
+    }
+
+    pub(super) fn cancel_next_activity_response(&self) {
+        lock(&self.state).next_activity_host_error = Some(HttpHostErrorKind::Cancelled);
     }
 
     pub(super) fn pause_submission(&self, name: String) {
@@ -316,10 +328,14 @@ impl ScenarioHttpHost {
                 final_url: request.url.clone(),
             };
         }
+        let status = state
+            .next_activity_status
+            .take()
+            .unwrap_or(state.activity_status);
         response_with_status(
             request,
-            state.activity_status,
-            if state.activity_status == 200 {
+            status,
+            if status == 200 {
                 json!({ "ok": true, "result": activity_transactions(page_index, count) })
             } else {
                 json!({ "ok": false, "error": "scripted activity failure" })
@@ -464,6 +480,10 @@ impl WalletHttpHost for ScenarioHttpHost {
         if request.url.contains("getTransactions") {
             let response = self.activity_response(&request);
             self.wait_at_request_gate(RequestKind::Activity, request.id)?;
+            let host_error_kind = lock(&self.state).next_activity_host_error.take();
+            if let Some(kind) = host_error_kind {
+                return Err(host_error(kind, "scripted activity transport failure"));
+            }
             return Ok(response);
         }
 
@@ -498,6 +518,8 @@ pub(super) struct MemoryPlatformHost {
     journal: Mutex<HashMap<(String, String), JournalRecord>>,
     conflict_next_journal_write: Mutex<bool>,
     secret_read_error: Mutex<Option<ProtectedSecretHostError>>,
+    secret_store_error: Mutex<Option<ProtectedSecretHostError>>,
+    secret_delete_error: Mutex<Option<ProtectedSecretHostError>>,
     journal_load_error: Mutex<Option<JournalHostError>>,
     journal_write_error_on: Mutex<Option<u64>>,
     journal_write_count: Mutex<u64>,
@@ -516,6 +538,20 @@ impl MemoryPlatformHost {
         *lock(&self.secret_read_error) = Some(ProtectedSecretHostError::Failed {
             kind: ProtectedSecretHostErrorKind::Other,
             diagnostic: "scripted protected secret failure".to_owned(),
+        });
+    }
+
+    pub(super) fn fail_next_secret_store(&self) {
+        *lock(&self.secret_store_error) = Some(ProtectedSecretHostError::Failed {
+            kind: ProtectedSecretHostErrorKind::Other,
+            diagnostic: "scripted protected secret store failure".to_owned(),
+        });
+    }
+
+    pub(super) fn fail_next_secret_delete(&self) {
+        *lock(&self.secret_delete_error) = Some(ProtectedSecretHostError::Failed {
+            kind: ProtectedSecretHostErrorKind::Other,
+            diagnostic: "scripted protected secret delete failure".to_owned(),
         });
     }
 
@@ -602,6 +638,10 @@ impl WalletPlatformHost for MemoryPlatformHost {
         &self,
         request: ProtectedSecretStore,
     ) -> Result<(), ProtectedSecretHostError> {
+        let store_error = lock(&self.secret_store_error).take();
+        if let Some(error) = store_error {
+            return Err(error);
+        }
         let secret_ref = request.secret_ref.value;
         lock(&self.secret_user_presence).insert(secret_ref.clone(), request.require_user_presence);
         lock(&self.secrets).insert(secret_ref, request.bytes);
@@ -612,6 +652,10 @@ impl WalletPlatformHost for MemoryPlatformHost {
         &self,
         secret_ref: ProtectedSecretRef,
     ) -> Result<(), ProtectedSecretHostError> {
+        let delete_error = lock(&self.secret_delete_error).take();
+        if let Some(error) = delete_error {
+            return Err(error);
+        }
         lock(&self.secrets).remove(&secret_ref.value);
         lock(&self.secret_user_presence).remove(&secret_ref.value);
         Ok(())

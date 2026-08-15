@@ -1,4 +1,5 @@
 use super::support::*;
+use wallet_engine::ResourcePhase;
 
 #[test]
 fn skips_when_activity_has_not_been_loaded() {
@@ -77,6 +78,46 @@ fn cancelling_an_older_page_preserves_loaded_activity() {
         .when(release_request("older-response"))
         .then(update("older").superseded())
         .then(revision_is("after-cancel"))
+        .then(activity_is(&["A"]))
+        .run();
+}
+
+#[test]
+fn provider_failure_keeps_the_loaded_page_and_exposes_a_retryable_footer() {
+    scenario("a failed older-page request preserves the loaded pagination lineage")
+        .given(activity_pages(&[10, 3]))
+        .when(call("initial", refresh_wallet()))
+        .then(update("initial").completed())
+        .then(remember_activity_as("A"))
+        .when(fail_next_activity_request(503))
+        .when(call("older", load_more_activity()))
+        .then(update("older").failed())
+        .then(
+            snapshot()
+                .pagination_phase(ResourcePhase::Failed)
+                .activity_count(10)
+                .has_more(true),
+        )
+        .then(activity_is(&["A"]))
+        .run();
+}
+
+#[test]
+fn host_cancellation_returns_the_pagination_resource_to_idle() {
+    scenario("transport cancellation does not look like a provider failure")
+        .given(activity_pages(&[10, 3]))
+        .when(call("initial", refresh_wallet()))
+        .then(update("initial").completed())
+        .then(remember_activity_as("A"))
+        .when(cancel_next_activity_request_at_host())
+        .when(call("older", load_more_activity()))
+        .then(update("older").cancelled())
+        .then(
+            snapshot()
+                .pagination_phase(ResourcePhase::Idle)
+                .activity_count(10)
+                .has_more(true),
+        )
         .then(activity_is(&["A"]))
         .run();
 }
