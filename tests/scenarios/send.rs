@@ -21,6 +21,295 @@ fn second_send_is_rejected_while_first_is_in_progress() {
 }
 
 #[test]
+fn preview_is_rejected_while_a_send_is_in_progress() {
+    scenario("preview cannot race the active send workflow")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(submission().paused("submit"))
+        .when(start("send", send().to(own_address()).grams(1)))
+        .then(send_phase("send", SendPhase::Submitting))
+        .when(call(
+            "preview",
+            preview_send(send().to(own_address()).grams(1)),
+        ))
+        .then(error("preview", WalletClientError::SendAlreadyInProgress))
+        .when(resume("submit", submission_accepted()))
+        .then(result("send").submitted())
+        .run();
+}
+
+#[test]
+fn second_preview_is_rejected_while_the_first_is_in_progress() {
+    scenario("only one preview can own the preview request slot")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .when(pause_next_emulation_request("emulation"))
+        .when(start(
+            "first",
+            preview_send(send().to(own_address()).grams(1)),
+        ))
+        .when(wait_for_request("emulation"))
+        .when(call(
+            "second",
+            preview_send(send().to(own_address()).grams(1)),
+        ))
+        .then(error(
+            "second",
+            WalletClientError::SendPreviewAlreadyInProgress,
+        ))
+        .when(release_request("emulation"))
+        .then(result("first").previewed())
+        .run();
+}
+
+#[test]
+fn provider_account_failure_releases_the_preview_slot() {
+    scenario("preview account failure is retryable without unlocking the wallet")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(provider().account_fails(503))
+        .when(call(
+            "failed",
+            preview_send(send().to(own_address()).grams(1)),
+        ))
+        .then(error("failed", send_failed("HTTP 503")))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .given(provider())
+        .when(call(
+            "retry",
+            preview_send(send().to(own_address()).grams(1)),
+        ))
+        .then(result("retry").previewed())
+        .run();
+}
+
+#[test]
+fn provider_seqno_failure_releases_the_preview_slot() {
+    scenario("preview reports an active wallet seqno provider failure")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(provider().seqno_fails(503))
+        .when(call(
+            "failed",
+            preview_send(send().to(own_address()).grams(1)),
+        ))
+        .then(error("failed", send_failed("scripted seqno failure")))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .given(provider())
+        .when(call(
+            "retry",
+            preview_send(send().to(own_address()).grams(1)),
+        ))
+        .then(result("retry").previewed())
+        .run();
+}
+
+#[test]
+fn invalid_preview_is_rejected_before_network_or_state_changes() {
+    scenario("invalid preview intent does not acquire the preview slot")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .when(call(
+            "invalid",
+            preview_send(send().to(own_address()).nanograms(0)),
+        ))
+        .then(error("invalid", WalletClientError::InvalidSendRequest))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .when(call(
+            "valid",
+            preview_send(send().to(own_address()).grams(1)),
+        ))
+        .then(result("valid").previewed())
+        .run();
+}
+
+#[test]
+fn shutdown_cancels_an_in_flight_preview_account_request() {
+    scenario("shutdown invalidates a preview waiting for fresh account state")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .when(pause_next_account_request("account"))
+        .when(start(
+            "preview",
+            preview_send(send().to(own_address()).grams(1)),
+        ))
+        .when(wait_for_request("account"))
+        .when(call("shutdown", shutdown_client()))
+        .then(succeeds("shutdown"))
+        .then(request_was_cancelled("account"))
+        .when(release_request("account"))
+        .then(error("preview", WalletClientError::Shutdown))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .run();
+}
+
+#[test]
+fn preview_operations_reject_after_shutdown() {
+    scenario("shutdown permanently closes the preview API")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .when(call("shutdown", shutdown_client()))
+        .then(succeeds("shutdown"))
+        .when(call(
+            "preview",
+            preview_send(send().to(own_address()).grams(1)),
+        ))
+        .then(error("preview", WalletClientError::Shutdown))
+        .when(call("cancel", cancel_send_preview()))
+        .then(error("cancel", WalletClientError::Shutdown))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .run();
+}
+
+#[test]
+fn preview_rejects_an_amount_larger_than_the_fresh_balance() {
+    scenario("preview cannot quote a transfer larger than the wallet balance")
+        .given(wallet().active().balance(grams(1)).seqno(7))
+        .when(call(
+            "preview",
+            preview_send(send().to(own_address()).grams(100)),
+        ))
+        .then(error(
+            "preview",
+            WalletClientError::InsufficientBalance {
+                available_nanograms: grams(1).as_nanograms(),
+                requested_nanograms: grams(100).as_nanograms(),
+            },
+        ))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .run();
+}
+
+#[test]
+fn frozen_wallet_cannot_be_previewed() {
+    scenario("a frozen wallet cannot produce an executable preview")
+        .given(wallet().frozen().balance(grams(10)))
+        .when(call(
+            "preview",
+            preview_send(send().to(own_address()).grams(1)),
+        ))
+        .then(error(
+            "preview",
+            WalletClientError::SendAccountUnavailable {
+                status: AccountStatus::Frozen,
+            },
+        ))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .run();
+}
+
+#[test]
+fn unknown_wallet_state_cannot_be_previewed() {
+    scenario("an unknown provider wallet state cannot produce a preview")
+        .given(wallet().unknown().balance(grams(10)))
+        .when(call(
+            "preview",
+            preview_send(send().to(own_address()).grams(1)),
+        ))
+        .then(error(
+            "preview",
+            WalletClientError::SendAccountUnavailable {
+                status: AccountStatus::Unknown,
+            },
+        ))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .run();
+}
+
+#[test]
+fn preview_requires_provider_synchronization_time() {
+    scenario("preview validity must be based on fresh provider time")
+        .given(
+            wallet()
+                .active()
+                .balance(grams(10))
+                .seqno(7)
+                .without_sync_time(),
+        )
+        .when(call(
+            "preview",
+            preview_send(send().to(own_address()).grams(1)),
+        ))
+        .then(error(
+            "preview",
+            send_failed("fresh account state has no valid synchronization time"),
+        ))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .run();
+}
+
+#[test]
+fn preview_provider_time_must_fit_the_wallet_timestamp() {
+    scenario("preview rejects provider time outside the wallet timestamp field")
+        .given(
+            wallet()
+                .active()
+                .balance(grams(10))
+                .seqno(7)
+                .sync_time(u64::from(u32::MAX) + 1),
+        )
+        .when(call(
+            "preview",
+            preview_send(send().to(own_address()).grams(1)),
+        ))
+        .then(error(
+            "preview",
+            send_failed("fresh account state has no valid synchronization time"),
+        ))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .run();
+}
+
+#[test]
+fn preview_expiration_must_not_overflow() {
+    scenario("preview validity must fit the wallet timestamp field")
+        .given(
+            wallet()
+                .active()
+                .balance(grams(10))
+                .seqno(7)
+                .sync_time(u64::from(u32::MAX)),
+        )
+        .when(call(
+            "preview",
+            preview_send(send().to(own_address()).grams(1)),
+        ))
+        .then(error(
+            "preview",
+            send_failed("transfer expiration timestamp overflow"),
+        ))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .run();
+}
+
+#[test]
+fn cancelling_without_an_active_preview_is_idempotent() {
+    scenario("idle preview cancellation is a successful no-op")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .when(call("cancel", cancel_send_preview()))
+        .then(succeeds("cancel"))
+        .then(protected_secret_was_not_read())
+        .then(journal_is_empty())
+        .then(no_message_was_submitted())
+        .run();
+}
+
+#[test]
 fn emulation_completes_before_secret_authorization_and_persistence() {
     scenario("send preview uses only public wallet metadata")
         .given(wallet().active().balance(grams(10)).seqno(7))

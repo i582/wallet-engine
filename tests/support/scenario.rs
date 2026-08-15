@@ -83,6 +83,7 @@ pub(crate) const fn provider() -> ProviderFixture {
         account_retry_after_seconds: None,
         activity_malformed: false,
         account_redirected: false,
+        seqno_status: 200,
         emulation_status: 200,
         emulation_rejected: false,
     }
@@ -582,6 +583,7 @@ pub(crate) struct ProviderFixture {
     pub(super) account_retry_after_seconds: Option<u64>,
     pub(super) activity_malformed: bool,
     pub(super) account_redirected: bool,
+    pub(super) seqno_status: u16,
     pub(super) emulation_status: u16,
     pub(super) emulation_rejected: bool,
 }
@@ -619,6 +621,12 @@ impl ProviderFixture {
     #[must_use]
     pub(crate) const fn account_redirects(mut self) -> Self {
         self.account_redirected = true;
+        self
+    }
+
+    #[must_use]
+    pub(crate) const fn seqno_fails(mut self, status: u16) -> Self {
+        self.seqno_status = status;
         self
     }
 
@@ -1252,6 +1260,7 @@ impl ScenarioRunner {
                         account_retry_after_seconds: fixture.account_retry_after_seconds,
                         activity_malformed: fixture.activity_malformed,
                         account_redirected: fixture.account_redirected,
+                        seqno_status: fixture.seqno_status,
                         emulation_status: fixture.emulation_status,
                         emulation_rejected: fixture.emulation_rejected,
                     };

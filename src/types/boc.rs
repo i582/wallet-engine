@@ -59,24 +59,19 @@ mod tests {
 
     #[test]
     fn serde_round_trip_preserves_a_valid_boc() {
-        let Ok(boc) = Boc::try_from(TonCell::EMPTY_BOC.to_vec()) else {
-            panic!("the TON empty-cell BOC must be valid");
-        };
-        let Ok(encoded) = serde_json::to_string(&boc) else {
-            panic!("a valid BOC must serialize");
-        };
-        let Ok(decoded) = serde_json::from_str::<Boc>(&encoded) else {
-            panic!("a serialized BOC must deserialize");
-        };
+        let boc = Boc::try_from(TonCell::EMPTY_BOC.to_vec())
+            .expect("the TON empty-cell BOC must be valid");
+        let encoded = serde_json::to_string(&boc).expect("a valid BOC must serialize");
+        let decoded =
+            serde_json::from_str::<Boc>(&encoded).expect("a serialized BOC must deserialize");
 
         assert_eq!(decoded, boc);
     }
 
     #[test]
     fn serde_rejects_invalid_boc_bytes() {
-        let Ok(encoded) = serde_json::to_string(&STANDARD.encode([0_u8; 4])) else {
-            panic!("string serialization must work");
-        };
+        let encoded = serde_json::to_string(&STANDARD.encode([0_u8; 4]))
+            .expect("string serialization must work");
         assert!(serde_json::from_str::<Boc>(&encoded).is_err());
     }
 }

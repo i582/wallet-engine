@@ -37,6 +37,7 @@ struct HttpState {
     account_retry_after_seconds: Option<u64>,
     activity_malformed: bool,
     account_redirected: bool,
+    seqno_status: u16,
     emulation_status: u16,
     emulation_rejected: bool,
     activity_pages: Vec<usize>,
@@ -123,6 +124,7 @@ impl ScenarioHttpHost {
                 account_retry_after_seconds: None,
                 activity_malformed: false,
                 account_redirected: false,
+                seqno_status: 200,
                 emulation_status: 200,
                 emulation_rejected: false,
                 activity_pages: Vec::new(),
@@ -153,6 +155,7 @@ impl ScenarioHttpHost {
         state.account_retry_after_seconds = fixture.account_retry_after_seconds;
         state.activity_malformed = fixture.activity_malformed;
         state.account_redirected = fixture.account_redirected;
+        state.seqno_status = fixture.seqno_status;
         state.emulation_status = fixture.emulation_status;
         state.emulation_rejected = fixture.emulation_rejected;
     }
@@ -392,15 +395,20 @@ impl ScenarioHttpHost {
 
     fn seqno_response(&self, request: &HttpRequest) -> HttpResponse {
         let state = lock(&self.state);
-        response(
+        response_with_status(
             request,
-            json!({
-                "jsonrpc": "2.0",
-                "id": request.id.value.to_string(),
-                "result": {
-                    "stack": [["num", format!("0x{:x}", state.wallet.seqno)]]
-                }
-            }),
+            state.seqno_status,
+            if state.seqno_status == 200 {
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": request.id.value.to_string(),
+                    "result": {
+                        "stack": [["num", format!("0x{:x}", state.wallet.seqno)]]
+                    }
+                })
+            } else {
+                json!({ "error": "scripted seqno failure" })
+            },
         )
     }
 
