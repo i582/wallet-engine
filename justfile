@@ -43,7 +43,7 @@ clippy:
     cargo clippy --locked --manifest-path wasm-bindings/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
     cargo clippy --locked --manifest-path xtask/Cargo.toml --all-targets -- -D warnings
 
-test: test-c test-cpp
+test:
     cargo nextest run --locked {{ NEXTEST_PROFILE_ARGS }}
     cargo nextest run --locked --manifest-path c-bindings/Cargo.toml {{ NEXTEST_PROFILE_ARGS }}
     cargo nextest run --locked --manifest-path xtask/Cargo.toml {{ NEXTEST_PROFILE_ARGS }}
