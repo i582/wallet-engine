@@ -7,7 +7,6 @@ use super::send_http::{
 };
 use super::send_state::SensitiveBytes;
 use super::state::{OperationFamily, ensure_running};
-use super::validation::validate_send;
 
 use crate::domain::bounded_diagnostic;
 use crate::wallet::send::{FreshSendAccount, SendDirective, SendWorkflow};
@@ -36,8 +35,6 @@ impl WalletClient {
     /// is published in `snapshot().send.error_message`.
     pub async fn send(&self, request: SendRequest) -> Result<SendResult, WalletClientError> {
         // Reject malformed input before reserving IDs or changing observable state.
-        validate_send(&request)?;
-
         // Reserve one send generation and every HTTP ID under the state lock.
         // This makes concurrent sends single-flight and lets late callbacks be ignored safely.
         let (
@@ -69,7 +66,7 @@ impl WalletClient {
                 .ok_or(WalletClientError::IdentifierExhausted)?;
             let generation = state.send_generation;
             let config = state.config.clone();
-            let expected_source = config.parsed_address()?;
+            let expected_source = config.address.as_address().clone();
 
             let account_request = build_toncenter_v2_request(
                 &config,
@@ -86,7 +83,7 @@ impl WalletClient {
             ];
             let submit_request_id = state.allocate_request_id()?;
             let mut workflow = SendWorkflow::new(
-                config.record_id.clone(),
+                config.record_id.to_string(),
                 expected_source.clone(),
                 request.clone(),
                 local_secret_ref,
@@ -372,7 +369,7 @@ impl WalletClient {
             }
         }
         Ok(SendResult {
-            operation_id: request.operation_id,
+            operation_id: request.operation_id.into_string(),
             message_hash,
             phase,
         })

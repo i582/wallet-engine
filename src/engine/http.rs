@@ -169,12 +169,12 @@ fn build_provider_url(
     path: &[&str],
     query: &[(&str, &str)],
 ) -> Result<String, WalletClientError> {
-    let mut url = Url::parse(base).map_err(|_| WalletClientError::InvalidConfig)?;
+    let mut url = Url::parse(base).map_err(|_| WalletClientError::InvalidProviderBaseUrl)?;
 
     {
         let mut segments = url
             .path_segments_mut()
-            .map_err(|_| WalletClientError::InvalidConfig)?;
+            .map_err(|_| WalletClientError::InvalidProviderBaseUrl)?;
         segments.pop_if_empty();
         for segment in path {
             segments.push(segment);
@@ -378,8 +378,11 @@ mod tests {
     #[test]
     fn builds_a_toncenter_request_without_losing_the_base_path() {
         let config = WalletClientConfig {
-            record_id: "record".to_owned(),
-            address: "address".to_owned(),
+            record_id: crate::NonEmptyString::try_from("record").expect("valid record identifier"),
+            address: crate::TonAddressString::try_from(
+                "0:1111111111111111111111111111111111111111111111111111111111111111",
+            )
+            .expect("valid TON address"),
             public_key: vec![0; 32],
             local_secret_ref: None,
             network: Network::Testnet,
@@ -421,8 +424,11 @@ mod tests {
     #[test]
     fn rejects_a_provider_base_that_cannot_hold_path_segments() {
         let config = WalletClientConfig {
-            record_id: "record".to_owned(),
-            address: "address".to_owned(),
+            record_id: crate::NonEmptyString::try_from("record").expect("valid record identifier"),
+            address: crate::TonAddressString::try_from(
+                "0:1111111111111111111111111111111111111111111111111111111111111111",
+            )
+            .expect("valid TON address"),
             public_key: vec![0; 32],
             local_secret_ref: None,
             network: Network::Testnet,
@@ -436,7 +442,7 @@ mod tests {
 
         assert_eq!(
             build_toncenter_v2_request(&config, HttpRequestId { value: 1 }, "resource", &[],),
-            Err(WalletClientError::InvalidConfig)
+            Err(WalletClientError::InvalidProviderBaseUrl)
         );
     }
 

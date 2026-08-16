@@ -4,7 +4,6 @@
 //! host authorization. The module returns a signed BOC and its normalized
 //! external-message hash in standard padded Base64.
 
-use std::str::FromStr;
 use std::str::Utf8Error;
 
 use ton::block_tlb::{
@@ -35,8 +34,6 @@ pub(crate) enum TransferError {
     MnemonicEncoding(#[source] Utf8Error),
     #[error("wallet derivation failed")]
     WalletDerivation(#[source] WalletCryptoError),
-    #[error("destination address is invalid")]
-    InvalidDestination(#[source] TonCoreError),
     #[error("transfer amount exceeds the TON coin representation")]
     AmountOutOfRange,
     #[error("transfer expiration timestamp exceeds the wallet uint32 field")]
@@ -70,8 +67,7 @@ pub(crate) fn prepare_transfer(
 ) -> Result<PreparedTransfer, TransferError> {
     let mnemonic = std::str::from_utf8(mnemonic_bytes).map_err(TransferError::MnemonicEncoding)?;
     let wallet = derive_v5r1_wallet(mnemonic, network).map_err(TransferError::WalletDerivation)?;
-    let destination =
-        TonAddress::from_str(&request.destination).map_err(TransferError::InvalidDestination)?;
+    let destination = request.destination.as_address().clone();
 
     let (internal, send_mode) =
         build_internal_message(&destination, &request.amount, request.comment.as_deref())?;
@@ -102,7 +98,7 @@ pub(crate) fn prepare_transfer(
         .map_err(TransferError::InvalidBoc)?;
 
     Ok(PreparedTransfer {
-        operation_id: request.operation_id.clone(),
+        operation_id: request.operation_id.to_string(),
         record_id: record_id.to_owned(),
         source: source.clone(),
         destination,
@@ -129,10 +125,9 @@ pub(crate) fn prepare_transfer_emulation(
     account: &FreshSendAccount,
     valid_until: u64,
 ) -> Result<Boc, TransferError> {
-    let destination =
-        TonAddress::from_str(&request.destination).map_err(TransferError::InvalidDestination)?;
+    let destination = request.destination.as_address();
     let (internal, send_mode) =
-        build_internal_message(&destination, &request.amount, request.comment.as_deref())?;
+        build_internal_message(destination, &request.amount, request.comment.as_deref())?;
     let wallet_id = match network {
         Network::Mainnet => WALLET_V5R1_ID_DEFAULT,
         Network::Testnet => WALLET_V5R1_ID_DEFAULT_TESTNET,
@@ -239,6 +234,8 @@ pub(crate) fn derive_source(
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use ton::block_tlb::CommonMsgInfo;
 
     use super::*;

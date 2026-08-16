@@ -30,7 +30,7 @@ impl WalletClient {
                 .ok_or(WalletClientError::IdentifierExhausted)?;
             let generation = state.resolution_generation;
             let config = state.config.clone();
-            let source = config.parsed_address()?;
+            let source = config.address.as_address().clone();
             let account_request = build_toncenter_v2_request(
                 &config,
                 state.allocate_request_id()?,
@@ -49,7 +49,7 @@ impl WalletClient {
                 config.clone(),
                 source,
                 JournalKey {
-                    record_id: config.record_id,
+                    record_id: config.record_id.to_string(),
                     slot: crate::wallet::send::SEND_SLOT.to_owned(),
                 },
                 account_request,

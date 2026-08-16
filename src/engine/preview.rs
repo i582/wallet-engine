@@ -14,7 +14,6 @@ use super::http::{build_toncenter_v2_request, evaluate_response};
 use super::provider::parse_account;
 use super::send_http::{build_seqno_request, parse_seqno};
 use super::state::{OperationFamily, ensure_running};
-use super::validation::validate_send_preview;
 
 #[uniffi::export]
 impl WalletClient {
@@ -28,8 +27,6 @@ impl WalletClient {
         &self,
         request: SendPreviewRequest,
     ) -> Result<SendPreview, WalletClientError> {
-        validate_send_preview(&request)?;
-
         let (
             generation,
             config,
@@ -54,7 +51,7 @@ impl WalletClient {
                 .ok_or(WalletClientError::IdentifierExhausted)?;
             let generation = state.preview_generation;
             let config = state.config.clone();
-            let expected_source = config.parsed_address()?;
+            let expected_source = config.address.as_address().clone();
             let account_request = build_toncenter_v2_request(
                 &config,
                 state.allocate_request_id()?,

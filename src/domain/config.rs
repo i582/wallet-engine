@@ -1,12 +1,10 @@
 //! Network, provider, and wallet-client configuration.
 
 use super::ProtectedSecretRef;
+use crate::{NonEmptyString, TonAddressString};
 
 /// Default end-to-end timeout for one provider request.
 pub const DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS: u64 = 15_000;
-
-/// Largest provider timeout accepted by the engine.
-pub const MAX_PROVIDER_REQUEST_TIMEOUT_MS: u64 = 300_000;
 
 /// Default indexer-lag margin after a signed message validity window.
 pub const DEFAULT_RESOLUTION_MARGIN_SECONDS: u64 = 60;
@@ -37,8 +35,7 @@ pub struct ProviderConfig {
     /// End-to-end timeout applied to every provider request, in milliseconds.
     ///
     /// The embedding HTTP host must enforce this deadline across connection,
-    /// response headers, and response-body reads. Values must be between 1 and
-    /// [`MAX_PROVIDER_REQUEST_TIMEOUT_MS`].
+    /// response headers, and response-body reads.
     #[serde(default = "default_provider_request_timeout_ms")]
     pub request_timeout_ms: u64,
 }
@@ -68,9 +65,9 @@ impl ProviderConfig {
 #[serde(rename_all = "camelCase")]
 pub struct WalletClientConfig {
     /// The stable application record identifier for this wallet.
-    pub record_id: String,
+    pub record_id: NonEmptyString,
     /// The friendly TON address that the client reads and sends from.
-    pub address: String,
+    pub address: TonAddressString,
     /// The raw 32-byte Ed25519 public key stored in this V5R1 wallet.
     ///
     /// This value is public metadata. The engine uses it to build a faithful
@@ -89,8 +86,8 @@ pub struct WalletClientConfig {
     ///
     /// The engine adds this value to the synchronization timestamp returned by
     /// the fresh account-state request. It does not use the host device clock.
-    /// A short value can expire before the network includes the message. A long
-    /// value extends the period in which the signed message can be submitted.
+    /// A short value, including zero, can expire before the network includes
+    /// the message. A long value extends the period in which it can be submitted.
     pub send_validity_seconds: u64,
     /// Additional provider-time margin before an unseen message becomes expired.
     ///

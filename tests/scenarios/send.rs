@@ -161,26 +161,6 @@ fn provider_seqno_timeout_releases_the_preview_slot() {
 }
 
 #[test]
-fn invalid_preview_is_rejected_before_network_or_state_changes() {
-    scenario("invalid preview intent does not acquire the preview slot")
-        .given(wallet().active().balance(grams(10)).seqno(7))
-        .when(call(
-            "invalid",
-            preview_send(send().to(invalid_address()).grams(1)),
-        ))
-        .then(error("invalid", WalletClientError::InvalidSendRequest))
-        .then(protected_secret_was_not_read())
-        .then(journal_is_empty())
-        .then(no_message_was_submitted())
-        .when(call(
-            "valid",
-            preview_send(send().to(own_address()).grams(1)),
-        ))
-        .then(result("valid").previewed())
-        .run();
-}
-
-#[test]
 fn shutdown_cancels_an_in_flight_preview_account_request() {
     scenario("shutdown invalidates a preview waiting for fresh account state")
         .given(wallet().active().balance(grams(10)).seqno(7))
@@ -1201,16 +1181,6 @@ fn zero_balance_is_reported_as_insufficient_for_a_positive_transfer() {
                 requested_nanograms: decimal("1"),
             },
         ))
-        .run();
-}
-
-#[test]
-fn malformed_destination_is_rejected_before_send_state_changes() {
-    scenario("malformed destination is not a valid transfer")
-        .given(wallet().active().balance(grams(10)).seqno(7))
-        .when(call("send", send().to(invalid_address()).grams(1)))
-        .then(error("send", WalletClientError::InvalidSendRequest))
-        .then(snapshot().send_phase(SendPhase::Idle))
         .run();
 }
 

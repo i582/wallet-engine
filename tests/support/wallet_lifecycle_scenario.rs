@@ -389,7 +389,6 @@ impl WalletLifecycleRunner {
                 if descriptor.record_id == record_id
                     && descriptor.network == network
                     && descriptor.secret_ref.value == expected_ref
-                    && !descriptor.address.is_empty()
                     && descriptor.public_key.len() == 32
                 {
                     Ok(())
@@ -401,7 +400,7 @@ impl WalletLifecycleRunner {
             }
             LifecycleExpectation::DescriptorAddressIs { operation, address } => {
                 let actual = &self.descriptor(&operation)?.address;
-                if actual == &address {
+                if actual.as_str() == address {
                     Ok(())
                 } else {
                     Err(format!("expected address `{address}`, got `{actual}`"))

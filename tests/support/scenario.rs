@@ -13,10 +13,10 @@ use ton::block_tlb::{
 use ton::ton_core::cell::TonCell;
 use ton::ton_core::traits::tlb::TLB;
 use wallet_engine::{
-    AccountStatus, ActivityCursor, DomainError, HttpHostErrorKind, Network, PendingReason,
-    ProtectedSecretRef, ProviderConfig, ResourcePhase, SendAmount, SendPhase, SendPreview,
-    SendPreviewRequest, SendRequest, SendResult, WalletClient, WalletClientConfig,
-    WalletClientError, WalletHttpHost, WalletOperationOutcome, WalletUpdate,
+    AccountStatus, ActivityCursor, DomainError, HttpHostErrorKind, Network, NonEmptyString,
+    PendingReason, ProtectedSecretRef, ProviderConfig, ResourcePhase, SendAmount, SendPhase,
+    SendPreview, SendPreviewRequest, SendRequest, SendResult, TonAddressString, WalletClient,
+    WalletClientConfig, WalletClientError, WalletHttpHost, WalletOperationOutcome, WalletUpdate,
 };
 
 use super::host::{MemoryPlatformHost, PlatformCallKind, RequestKind, ScenarioHttpHost};
@@ -228,10 +228,6 @@ pub(crate) const fn own_address() -> Destination {
 
 pub(crate) fn address(value: impl Into<String>) -> Destination {
     Destination::Address(value.into())
-}
-
-pub(crate) fn invalid_address() -> Destination {
-    Destination::Address("not-a-ton-address".to_owned())
 }
 
 pub(crate) fn start(name: impl Into<String>, action: impl Into<UserAction>) -> ActionStep {
@@ -1412,8 +1408,10 @@ impl ScenarioRunner {
             provider_base_url,
         } = transport;
         let client_config = WalletClientConfig {
-            record_id: TEST_RECORD_ID.to_owned(),
-            address: test_wallet().testnet_v5_address().to_owned(),
+            record_id: NonEmptyString::try_from(TEST_RECORD_ID)
+                .expect("scenario record identifier is valid"),
+            address: TonAddressString::try_from(test_wallet().testnet_v5_address())
+                .expect("scenario wallet address is valid"),
             public_key: test_wallet().public_key(),
             local_secret_ref,
             network: Network::Testnet,
@@ -1555,6 +1553,8 @@ impl ScenarioRunner {
                             Destination::SelfWallet => self.address.clone(),
                             Destination::Address(address) => address,
                         };
+                        let destination = TonAddressString::try_from(destination)
+                            .map_err(|error| format!("invalid scenario destination: {error}"))?;
                         let request = SendPreviewRequest {
                             destination,
                             amount: action.amount,
@@ -1570,8 +1570,13 @@ impl ScenarioRunner {
                             Destination::SelfWallet => self.address.clone(),
                             Destination::Address(address) => address,
                         };
+                        let destination = TonAddressString::try_from(destination)
+                            .map_err(|error| format!("invalid scenario destination: {error}"))?;
                         let request = SendRequest {
-                            operation_id: format!("{name}-operation"),
+                            operation_id: NonEmptyString::try_from(format!("{name}-operation"))
+                                .map_err(|error| {
+                                    format!("invalid scenario operation identifier: {error}")
+                                })?,
                             destination,
                             amount: action.amount,
                             comment: action.comment,

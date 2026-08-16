@@ -161,9 +161,18 @@ pub struct DomainError {
 #[serde(rename_all = "camelCase")]
 /// An operational failure returned by [`crate::WalletClient`].
 pub enum WalletClientError {
-    /// The client configuration or operation request is invalid.
-    #[error("invalid wallet client configuration")]
-    InvalidConfig,
+    /// The configured protected-secret reference is blank.
+    #[error("the local signing secret reference is blank")]
+    InvalidLocalSecretReference,
+    /// The configured public key cannot derive a V5R1 wallet state.
+    #[error("the wallet public key cannot derive a V5R1 wallet state")]
+    InvalidWalletPublicKey,
+    /// The configured address does not belong to the public key and network.
+    #[error("the wallet address does not match the public key and network")]
+    WalletIdentityMismatch,
+    /// The configured provider base cannot be extended with an endpoint path.
+    #[error("the provider base URL cannot be used to build a request")]
+    InvalidProviderBaseUrl,
     /// The transfer request has an invalid operation ID, destination, or amount.
     #[error("invalid send request")]
     InvalidSendRequest,

@@ -64,7 +64,7 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
             format!(
                 "{}  {}",
                 network_label(descriptor.network),
-                compact(&descriptor.address, 20)
+                compact(descriptor.address.as_str(), 20)
             )
         },
     );
@@ -226,7 +226,7 @@ fn render_recovery(frame: &mut Frame<'_>, area: Rect, created: &CreatedWallet) {
         Paragraph::new(format!(
             "address  {}",
             compact(
-                &created.descriptor.address,
+                created.descriptor.address.as_str(),
                 metadata.width.saturating_sub(11) as usize
             )
         ))

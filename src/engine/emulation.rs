@@ -481,8 +481,8 @@ mod tests {
 
     fn config(base: &str) -> WalletClientConfig {
         WalletClientConfig {
-            record_id: "record".to_owned(),
-            address: ADDRESS.to_owned(),
+            record_id: crate::NonEmptyString::try_from("record").expect("valid record identifier"),
+            address: crate::TonAddressString::try_from(ADDRESS).expect("valid TON address"),
             public_key: vec![0; 32],
             local_secret_ref: None,
             network: Network::Testnet,

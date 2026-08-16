@@ -1,6 +1,8 @@
 //! Public transfer requests, phases, snapshots, and results.
 
-use crate::{Base64Hash, UnsignedDecimalString, UnsignedDecimalStringError};
+use crate::{
+    Base64Hash, NonEmptyString, TonAddressString, UnsignedDecimalString, UnsignedDecimalStringError,
+};
 
 /// The transfer value policy applied by the wallet contract.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Enum)]
@@ -32,9 +34,9 @@ impl SendAmount {
 #[serde(rename_all = "camelCase")]
 pub struct SendRequest {
     /// A unique idempotency identifier chosen by the application.
-    pub operation_id: String,
+    pub operation_id: NonEmptyString,
     /// A friendly or raw TON destination address.
-    pub destination: String,
+    pub destination: TonAddressString,
     /// The exact-value or whole-balance transfer policy.
     pub amount: SendAmount,
     /// An optional plaintext UTF-8 comment attached to the internal message.
@@ -50,7 +52,7 @@ pub struct SendRequest {
 #[serde(rename_all = "camelCase")]
 pub struct SendPreviewRequest {
     /// A friendly or raw TON destination address.
-    pub destination: String,
+    pub destination: TonAddressString,
     /// The exact-value or whole-balance transfer policy.
     pub amount: SendAmount,
     /// An optional plaintext UTF-8 comment attached to the emulated message.
@@ -63,7 +65,7 @@ pub struct SendPreviewRequest {
 #[serde(rename_all = "camelCase")]
 pub struct SendPreview {
     /// The destination that was emulated.
-    pub destination: String,
+    pub destination: TonAddressString,
     /// The transfer value policy used by the emulated message.
     pub amount: SendAmount,
     /// The optional plaintext comment encoded into the emulated message.

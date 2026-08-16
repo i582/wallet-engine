@@ -4,6 +4,7 @@ use super::{
     AccountSnapshot, ActivityCursor, ActivityItem, Network, ResourceState, SendPhase, SendSnapshot,
     WalletClientConfig,
 };
+use crate::TonAddressString;
 
 /// An immutable view of all observable state in one wallet client.
 ///
@@ -17,7 +18,7 @@ pub struct WalletSnapshot {
     /// The stable application record identifier.
     pub record_id: String,
     /// The wallet address.
-    pub address: String,
+    pub address: TonAddressString,
     /// The wallet network.
     pub network: Network,
     /// The latest successful account value, if available.
@@ -42,7 +43,7 @@ impl WalletSnapshot {
     pub(crate) fn empty(config: &WalletClientConfig) -> Self {
         Self {
             revision: 0,
-            record_id: config.record_id.clone(),
+            record_id: config.record_id.to_string(),
             address: config.address.clone(),
             network: config.network,
             account: None,

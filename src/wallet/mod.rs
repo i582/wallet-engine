@@ -7,13 +7,13 @@ pub(crate) mod crypto;
 pub(crate) mod send;
 pub(crate) mod transfer;
 
-use std::str::FromStr;
 use std::sync::Arc;
 use ton::ton_core::types::TonAddress;
 
 use self::crypto::{
     SensitiveMnemonic, derive_v5r1_public_state, derive_v5r1_wallet, generate_mnemonic,
 };
+use crate::TonAddressString;
 use crate::domain::{
     Network, ProtectedSecretHostError, ProtectedSecretHostErrorKind, ProtectedSecretRead,
     ProtectedSecretRef, ProtectedSecretStore, SecretAccessReason, bounded_diagnostic,
@@ -30,7 +30,7 @@ pub struct WalletDescriptor {
     /// The stable application record identifier.
     pub record_id: String,
     /// The derived friendly non-bounceable TON address.
-    pub address: String,
+    pub address: TonAddressString,
     /// The raw 32-byte Ed25519 public key used by the V5R1 contract.
     ///
     /// This is safe to persist. It lets the engine emulate a first deployment
@@ -227,10 +227,9 @@ impl WalletLifecycle {
         let secret = SensitiveMnemonic::from_bytes(bytes)
             .map_err(|_| WalletLifecycleError::InvalidRecoveryPhrase)?;
         let actual = derive_address(descriptor.network, &secret)?;
-        let expected = TonAddress::from_str(&descriptor.address)
-            .map_err(|_| WalletLifecycleError::InvalidRecordId)?;
+        let expected = descriptor.address.as_address();
 
-        if actual != expected {
+        if &actual != expected {
             return Err(WalletLifecycleError::SecretWalletMismatch);
         }
 
@@ -288,7 +287,8 @@ fn derive_descriptor(
 
     Ok(WalletDescriptor {
         record_id: record_id.to_owned(),
-        address: wallet.address.to_user_friendly(network),
+        address: TonAddressString::try_from(wallet.address.to_user_friendly(network))
+            .map_err(|_| WalletLifecycleError::AddressDerivationFailed)?,
         public_key: wallet.key_pair.public_key.to_vec(),
         network,
         secret_ref,
@@ -327,13 +327,11 @@ fn secret_ref_for(record_id: &str) -> ProtectedSecretRef {
 fn validate_descriptor(descriptor: &WalletDescriptor) -> Result<(), WalletLifecycleError> {
     validate_record_id(&descriptor.record_id)?;
 
-    let configured_address = TonAddress::from_str(&descriptor.address)
-        .map_err(|_| WalletLifecycleError::InvalidRecordId)?;
     let (derived_address, _) = derive_v5r1_public_state(&descriptor.public_key, descriptor.network)
         .map_err(|_| WalletLifecycleError::InvalidRecordId)?;
 
     if descriptor.secret_ref != secret_ref_for(&descriptor.record_id)
-        || configured_address != derived_address
+        || descriptor.address.as_address() != &derived_address
     {
         return Err(WalletLifecycleError::InvalidRecordId);
     }
@@ -364,29 +362,12 @@ mod tests {
     fn descriptor_must_use_the_record_bound_secret_reference() {
         let descriptor = WalletDescriptor {
             record_id: "wallet-record".to_owned(),
-            address: ADDRESS.to_owned(),
+            address: TonAddressString::try_from(ADDRESS).expect("valid TON address"),
             public_key: vec![0; 32],
             network: Network::Testnet,
             secret_ref: ProtectedSecretRef {
                 value: "wallet:another-record:mnemonic".to_owned(),
             },
-        };
-
-        assert_eq!(
-            validate_descriptor(&descriptor),
-            Err(WalletLifecycleError::InvalidRecordId)
-        );
-    }
-
-    #[test]
-    fn descriptor_rejects_an_invalid_wallet_address() {
-        let record_id = "wallet-record";
-        let descriptor = WalletDescriptor {
-            record_id: record_id.to_owned(),
-            address: "not-a-ton-address".to_owned(),
-            public_key: vec![0; 32],
-            network: Network::Testnet,
-            secret_ref: secret_ref_for(record_id),
         };
 
         assert_eq!(

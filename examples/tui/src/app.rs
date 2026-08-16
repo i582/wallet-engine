@@ -6,9 +6,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use num_bigint::BigUint;
 use wallet_engine::{
-    CreateWalletRequest, CreatedWallet, ImportWalletRequest, Network, ProviderConfig, SendAmount,
-    SendPhase, SendPreviewRequest, SendRequest, WalletClient, WalletClientConfig, WalletDescriptor,
-    WalletLifecycle, WalletSnapshot,
+    CreateWalletRequest, CreatedWallet, ImportWalletRequest, Network, NonEmptyString,
+    ProviderConfig, SendAmount, SendPhase, SendPreviewRequest, SendRequest, TonAddressString,
+    WalletClient, WalletClientConfig, WalletDescriptor, WalletLifecycle, WalletSnapshot,
 };
 
 use crate::http_host::ReqwestHttpHost;
@@ -169,7 +169,7 @@ impl App {
 
         self.status = Some(
             match arboard::Clipboard::new()
-                .and_then(|mut clipboard| clipboard.set_text(descriptor.address.clone()))
+                .and_then(|mut clipboard| clipboard.set_text(descriptor.address.to_string()))
             {
                 Ok(()) => "Address copied".to_owned(),
                 Err(error) => format!("Could not copy address: {error}"),
@@ -292,8 +292,15 @@ impl App {
             let _ = client.shutdown().await;
         }
 
+        let record_id = match NonEmptyString::try_from(descriptor.record_id.clone()) {
+            Ok(record_id) => record_id,
+            Err(error) => {
+                self.status = Some(error.to_string());
+                return;
+            }
+        };
         let config = WalletClientConfig {
-            record_id: descriptor.record_id.clone(),
+            record_id,
             address: descriptor.address.clone(),
             public_key: descriptor.public_key.clone(),
             local_secret_ref: Some(descriptor.secret_ref.clone()),
@@ -367,10 +374,18 @@ impl App {
             }
         };
 
+        let destination = match TonAddressString::try_from(self.send_destination.clone()) {
+            Ok(destination) => destination,
+            Err(error) => {
+                self.status = Some(error.to_string());
+                return;
+            }
+        };
+
         self.status = Some("Checking transfer…".to_owned());
         match client
             .preview_send(SendPreviewRequest {
-                destination: self.send_destination.clone(),
+                destination: destination.clone(),
                 amount: amount.clone(),
                 comment: None,
             })
@@ -384,9 +399,16 @@ impl App {
         };
 
         self.status = Some("Signing and submitting…".to_owned());
+        let operation_id = match NonEmptyString::try_from(new_id("send")) {
+            Ok(operation_id) => operation_id,
+            Err(error) => {
+                self.status = Some(error.to_string());
+                return;
+            }
+        };
         let request = SendRequest {
-            operation_id: new_id("send"),
-            destination: self.send_destination.clone(),
+            operation_id,
+            destination,
             amount,
             comment: None,
         };

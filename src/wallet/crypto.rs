@@ -178,6 +178,7 @@ pub(crate) fn derive_v5r1_public_state(
     let public_key =
         TonHash::from_slice(public_key).map_err(|_| WalletCryptoError::WalletConstruction)?;
     let wallet_id = v5r1_contract_wallet_id(network);
+
     let code = WalletVersion::get_code(WalletVersion::V5R1)
         .map_err(|_| WalletCryptoError::WalletConstruction)?
         .clone();
@@ -185,6 +186,7 @@ pub(crate) fn derive_v5r1_public_state(
         .to_cell()
         .map_err(|_| WalletCryptoError::WalletConstruction)?;
     let state_init = StateInit::new(code, data);
+
     let address = state_init
         .derive_address(0)
         .map_err(|_| WalletCryptoError::WalletConstruction)?;

@@ -321,8 +321,9 @@ mod tests {
 
     fn state() -> State {
         let config = WalletClientConfig {
-            record_id: "activity-tests".to_owned(),
-            address: ADDRESS.to_owned(),
+            record_id: crate::NonEmptyString::try_from("activity-tests")
+                .expect("valid record identifier"),
+            address: crate::TonAddressString::try_from(ADDRESS).expect("valid TON address"),
             public_key: vec![0; 32],
             local_secret_ref: None,
             network: Network::Testnet,
@@ -333,7 +334,7 @@ mod tests {
         State {
             snapshot: WalletSnapshot {
                 revision: 0,
-                record_id: config.record_id.clone(),
+                record_id: config.record_id.to_string(),
                 address: config.address.clone(),
                 network: config.network,
                 account: None,

@@ -5,6 +5,7 @@
 //! ambiguous submission result.
 
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use std::str::FromStr;
 use ton::ton_core::types::TonAddress;
 
@@ -559,7 +560,7 @@ impl SendWorkflow {
 
     pub(crate) fn snapshot(&self) -> SendSnapshot {
         SendSnapshot {
-            operation_id: Some(self.request.operation_id.clone()),
+            operation_id: Some(self.request.operation_id.to_string()),
             phase: self.stage.public_phase(),
             error_message: self.diagnostic.clone(),
             resolution: None,
@@ -832,12 +833,10 @@ impl SendWorkflow {
             .fresh_account
             .as_ref()
             .ok_or(SendWorkflowError::PreparedTransferMismatch)?;
-        let request_destination = TonAddress::from_str(&self.request.destination)
-            .map_err(|_| SendWorkflowError::PreparedTransferMismatch)?;
-        if prepared.operation_id != self.request.operation_id
+        if prepared.operation_id != self.request.operation_id.as_str()
             || prepared.record_id != self.record_id
             || prepared.source != self.source
-            || prepared.destination != request_destination
+            || &prepared.destination != self.request.destination.as_address()
             || prepared.amount != self.request.amount
             || prepared.comment != self.request.comment
             || prepared.seqno != account.seqno
@@ -873,19 +872,9 @@ fn validate_request(record_id: &str, request: &SendRequest) -> Result<(), SendWo
         ));
     }
 
-    if request.operation_id.trim().is_empty() || request.operation_id.len() > 128 {
+    if request.operation_id.as_str().len() > 128 {
         return Err(SendWorkflowError::InvalidRequest(
             "operation identifier is invalid".to_owned(),
-        ));
-    }
-
-    if request.destination.trim().is_empty()
-        || request.destination.len() > 128
-        || request.destination.chars().any(char::is_whitespace)
-        || TonAddress::from_str(&request.destination).is_err()
-    {
-        return Err(SendWorkflowError::InvalidRequest(
-            "destination is invalid".to_owned(),
         ));
     }
 
@@ -941,7 +930,7 @@ fn next_journal_version(current: Option<u64>) -> Result<u64, SendWorkflowError> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ProtectedSecretRef;
+    use crate::{NonEmptyString, ProtectedSecretRef, TonAddressString};
     use ton::ton_core::cell::TonCell;
 
     const RAW_SOURCE: &str = "0:1111111111111111111111111111111111111111111111111111111111111111";
@@ -950,32 +939,17 @@ mod tests {
     const RAW_OTHER: &str = "0:3333333333333333333333333333333333333333333333333333333333333333";
 
     #[test]
-    fn request_validation_rejects_every_invalid_public_field() {
+    fn workflow_rejects_an_invalid_record_and_oversized_operation() {
         let cases = [
             ("", request(), "wallet record identity is empty"),
             (
                 "record",
                 SendRequest {
-                    operation_id: String::new(),
+                    operation_id: NonEmptyString::try_from("x".repeat(129))
+                        .expect("long operation remains non-empty"),
                     ..request()
                 },
                 "operation identifier is invalid",
-            ),
-            (
-                "record",
-                SendRequest {
-                    operation_id: "x".repeat(129),
-                    ..request()
-                },
-                "operation identifier is invalid",
-            ),
-            (
-                "record",
-                SendRequest {
-                    destination: "not an address".to_owned(),
-                    ..request()
-                },
-                "destination is invalid",
             ),
         ];
 
@@ -1252,8 +1226,9 @@ mod tests {
 
     fn request() -> SendRequest {
         SendRequest {
-            operation_id: "operation".to_owned(),
-            destination: RAW_DESTINATION.to_owned(),
+            operation_id: NonEmptyString::try_from("operation").expect("valid operation"),
+            destination: TonAddressString::try_from(RAW_DESTINATION)
+                .expect("valid destination address"),
             amount: SendAmount::exact("1").expect("valid exact amount"),
             comment: None,
         }
