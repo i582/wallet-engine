@@ -26,4 +26,5 @@ unsafe_code = "deny"
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 unwrap_used = "deny"
+expect_used = "deny"
 missing_errors_doc = "allow"

@@ -9,3 +9,6 @@ publish = false
 
 [dependencies]
 uniffi = { version = "=0.32.0", features = ["cli"] }
+
+[lints.clippy]
+expect_used = "deny"

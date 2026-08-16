@@ -1,4 +1,5 @@
 allow-unwrap-in-tests = true
+allow-expect-in-tests = true
 
 disallowed-methods = [
   { path = "std::fs::canonicalize", reason = "use dunce::canonicalize" },

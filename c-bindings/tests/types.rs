@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 use std::mem::size_of;
 
 use wallet_engine::Network;

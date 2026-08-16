@@ -1,4 +1,5 @@
 #![allow(unsafe_code)]
+#![allow(clippy::expect_used)]
 
 use std::{
     ffi::c_void,

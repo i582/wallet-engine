@@ -42,6 +42,7 @@ nursery = { level = "warn", priority = -1 }
 perf = { level = "warn", priority = -1 }
 
 unwrap_used = "deny"
+expect_used = "deny"
 undocumented_unsafe_blocks = "deny"
 
 elidable_lifetime_names = "warn"

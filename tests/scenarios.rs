@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 mod support;
 
 #[path = "scenarios/lifecycle.rs"]

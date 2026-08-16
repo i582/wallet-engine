@@ -29,4 +29,5 @@ perf = { level = "warn", priority = -1 }
 doc_markdown = "warn"
 manual_let_else = "warn"
 unwrap_used = "deny"
+expect_used = "deny"
 undocumented_unsafe_blocks = "deny"

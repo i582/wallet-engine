@@ -1,4 +1,5 @@
 #![allow(unsafe_code)]
+#![allow(clippy::expect_used)]
 
 use wallet_engine::{
     CreateWalletRequest, CreatedWallet, Network, ProtectedSecretHostErrorKind, ProtectedSecretRef,
