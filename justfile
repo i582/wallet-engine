@@ -191,6 +191,8 @@ example-swift-build-macos: bindings-swift
 example-swift-build-ios: bindings-swift
     xcodebuild -project examples/swift/WalletEngineApp.xcodeproj -scheme WalletEngineApp -configuration Debug -destination 'generic/platform=iOS Simulator' -derivedDataPath target/swift-example-ios ARCHS=arm64 ONLY_ACTIVE_ARCH=YES build
 
+swift-check: example-swift-build-macos example-swift-build-ios
+
 example-swift-open: bindings-swift
     open examples/swift/WalletEngineApp.xcodeproj
 
