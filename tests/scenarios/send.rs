@@ -75,7 +75,7 @@ fn provider_account_failure_releases_the_preview_slot() {
             "failed",
             preview_send(send().to(own_address()).grams(1)),
         ))
-        .then(error("failed", send_failed("HTTP 503")))
+        .then(error("failed", send_preview_failed("HTTP 503")))
         .then(protected_secret_was_not_read())
         .then(journal_is_empty())
         .then(no_message_was_submitted())
@@ -97,7 +97,10 @@ fn provider_seqno_failure_releases_the_preview_slot() {
             "failed",
             preview_send(send().to(own_address()).grams(1)),
         ))
-        .then(error("failed", send_failed("scripted seqno failure")))
+        .then(error(
+            "failed",
+            send_preview_failed("scripted seqno failure"),
+        ))
         .then(protected_secret_was_not_read())
         .then(journal_is_empty())
         .then(no_message_was_submitted())
@@ -121,7 +124,7 @@ fn provider_account_timeout_releases_the_preview_slot() {
         ))
         .then(error(
             "failed",
-            send_failed("scripted account transport failure"),
+            send_preview_failed("scripted account transport failure"),
         ))
         .then(protected_secret_was_not_read())
         .then(journal_is_empty())
@@ -146,7 +149,7 @@ fn provider_seqno_timeout_releases_the_preview_slot() {
         ))
         .then(error(
             "failed",
-            send_failed("scripted seqno transport failure"),
+            send_preview_failed("scripted seqno transport failure"),
         ))
         .then(protected_secret_was_not_read())
         .then(journal_is_empty())
@@ -275,7 +278,10 @@ fn preview_requires_provider_synchronization_time() {
             "preview",
             preview_send(send().to(own_address()).grams(1)),
         ))
-        .then(error("preview", send_failed("missing field `sync_utime`")))
+        .then(error(
+            "preview",
+            send_preview_failed("missing field `sync_utime`"),
+        ))
         .then(protected_secret_was_not_read())
         .then(journal_is_empty())
         .then(no_message_was_submitted())
@@ -298,8 +304,8 @@ fn preview_provider_time_must_fit_the_wallet_timestamp() {
         ))
         .then(error(
             "preview",
-            WalletClientError::EmulationFailed {
-                diagnostic: "failed to prepare emulation: transfer expiration timestamp exceeds the wallet uint32 field".to_owned(),
+            WalletClientError::SendPreviewFailed {
+                diagnostic: "failed to prepare preview: transfer expiration timestamp exceeds the wallet uint32 field".to_owned(),
             },
         ))
         .then(protected_secret_was_not_read())
@@ -324,7 +330,7 @@ fn preview_expiration_must_not_overflow_u64() {
         ))
         .then(error(
             "preview",
-            send_failed("transfer expiration timestamp overflow"),
+            send_preview_failed("transfer expiration timestamp overflow"),
         ))
         .then(protected_secret_was_not_read())
         .then(journal_is_empty())

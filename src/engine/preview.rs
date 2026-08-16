@@ -80,7 +80,7 @@ impl WalletClient {
             .map_err(|error| {
                 self.preview_error(
                     generation,
-                    WalletClientError::SendFailed {
+                    WalletClientError::SendPreviewFailed {
                         diagnostic: bounded_diagnostic(error.developer_message),
                     },
                 )
@@ -108,7 +108,7 @@ impl WalletClient {
                 .map_err(|error| {
                     self.preview_error(
                         generation,
-                        WalletClientError::SendFailed {
+                        WalletClientError::SendPreviewFailed {
                             diagnostic: bounded_diagnostic(error.developer_message),
                         },
                     )
@@ -128,7 +128,7 @@ impl WalletClient {
             .ok_or_else(|| {
                 self.preview_error(
                     generation,
-                    WalletClientError::SendFailed {
+                    WalletClientError::SendPreviewFailed {
                         diagnostic: "transfer expiration timestamp overflow".to_owned(),
                     },
                 )
@@ -150,8 +150,8 @@ impl WalletClient {
         .map_err(|error| {
             self.preview_error(
                 generation,
-                WalletClientError::EmulationFailed {
-                    diagnostic: bounded_diagnostic(format!("failed to prepare emulation: {error}")),
+                WalletClientError::SendPreviewFailed {
+                    diagnostic: bounded_diagnostic(format!("failed to prepare preview: {error}")),
                 },
             )
         })?;
@@ -160,7 +160,7 @@ impl WalletClient {
             .map_err(|error| {
                 self.preview_error(
                     generation,
-                    WalletClientError::EmulationFailed {
+                    WalletClientError::SendPreviewFailed {
                         diagnostic: bounded_diagnostic(error.to_string()),
                     },
                 )

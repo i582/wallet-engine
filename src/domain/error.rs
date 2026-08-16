@@ -236,6 +236,12 @@ pub enum WalletClientError {
     /// The protected secret cannot be decoded as a valid wallet recovery phrase.
     #[error("the protected wallet secret is invalid")]
     InvalidProtectedSecret,
+    /// A preview failed while loading fresh wallet state or building its fake-signed message.
+    #[error("send preview failed: {diagnostic}")]
+    SendPreviewFailed {
+        /// A bounded developer-facing explanation that contains no secret material.
+        diagnostic: String,
+    },
     /// Toncenter could not emulate the signed transfer before submission.
     #[error("transfer emulation failed: {diagnostic}")]
     EmulationFailed {

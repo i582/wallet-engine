@@ -325,6 +325,12 @@ pub(crate) fn send_failed(diagnostic: impl Into<String>) -> WalletClientError {
     }
 }
 
+pub(crate) fn send_preview_failed(diagnostic: impl Into<String>) -> WalletClientError {
+    WalletClientError::SendPreviewFailed {
+        diagnostic: diagnostic.into(),
+    }
+}
+
 pub(crate) fn result(name: impl Into<String>) -> ResultExpectation {
     ResultExpectation { name: name.into() }
 }
