@@ -187,6 +187,8 @@ example-tui-clippy:
 example-tui-test:
     cargo nextest run --locked --manifest-path examples/tui/Cargo.toml {{ NEXTEST_CONFIG_ARGS }} {{ NEXTEST_PROFILE_ARGS }}
 
+tui-check: example-tui-fmt-check example-tui-check example-tui-clippy example-tui-test
+
 example-swift-build-macos: bindings-swift
     xcodebuild -project examples/swift/WalletEngineApp.xcodeproj -scheme WalletEngineApp -configuration Debug -destination 'platform=macOS,arch=arm64' -derivedDataPath target/swift-example CODE_SIGNING_ALLOWED=NO build
 
@@ -220,9 +222,11 @@ check-deny:
 check-deps:
     cargo shear --deny-warnings
 
-ci: fmt-check check-build clippy test check-wasm check-ios-simulator bindings-swift-check bindings-kotlin-check bindings-wasm-check web-fmt-check web-lint web-build web-test example-web-fmt-check example-web-lint example-web-build example-web-test example-tui-fmt-check example-tui-check example-tui-clippy example-tui-test
+deps-check: check-deny check-deps
 
-check: ci check-deny
+ci: fmt-check check-build clippy test check-wasm check-ios-simulator bindings-swift-check bindings-kotlin-check bindings-wasm-check web-fmt-check web-lint web-build web-test example-web-fmt-check example-web-lint example-web-build example-web-test tui-check
+
+check: ci deps-check
 
 install-tools:
     cargo install cargo-shear --version 1.13.1 --locked

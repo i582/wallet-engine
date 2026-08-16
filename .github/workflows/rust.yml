@@ -46,10 +46,10 @@ jobs:
       - name: Install Rust targets
         run: rustup target add wasm32-unknown-unknown
 
-      - name: Install just
+      - name: Install quality tools
         uses: taiki-e/install-action@15449e3094499af05d8d964a1c884208e4b8b595 # v2.81.11
         with:
-          tool: just@1.52.0
+          tool: just@1.52.0,cargo-deny@0.19.8,cargo-shear@1.13.1
           fallback: none
 
       - name: Check formatting
@@ -60,6 +60,9 @@ jobs:
 
       - name: Check all Rust targets
         run: just check-build
+
+      - name: Check dependencies
+        run: just deps-check
 
   tests:
     name: Tests
@@ -102,3 +105,6 @@ jobs:
 
       - name: Run tests
         run: just test-rust
+
+      - name: Check TUI example
+        run: just tui-check
