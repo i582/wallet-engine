@@ -4,7 +4,11 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use serde_json::{Map, Value};
 use thiserror::Error;
 
-use crate::{Base64Value, DecimalString, NetworkId, NonEmptyVec};
+use crate::{
+    Base64Value, DecimalString, Ed25519PublicKey, Ed25519Signature, NetworkId, NonEmptyVec,
+    RawAccountAddress, SignDataSigningPayload, SignatureDomain, SigningError,
+    sign_data_signing_hash, verify_signature,
+};
 
 /// Extra-currency identifier to non-negative elementary-unit amount.
 pub type ExtraCurrencies = BTreeMap<u32, DecimalString>;
@@ -492,15 +496,64 @@ pub struct SignMessageResult {
 #[serde(deny_unknown_fields)]
 pub struct SignDataResult {
     /// Base64 Ed25519 signature.
-    pub signature: Base64Value,
+    pub signature: Ed25519Signature,
     /// Raw wallet address.
-    pub address: String,
+    pub address: RawAccountAddress,
     /// Unix signing time in seconds.
     pub timestamp: u64,
     /// Application domain bound into the signature.
     pub domain: String,
     /// Exact payload echoed from the request.
     pub payload: SignDataPayload,
+}
+
+impl SignDataResult {
+    /// Reconstructs the exact digest represented by this response.
+    pub fn signing_hash(&self) -> Result<[u8; 32], SigningError> {
+        match &self.payload {
+            SignDataPayload::Text { text, .. } => sign_data_signing_hash(
+                &self.address,
+                &self.domain,
+                self.timestamp,
+                SignDataSigningPayload::Text(text),
+            ),
+            SignDataPayload::Binary { bytes, .. } => {
+                let decoded = bytes
+                    .decode()
+                    .map_err(|_| SigningError::InvalidBase64Payload)?;
+                sign_data_signing_hash(
+                    &self.address,
+                    &self.domain,
+                    self.timestamp,
+                    SignDataSigningPayload::Binary(&decoded),
+                )
+            }
+            SignDataPayload::Cell { schema, cell, .. } => {
+                let decoded = cell
+                    .decode()
+                    .map_err(|_| SigningError::InvalidBase64Payload)?;
+                sign_data_signing_hash(
+                    &self.address,
+                    &self.domain,
+                    self.timestamp,
+                    SignDataSigningPayload::Cell {
+                        schema,
+                        boc: &decoded,
+                    },
+                )
+            }
+        }
+    }
+
+    /// Verifies this `signData` response with the trusted account public key.
+    pub fn verify(&self, public_key: &Ed25519PublicKey) -> Result<bool, SigningError> {
+        verify_signature(
+            &self.signing_hash()?,
+            &self.signature,
+            public_key,
+            SignatureDomain::Empty,
+        )
+    }
 }
 
 /// Method-specific response after correlation and payload validation.
@@ -610,6 +663,8 @@ fn validate_success_result(
 
 #[cfg(test)]
 mod tests {
+    use ed25519_dalek::{Signer as _, SigningKey};
+
     use super::*;
 
     #[test]
@@ -688,6 +743,34 @@ mod tests {
             wrong_shape.validate_for(&request),
             Err(ResponseValidationError::InvalidResult)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn sign_data_result_verifies_the_exact_echoed_payload() -> Result<(), SigningError> {
+        let signing_key = SigningKey::from_bytes(&[0x55; 32]);
+        let public_key = Ed25519PublicKey::from_bytes(signing_key.verifying_key().to_bytes());
+        let mut result = SignDataResult {
+            signature: Ed25519Signature::from_bytes([0_u8; 64]),
+            address: RawAccountAddress::new(0, [0x44; 32]),
+            timestamp: 1_700_000_000,
+            domain: "example.com".to_owned(),
+            payload: SignDataPayload::Text {
+                text: "Approve login".to_owned(),
+                network: None,
+                from: None,
+            },
+        };
+        result.signature =
+            Ed25519Signature::from_bytes(signing_key.sign(&result.signing_hash()?).to_bytes());
+
+        assert!(result.verify(&public_key)?);
+        result.payload = SignDataPayload::Text {
+            text: "Approve transfer".to_owned(),
+            network: None,
+            from: None,
+        };
+        assert!(!result.verify(&public_key)?);
         Ok(())
     }
 }

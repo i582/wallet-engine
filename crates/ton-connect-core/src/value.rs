@@ -10,12 +10,15 @@ pub enum ValueError {
     /// A bridge client identifier was not 32 lowercase-hex bytes.
     #[error("client id must be exactly 64 lowercase hexadecimal characters")]
     InvalidClientId,
-    /// A network ID was not a stringified signed decimal integer.
-    #[error("network id must be a stringified signed decimal integer")]
+    /// A network ID was not a canonical stringified signed 32-bit integer.
+    #[error("network id must be a canonical stringified signed 32-bit integer")]
     InvalidNetworkId,
     /// A decimal string contained no digits or a non-decimal character.
     #[error("decimal string must contain one or more ASCII digits")]
     InvalidDecimalString,
+    /// A value was not a canonical decimal string in the `u64` range.
+    #[error("value must be a canonical decimal string in the unsigned 64-bit range")]
+    InvalidUint64String,
     /// A value was not valid standard or URL-safe base64.
     #[error("value must be valid standard or URL-safe base64")]
     InvalidBase64,
@@ -180,8 +183,9 @@ macro_rules! validated_string {
 }
 
 fn valid_network_id(value: &str) -> bool {
-    let digits = value.strip_prefix('-').unwrap_or(value);
-    !digits.is_empty() && digits.as_bytes().iter().all(u8::is_ascii_digit)
+    value
+        .parse::<i32>()
+        .is_ok_and(|parsed| parsed.to_string() == value)
 }
 
 fn valid_decimal(value: &str) -> bool {
@@ -231,8 +235,65 @@ validated_string!(
     NetworkId,
     valid_network_id,
     ValueError::InvalidNetworkId,
-    "A TON network `global_id` encoded as a signed decimal string."
+    "A TON signed 32-bit network `global_id` encoded as a canonical decimal string."
 );
+
+/// An unsigned 64-bit integer serialized as a canonical decimal string.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct Uint64String(u64);
+
+impl Uint64String {
+    /// Returns the parsed integer value.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl From<u64> for Uint64String {
+    fn from(value: u64) -> Self {
+        Self(value)
+    }
+}
+
+impl TryFrom<&str> for Uint64String {
+    type Error = ValueError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        let parsed = value
+            .parse::<u64>()
+            .map_err(|_| ValueError::InvalidUint64String)?;
+        if parsed.to_string() != value {
+            return Err(ValueError::InvalidUint64String);
+        }
+        Ok(Self(parsed))
+    }
+}
+
+impl fmt::Display for Uint64String {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
+
+impl Serialize for Uint64String {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for Uint64String {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::try_from(value.as_str()).map_err(de::Error::custom)
+    }
+}
 validated_string!(
     DecimalString,
     valid_decimal,
@@ -357,6 +418,8 @@ mod tests {
         );
         assert!(NetworkId::try_from("+3").is_err());
         assert!(NetworkId::try_from("-").is_err());
+        assert!(NetworkId::try_from("00").is_err());
+        assert!(NetworkId::try_from("2147483648").is_err());
     }
 
     #[test]

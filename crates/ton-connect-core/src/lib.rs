@@ -14,6 +14,8 @@ mod embedded;
 mod manifest;
 mod rpc;
 mod session;
+mod session_state;
+mod signing;
 mod value;
 
 pub use bridge::BridgeMessage;
@@ -40,8 +42,18 @@ pub use rpc::{
 pub use session::{
     PersistedSessionKeyPair, SessionCrypto, SessionCryptoError, SessionKeyPairError,
 };
+pub use session_state::{
+    PreparedAppRequest, PreparedWalletEvent, RpcRequestId, SessionStateError, WalletEventKind,
+    WalletSessionPhase, WalletSessionState,
+};
+pub use signing::{
+    Ed25519PublicKey, Ed25519Signature, RawAccountAddress, SignDataSigningPayload, SignatureDomain,
+    SigningError, sign_data_signing_hash, ton_proof_message, ton_proof_signing_hash,
+    verify_signature,
+};
 pub use value::{
-    Base64Value, ClientId, DecimalString, HttpsUrl, NetworkId, NonEmptyVec, TraceId, ValueError,
+    Base64Value, ClientId, DecimalString, HttpsUrl, NetworkId, NonEmptyVec, TraceId, Uint64String,
+    ValueError,
 };
 
 /// TON Connect transport protocol version implemented by this crate.

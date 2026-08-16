@@ -4,7 +4,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use serde_json::Value;
 
 use crate::{
-    Base64Value, HttpsUrl, NetworkId, NonEmptyVec, WalletResponse, rpc::numeric_enum_serde,
+    Base64Value, Ed25519PublicKey, Ed25519Signature, HttpsUrl, NetworkId, NonEmptyVec,
+    RawAccountAddress, SignatureDomain, SigningError, Uint64String, WalletResponse,
+    rpc::numeric_enum_serde, ton_proof_signing_hash, verify_signature,
 };
 
 /// Request for the connected wallet address and optional target network hint.
@@ -275,7 +277,7 @@ pub struct TonAddressItemReply {
     #[serde(rename = "name")]
     name: TonAddressReplyName,
     /// Raw TON address (`workchain:hex`).
-    pub address: String,
+    pub address: RawAccountAddress,
     /// Connected network global ID.
     pub network: NetworkId,
     /// Base64 wallet `StateInit` `BoC`.
@@ -283,7 +285,7 @@ pub struct TonAddressItemReply {
     pub wallet_state_init: Base64Value,
     /// Untrusted wallet public key as hex without `0x`.
     #[serde(rename = "publicKey")]
-    pub public_key: String,
+    pub public_key: Ed25519PublicKey,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -296,10 +298,10 @@ impl TonAddressItemReply {
     /// Creates a canonical `ton_addr` reply.
     #[must_use]
     pub fn new(
-        address: String,
+        address: RawAccountAddress,
         network: NetworkId,
         wallet_state_init: Base64Value,
-        public_key: String,
+        public_key: Ed25519PublicKey,
     ) -> Self {
         Self {
             name: TonAddressReplyName::TonAddr,
@@ -312,13 +314,63 @@ impl TonAddressItemReply {
 }
 
 /// dApp domain bound into a `ton_proof` signature.
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TonProofDomain {
     /// UTF-8 byte length of `value`.
-    pub length_bytes: u32,
+    length_bytes: u32,
     /// Domain name without scheme or encoding.
-    pub value: String,
+    value: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawTonProofDomain {
+    length_bytes: u32,
+    value: String,
+}
+
+impl TonProofDomain {
+    /// Creates a domain whose declared wire length matches its UTF-8 bytes.
+    pub fn new(value: String) -> Result<Self, SigningError> {
+        let length_bytes = u32::try_from(value.len()).map_err(|_| SigningError::LengthOverflow)?;
+        Ok(Self {
+            length_bytes,
+            value,
+        })
+    }
+
+    /// Returns the validated UTF-8 byte length carried on the wire.
+    #[must_use]
+    pub const fn length_bytes(&self) -> u32 {
+        self.length_bytes
+    }
+
+    /// Returns the exact domain name bound into the signature.
+    #[must_use]
+    pub fn value(&self) -> &str {
+        &self.value
+    }
+}
+
+impl<'de> Deserialize<'de> for TonProofDomain {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = RawTonProofDomain::deserialize(deserializer)?;
+        let actual = u32::try_from(raw.value.len())
+            .map_err(|_| de::Error::custom("ton_proof domain exceeds uint32 length"))?;
+        if actual != raw.length_bytes {
+            return Err(de::Error::custom(
+                "ton_proof domain lengthBytes does not match UTF-8 byte length",
+            ));
+        }
+        Ok(Self {
+            length_bytes: raw.length_bytes,
+            value: raw.value,
+        })
+    }
 }
 
 /// Wallet ownership proof returned during connect.
@@ -326,13 +378,40 @@ pub struct TonProofDomain {
 #[serde(deny_unknown_fields)]
 pub struct TonProof {
     /// Unix signing time in seconds.
-    pub timestamp: u64,
+    pub timestamp: Uint64String,
     /// Bound application domain.
     pub domain: TonProofDomain,
     /// Original dApp challenge.
     pub payload: String,
     /// Base64 Ed25519 signature.
-    pub signature: Base64Value,
+    pub signature: Ed25519Signature,
+}
+
+impl TonProof {
+    /// Reconstructs the digest bound by this proof.
+    pub fn signing_hash(&self, address: &RawAccountAddress) -> Result<[u8; 32], SigningError> {
+        ton_proof_signing_hash(
+            address,
+            self.domain.value(),
+            self.timestamp.get(),
+            &self.payload,
+        )
+    }
+
+    /// Verifies the proof signature with the connected account's trusted key.
+    pub fn verify(
+        &self,
+        address: &RawAccountAddress,
+        public_key: &Ed25519PublicKey,
+        network: &NetworkId,
+    ) -> Result<bool, SigningError> {
+        verify_signature(
+            &self.signing_hash(address)?,
+            &self.signature,
+            public_key,
+            SignatureDomain::for_network(network)?,
+        )
+    }
 }
 
 /// Successful `ton_proof` item reply.
@@ -515,6 +594,8 @@ pub enum ConnectEvent {
 
 #[cfg(test)]
 mod tests {
+    use ed25519_dalek::{Signer as _, SigningKey};
+
     use super::*;
 
     #[test]
@@ -555,5 +636,60 @@ mod tests {
             r#"{"event":"connect_error","id":1,"payload":{"code":1,"message":"bad"},"extra":true}"#;
         assert!(serde_json::from_str::<ConnectEvent>(negative).is_err());
         assert!(serde_json::from_str::<ConnectEvent>(extra).is_err());
+    }
+
+    #[test]
+    fn ton_proof_uses_string_timestamp_and_checks_domain_byte_length() -> Result<(), SigningError> {
+        let proof = TonProof {
+            timestamp: Uint64String::from(1_700_000_000),
+            domain: TonProofDomain::new("пример.рф".to_owned())?,
+            payload: "nonce".to_owned(),
+            signature: Ed25519Signature::from_bytes([0_u8; 64]),
+        };
+        let encoded = serde_json::to_string(&proof);
+        assert!(
+            encoded
+                .as_ref()
+                .is_ok_and(|json| json.contains(r#""timestamp":"1700000000""#))
+        );
+
+        let numeric_timestamp = r#"{
+            "timestamp":1700000000,
+            "domain":{"lengthBytes":11,"value":"example.com"},
+            "payload":"nonce",
+            "signature":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+        }"#;
+        let wrong_utf8_length = r#"{
+            "timestamp":"1700000000",
+            "domain":{"lengthBytes":9,"value":"пример.рф"},
+            "payload":"nonce",
+            "signature":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+        }"#;
+        assert!(serde_json::from_str::<TonProof>(numeric_timestamp).is_err());
+        assert!(serde_json::from_str::<TonProof>(wrong_utf8_length).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn ton_proof_wrapper_reconstructs_and_verifies_the_signed_fields()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let address = RawAccountAddress::new(0, [0x22; 32]);
+        let signing_key = SigningKey::from_bytes(&[0x33; 32]);
+        let public_key = Ed25519PublicKey::from_bytes(signing_key.verifying_key().to_bytes());
+        let mut proof = TonProof {
+            timestamp: Uint64String::from(1_700_000_000),
+            domain: TonProofDomain::new("example.com".to_owned())?,
+            payload: "single-use-nonce".to_owned(),
+            signature: Ed25519Signature::from_bytes([0_u8; 64]),
+        };
+        proof.signature = Ed25519Signature::from_bytes(
+            signing_key.sign(&proof.signing_hash(&address)?).to_bytes(),
+        );
+        let mainnet = NetworkId::try_from("-239")?;
+
+        assert!(proof.verify(&address, &public_key, &mainnet)?);
+        proof.payload.push_str("-changed");
+        assert!(!proof.verify(&address, &public_key, &mainnet)?);
+        Ok(())
     }
 }

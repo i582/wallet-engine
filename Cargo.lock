@@ -1906,13 +1906,17 @@ name = "ton-connect-core"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "crc",
  "crypto_box",
+ "ed25519-dalek",
  "getrandom 0.3.4",
  "hex",
  "proptest",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
+ "ton_core",
  "url",
  "zeroize",
 ]
