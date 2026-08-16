@@ -1,0 +1,66 @@
+name: Mutation tests
+
+on:
+  schedule:
+    - cron: "17 3 * * 0"
+  workflow_dispatch:
+
+permissions: { }
+
+concurrency:
+  group: mutants-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+  WALLET_ENGINE_SCENARIO_TIMEOUT_SECS: "300"
+
+jobs:
+  mutants:
+    name: Mutants shard ${{ matrix.shard }}/4
+    runs-on: ubicloud-standard-8-ubuntu-2204
+    timeout-minutes: 180
+
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          key: mutants-${{ runner.os }}-${{ runner.arch }}-${{ matrix.shard }}
+          save-if: ${{ github.ref == 'refs/heads/master' }}
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install
+
+      - name: Install mutation test tools
+        uses: taiki-e/install-action@15449e3094499af05d8d964a1c884208e4b8b595 # v2.81.11
+        with:
+          tool: just@1.52.0,cargo-mutants@27.1.0,nextest@0.9.137
+          fallback: none
+
+      - name: Run mutation tests
+        env:
+          MUTANTS_SHARD: ${{ matrix.shard }}/4
+        run: just mutants --in-place --shard "$MUTANTS_SHARD"
+
+      - name: Upload mutation test report
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: mutants-shard-${{ matrix.shard }}-of-4
+          path: mutants.out
+          if-no-files-found: warn
+          retention-days: 14

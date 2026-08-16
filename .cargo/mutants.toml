@@ -1,0 +1,16 @@
+# Keep mutation testing aligned with the regular Rust test runner. Nextest stops
+# after the first failing test, which avoids running the rest of the suite once a
+# mutation has already been caught.
+test_tool = "nextest"
+
+# Do not copy local build products, reports, IDE state, or other files ignored
+# by the repository into each mutation worker.
+gitignore = true
+
+# Mutation builds must use the dependency versions committed in Cargo.lock.
+additional_cargo_args = ["--locked", "--profile=mutants"]
+
+# Acton localnet scenarios are intentionally excluded. Starting and mining a
+# fresh chain for every mutation makes the run prohibitively expensive; those
+# scenarios remain part of the regular test workflow.
+additional_cargo_test_args = ["-E", "not test(/::localnet_/)"]

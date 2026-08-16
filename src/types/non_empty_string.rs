@@ -119,6 +119,15 @@ mod tests {
     }
 
     #[test]
+    fn borrowed_and_formatted_views_preserve_the_validated_text() {
+        let value = NonEmptyString::try_from(" operation ").expect("non-blank text is valid");
+
+        assert_eq!(AsRef::<str>::as_ref(&value), " operation ");
+        assert_eq!(&*value, " operation ");
+        assert_eq!(value.to_string(), " operation ");
+    }
+
+    #[test]
     fn uniffi_rejects_a_blank_client_value_while_lifting() {
         let ffi_value = <String as Lower<crate::UniFfiTag>>::lower("   ".to_owned());
         let result = <NonEmptyString as Lift<crate::UniFfiTag>>::try_lift(ffi_value);

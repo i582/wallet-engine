@@ -34,3 +34,5 @@ wallet_engine_wallets.tsv
 # Coverage and reports
 coverage/
 lcov.info
+mutants.out/
+mutants.out.old/

@@ -566,7 +566,7 @@ fn exact_transfer_keeps_mode_3() {
 }
 
 #[test]
-fn plaintext_comment_is_submitted_and_executed_on_localnet() {
+fn localnet_plaintext_comment_is_submitted_and_executed() {
     let comment = "Привет, TON — localnet!";
 
     scenario("a plaintext comment survives signing and localnet submission")
@@ -593,7 +593,7 @@ fn all_balance_transfer_uses_mode_130() {
 }
 
 #[test]
-fn all_balance_transfer_executes_on_localnet() {
+fn localnet_all_balance_transfer_executes() {
     scenario("send all deploys the wallet and transfers its remaining balance")
         .given(network().localnet())
         .given(wallet().uninitialized().balance(grams(10)))
@@ -895,7 +895,7 @@ fn uninitialized_wallet_can_deploy_and_send() {
 }
 
 #[test]
-fn first_transfer_deploys_the_wallet_on_localnet_and_appears_in_history() {
+fn localnet_first_transfer_deploys_the_wallet_and_appears_in_history() {
     scenario("first transfer activates an uninitialized wallet on localnet")
         .given(network().localnet())
         .given(wallet().uninitialized().balance(grams(10)))
@@ -924,7 +924,7 @@ fn first_transfer_deploys_the_wallet_on_localnet_and_appears_in_history() {
 }
 
 #[test]
-fn second_transfer_uses_the_advanced_wallet_seqno_on_localnet() {
+fn localnet_second_transfer_uses_the_advanced_wallet_seqno() {
     scenario("confirmed transfer advances seqno for the next send")
         .given(network().localnet())
         .given(wallet().uninitialized().balance(grams(10)))
@@ -943,7 +943,7 @@ fn second_transfer_uses_the_advanced_wallet_seqno_on_localnet() {
 }
 
 #[test]
-fn send_uses_fresh_seqno_after_an_external_same_key_transfer() {
+fn localnet_send_uses_fresh_seqno_after_an_external_same_key_transfer() {
     scenario("send reads seqno after another client spends with the same key")
         .given(network().localnet())
         .given(wallet().uninitialized().balance(grams(10)))
@@ -973,7 +973,7 @@ fn send_uses_fresh_seqno_after_an_external_same_key_transfer() {
 }
 
 #[test]
-fn send_rereads_seqno_after_an_external_transfer_follows_fresh_account() {
+fn localnet_send_rereads_seqno_after_an_external_transfer_follows_fresh_account() {
     scenario("send reads seqno after fresh account when another client spends")
         .given(network().localnet())
         .given(wallet().uninitialized().balance(grams(10)))
@@ -995,7 +995,7 @@ fn send_rereads_seqno_after_an_external_transfer_follows_fresh_account() {
 }
 
 #[test]
-fn send_ignores_a_successful_preview_seqno_after_an_external_transfer() {
+fn localnet_send_ignores_a_successful_preview_seqno_after_an_external_transfer() {
     scenario("confirmed send rebuilds a preview after another client spends")
         .given(network().localnet())
         .given(wallet().uninitialized().balance(grams(10)))
@@ -1025,7 +1025,7 @@ fn send_ignores_a_successful_preview_seqno_after_an_external_transfer() {
 }
 
 #[test]
-fn external_transfer_while_active_wallet_emulation_is_pending_is_not_misclassified() {
+fn localnet_external_transfer_while_active_wallet_emulation_is_pending_is_not_misclassified() {
     scenario("an external spend makes a pending active-wallet emulation stale")
         .given(network().localnet())
         .given(wallet().uninitialized().balance(grams(10)))
@@ -1063,7 +1063,7 @@ fn external_transfer_while_active_wallet_emulation_is_pending_is_not_misclassifi
 }
 
 #[test]
-fn external_deployment_while_first_send_emulation_is_pending_is_not_misclassified() {
+fn localnet_external_deployment_while_first_send_emulation_is_pending_is_not_misclassified() {
     scenario("an external deployment invalidates a pending StateInit emulation")
         .given(network().localnet())
         .given(wallet().uninitialized().balance(grams(10)))
@@ -1093,7 +1093,7 @@ fn external_deployment_while_first_send_emulation_is_pending_is_not_misclassifie
 }
 
 #[test]
-fn replaying_the_exact_external_message_executes_only_once_on_localnet() {
+fn localnet_replaying_the_exact_external_message_executes_only_once() {
     scenario("the chain deduplicates an exact signed external message replay")
         .given(network().localnet())
         .given(wallet().uninitialized().balance(grams(10)))
@@ -1115,7 +1115,7 @@ fn replaying_the_exact_external_message_executes_only_once_on_localnet() {
 }
 
 #[test]
-fn expired_external_message_is_rejected_before_authorization() {
+fn localnet_expired_external_message_is_rejected_before_authorization() {
     scenario("an already expired message cannot pass preflight emulation")
         .given(network().localnet())
         .given(client().send_validity_seconds(1))

@@ -4,3 +4,7 @@ fail-fast = false
 [profile.ci]
 fail-fast = false
 status-level = "pass"
+
+# Mutation testing only needs the first test that detects a change.
+[profile.mutants]
+fail-fast = true

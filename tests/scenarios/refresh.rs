@@ -158,7 +158,7 @@ fn refresh_stays_loading_until_both_provider_responses_finish() {
 }
 
 #[test]
-fn loads_newly_confirmed_transactions_from_localnet() {
+fn localnet_loads_newly_confirmed_transactions() {
     scenario("refresh adds transactions confirmed after the previous snapshot")
         .given(network().localnet())
         .given(wallet().uninitialized().balance(grams(10)))
@@ -179,7 +179,7 @@ fn loads_newly_confirmed_transactions_from_localnet() {
 }
 
 #[test]
-fn includes_transactions_confirmed_between_refresh_resource_requests() {
+fn localnet_includes_transactions_confirmed_between_refresh_resource_requests() {
     scenario("activity observes transactions confirmed while refresh is in flight")
         .given(network().localnet())
         .given(wallet().uninitialized().balance(grams(10)))
@@ -204,7 +204,7 @@ fn includes_transactions_confirmed_between_refresh_resource_requests() {
 }
 
 #[test]
-fn cancelled_refresh_discards_a_real_head_change_until_retry() {
+fn localnet_cancelled_refresh_discards_a_real_head_change_until_retry() {
     scenario("cancelled refresh cannot publish localnet transactions from a late response")
         .given(network().localnet())
         .given(wallet().uninitialized().balance(grams(10)))

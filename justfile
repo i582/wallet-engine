@@ -50,6 +50,15 @@ test-rust:
     cargo nextest run --locked --manifest-path xtask/Cargo.toml {{ NEXTEST_CONFIG_ARGS }} {{ NEXTEST_PROFILE_ARGS }}
     cargo test --locked --doc
 
+# Run mutation tests for the root Rust crate. Extra arguments are forwarded to
+# cargo-mutants, for example: `just mutants --file src/engine/send.rs`.
+mutants *args:
+    cargo mutants {{args}}
+
+# Inspect generated mutations without compiling or running the test suite.
+mutants-list *args:
+    cargo mutants --list {{args}}
+
 test-c-abi-rust:
     cargo nextest run --locked --manifest-path c-bindings/Cargo.toml {{ NEXTEST_CONFIG_ARGS }} {{ NEXTEST_PROFILE_ARGS }}
 
@@ -245,6 +254,7 @@ check: ci deps-check
 install-tools:
     cargo install cargo-shear --version 1.13.1 --locked
     cargo install cargo-deny --version 0.19.8 --locked
+    cargo install cargo-mutants --version 27.1.0 --locked
     cargo install wasm-pack --version 0.15.0 --locked
 
 clean:

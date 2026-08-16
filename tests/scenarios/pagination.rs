@@ -151,7 +151,7 @@ fn shutdown_cancels_pagination_without_discarding_loaded_activity() {
 }
 
 #[test]
-fn loads_older_real_transactions_from_localnet() {
+fn localnet_loads_older_real_transactions() {
     scenario("pagination loads older transactions from Acton localnet")
         .given(network().localnet())
         .given(wallet().uninitialized().balance(grams(10)))
@@ -171,7 +171,7 @@ fn loads_older_real_transactions_from_localnet() {
 }
 
 #[test]
-fn keeps_the_original_cursor_when_new_transactions_arrive() {
+fn localnet_keeps_the_original_cursor_when_new_transactions_arrive() {
     scenario("new transactions do not corrupt an in-progress pagination lineage")
         .given(network().localnet())
         .given(wallet().uninitialized().balance(grams(10)))
@@ -205,7 +205,7 @@ fn keeps_the_original_cursor_when_new_transactions_arrive() {
 }
 
 #[test]
-fn preserves_multiple_older_pages_when_new_transactions_are_refreshed() {
+fn localnet_preserves_multiple_older_pages_when_new_transactions_are_refreshed() {
     scenario("refresh preserves multiple loaded pages while adding a new head")
         .given(network().localnet())
         .given(wallet().uninitialized().balance(grams(10)))
@@ -243,7 +243,7 @@ fn preserves_multiple_older_pages_when_new_transactions_are_refreshed() {
 }
 
 #[test]
-fn in_flight_older_page_keeps_its_cursor_when_the_chain_head_changes() {
+fn localnet_in_flight_older_page_keeps_its_cursor_when_the_chain_head_changes() {
     scenario("a localnet head change cannot retarget an in-flight older page")
         .given(network().localnet())
         .given(wallet().uninitialized().balance(grams(10)))
@@ -279,7 +279,7 @@ fn in_flight_older_page_keeps_its_cursor_when_the_chain_head_changes() {
 }
 
 #[test]
-fn refresh_supersedes_a_localnet_page_after_new_head_transactions_arrive() {
+fn localnet_refresh_supersedes_a_page_after_new_head_transactions_arrive() {
     scenario("new localnet head plus refresh supersedes an older-page request")
         .given(network().localnet())
         .given(wallet().uninitialized().balance(grams(10)))
