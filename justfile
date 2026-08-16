@@ -1,6 +1,8 @@
 NEXTEST_PROFILE_ARGS := if env_var_or_default("CI", "") != "" { "-P ci" } else { "" }
 NEXTEST_CONFIG_ARGS := "--config-file .config/nextest.toml"
 MIRI_TOOLCHAIN := env_var_or_default("MIRI_TOOLCHAIN", "nightly")
+KANI_MANIFEST := "verification/kani/Cargo.toml"
+KANI_TARGET_DIR := "target/kani"
 
 all: check
 
@@ -61,6 +63,17 @@ mutants-list *args:
 
 proptest-rust:
     cargo nextest run --locked --test proptests --run-ignored ignored-only {{ NEXTEST_CONFIG_ARGS }} {{ NEXTEST_PROFILE_ARGS }}
+
+# Prove bounded invariants in the production root-crate source.
+kani *args:
+    cargo kani --manifest-path {{ KANI_MANIFEST }} --target-dir {{ KANI_TARGET_DIR }} --lib {{args}}
+
+kani-list:
+    cargo kani --manifest-path {{ KANI_MANIFEST }} --target-dir {{ KANI_TARGET_DIR }} list
+
+kani-setup:
+    cargo install kani-verifier --version 0.67.0 --locked
+    cargo kani setup
 
 test-c-abi-rust:
     cargo nextest run --locked --manifest-path c-bindings/Cargo.toml {{ NEXTEST_CONFIG_ARGS }} {{ NEXTEST_PROFILE_ARGS }}

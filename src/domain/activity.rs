@@ -4,6 +4,7 @@ use crate::{Base64Hash, TonAddressString, UnsignedDecimalString};
 
 /// The lifecycle state of a TON account.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Enum)]
+#[cfg_attr(kani, derive(kani::Arbitrary))]
 #[serde(rename_all = "camelCase")]
 pub enum AccountStatus {
     /// No account exists at the address.

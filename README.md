@@ -764,6 +764,18 @@ Install the optional repository tools before the first complete check:
 just install-tools
 ```
 
+Run the bounded Kani proofs for the root Rust crate:
+
+```shell
+just kani-setup
+just kani
+```
+
+Use `just kani-list` to list the available proof harnesses. Kani 0.67 bundles
+Rust 1.93, so `verification/kani/Cargo.toml` points a verification-only package
+at the production `src/lib.rs`. This keeps the production Rust 1.96.1
+requirement intact and verifies the same source code.
+
 Run `cargo xtask --help` to see the binding and Android build commands.
 
 ## License

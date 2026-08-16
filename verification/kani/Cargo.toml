@@ -1,0 +1,33 @@
+[package]
+name = "wallet-engine-kani"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.93"
+publish = false
+
+# Kani 0.67 bundles Rust 1.93, while the production package intentionally
+# requires a newer compiler. Pointing this verification-only package at the
+# production library keeps the proofs on the exact same source without
+# weakening the public package's rust-version contract.
+[lib]
+path = "../../src/lib.rs"
+
+[dependencies]
+async-trait = "=0.1.89"
+base64 = "=0.22.1"
+futures = "=0.3.31"
+getrandom = { version = "=0.3.4", features = ["wasm_js"] }
+num-bigint = "=0.4.8"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+thiserror = "=2.0.17"
+ton = { path = "../../vendor/ton", version = "=0.1.3", default-features = false }
+uniffi = "=0.32.0"
+url = "=2.5.7"
+zeroize = "=1.9.0"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }
+
+[package.metadata.kani.flags]
+output-format = "terse"

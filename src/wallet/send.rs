@@ -24,6 +24,7 @@ pub(crate) const SEND_SLOT: &str = "outgoing-transfer";
 /// parsing provider responses belongs to the HTTP workflow, not to the send
 /// state machine.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(kani, derive(kani::Arbitrary))]
 pub(crate) struct FreshSendAccount {
     /// The account state from the same fresh provider response used for this send.
     /// Frozen and unknown states stop the operation before secret authorization.
@@ -36,8 +37,21 @@ pub(crate) struct FreshSendAccount {
 }
 
 impl FreshSendAccount {
-    pub(crate) fn needs_state_init(&self) -> bool {
-        self.status != AccountStatus::Active
+    /// Reports whether fresh chain state permits construction of a transfer.
+    ///
+    /// Active wallets can use any provider seqno. A wallet that does not yet
+    /// have executable code can only send its deployment message at seqno zero.
+    pub(crate) const fn permits_send(&self) -> bool {
+        matches!(self.status, AccountStatus::Active)
+            || (self.seqno == 0
+                && matches!(
+                    self.status,
+                    AccountStatus::Nonexistent | AccountStatus::Uninitialized
+                ))
+    }
+
+    pub(crate) const fn needs_state_init(&self) -> bool {
+        !matches!(self.status, AccountStatus::Active)
     }
 }
 
@@ -87,6 +101,7 @@ pub(crate) struct PreparedTransfer {
 /// Full internal state. Public `SendPhase` intentionally remains a compact
 /// UI projection while the engine coordinates host work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(kani, derive(kani::Arbitrary))]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SendStage {
     /// The reducer validates the immutable request before it reads persistent state.
@@ -127,7 +142,59 @@ pub(crate) enum SendStage {
     Cancelled,
 }
 
+/// Events that can change the pure send reducer stage.
+///
+/// Host work and payload validation happen around this transition table. Keeping
+/// stage movement here lets runtime code and bounded verification share one
+/// authoritative model of the workflow order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(kani, derive(kani::Arbitrary))]
+enum SendEvent {
+    Begin,
+    JournalLoaded,
+    FreshAccountLoaded,
+    AuthorizationSucceeded,
+    TransferPrepared,
+    PreparedJournalPersisted,
+    SubmissionStarted,
+    SubmissionSucceeded,
+    SubmissionUnknown,
+    SubmissionRejected,
+    TerminalJournalPersisted,
+    JournalConflict,
+    Cancel,
+}
+
 impl SendStage {
+    /// Applies one reducer event without performing host work.
+    ///
+    /// `None` means that the event is out of order. Terminal submission results
+    /// are absorbing until the separate resolver writes on-chain evidence.
+    const fn transition(self, event: SendEvent) -> Option<Self> {
+        match (self, event) {
+            (Self::Validating, SendEvent::Begin) => Some(Self::LoadingJournal),
+            (Self::LoadingJournal, SendEvent::JournalLoaded) => Some(Self::FetchingFreshAccount),
+            (Self::FetchingFreshAccount, SendEvent::FreshAccountLoaded) => Some(Self::Authorizing),
+            (Self::Authorizing, SendEvent::AuthorizationSucceeded) => Some(Self::Preparing),
+            (Self::Preparing, SendEvent::TransferPrepared) => Some(Self::PersistingPrepared),
+            (Self::PersistingPrepared, SendEvent::PreparedJournalPersisted) => {
+                Some(Self::ReadyToSubmit)
+            }
+            (Self::ReadyToSubmit, SendEvent::SubmissionStarted) => Some(Self::Submitting),
+            (Self::Submitting, SendEvent::SubmissionSucceeded) => Some(Self::Submitted),
+            (Self::Submitting, SendEvent::SubmissionUnknown) => Some(Self::SubmissionUnknown),
+            (Self::Submitting, SendEvent::SubmissionRejected) => Some(Self::Failed),
+            (
+                stage
+                @ (Self::SubmissionUnknown | Self::Submitted | Self::Failed | Self::Cancelled),
+                SendEvent::TerminalJournalPersisted,
+            ) => Some(stage),
+            (stage, SendEvent::JournalConflict) if !stage.is_terminal() => Some(Self::Failed),
+            (stage, SendEvent::Cancel) => Some(stage.after_cancellation()),
+            _ => None,
+        }
+    }
+
     const fn public_phase(self) -> SendPhase {
         match self {
             Self::Validating | Self::LoadingJournal | Self::FetchingFreshAccount => {
@@ -173,6 +240,19 @@ impl SendStage {
                 | Self::Failed
                 | Self::Cancelled
         )
+    }
+
+    /// Returns the stage produced by a cancellation request.
+    ///
+    /// A terminal result is immutable. Every nonterminal stage can still move
+    /// to `Cancelled`; the coordinator separately enforces the earlier durable
+    /// commit boundary before it invokes the reducer.
+    const fn after_cancellation(self) -> Self {
+        if self.is_terminal() {
+            self
+        } else {
+            Self::Cancelled
+        }
     }
 }
 
@@ -579,9 +659,7 @@ impl SendWorkflow {
     }
 
     pub(crate) fn begin(&mut self) -> Result<SendDirective, SendWorkflowError> {
-        self.expect(SendStage::Validating, "begin")?;
-
-        self.stage = SendStage::LoadingJournal;
+        self.apply_event(SendEvent::Begin, "begin")?;
 
         Ok(SendDirective::LoadJournal(self.journal_key()))
     }
@@ -595,7 +673,7 @@ impl SendWorkflow {
         &mut self,
         record: Option<JournalRecord>,
     ) -> Result<SendDirective, SendWorkflowError> {
-        self.expect(SendStage::LoadingJournal, "journal_loaded")?;
+        let next_stage = self.next_stage(SendEvent::JournalLoaded, "journal_loaded")?;
 
         self.journal_version = match record {
             None => None,
@@ -630,7 +708,7 @@ impl SendWorkflow {
             }
         };
 
-        self.stage = SendStage::FetchingFreshAccount;
+        self.stage = next_stage;
 
         Ok(SendDirective::FetchFreshAccount)
     }
@@ -639,23 +717,16 @@ impl SendWorkflow {
         &mut self,
         account: FreshSendAccount,
     ) -> Result<SendDirective, SendWorkflowError> {
-        self.expect(SendStage::FetchingFreshAccount, "fresh_account_loaded")?;
+        let next_stage = self.next_stage(SendEvent::FreshAccountLoaded, "fresh_account_loaded")?;
 
-        match account.status {
-            AccountStatus::Active => {}
-            AccountStatus::Nonexistent | AccountStatus::Uninitialized if account.seqno == 0 => {}
-            AccountStatus::Nonexistent
-            | AccountStatus::Uninitialized
-            | AccountStatus::Frozen
-            | AccountStatus::Unknown => {
-                return Err(SendWorkflowError::AccountUnavailable {
-                    status: account.status,
-                });
-            }
+        if !account.permits_send() {
+            return Err(SendWorkflowError::AccountUnavailable {
+                status: account.status,
+            });
         }
 
         self.fresh_account = Some(account);
-        self.stage = SendStage::Authorizing;
+        self.stage = next_stage;
         Ok(self.read_secret_directive())
     }
 
@@ -664,7 +735,8 @@ impl SendWorkflow {
     /// The reducer does not accept or retain the secret. The coordinator passes
     /// it directly to the wallet transfer builder and zeroizes its temporary buffer.
     pub(crate) fn authorization_succeeded(&mut self) -> Result<SendDirective, SendWorkflowError> {
-        self.expect(SendStage::Authorizing, "authorization_succeeded")?;
+        let next_stage =
+            self.next_stage(SendEvent::AuthorizationSucceeded, "authorization_succeeded")?;
         let account = self
             .fresh_account
             .clone()
@@ -673,7 +745,7 @@ impl SendWorkflow {
                 event: "authorization_without_fresh_account",
             })?;
 
-        self.stage = SendStage::Preparing;
+        self.stage = next_stage;
 
         Ok(SendDirective::PrepareTransfer {
             request: self.request.clone(),
@@ -685,11 +757,11 @@ impl SendWorkflow {
         &mut self,
         prepared: PreparedTransfer,
     ) -> Result<SendDirective, SendWorkflowError> {
-        self.expect(SendStage::Preparing, "transfer_prepared")?;
+        let next_stage = self.next_stage(SendEvent::TransferPrepared, "transfer_prepared")?;
         self.validate_prepared(&prepared)?;
 
         self.prepared = Some(prepared);
-        self.stage = SendStage::PersistingPrepared;
+        self.stage = next_stage;
 
         self.persist_directive()
     }
@@ -699,15 +771,25 @@ impl SendWorkflow {
         result: &JournalCompareExchangeResult,
     ) -> Result<SendDirective, SendWorkflowError> {
         if !result.applied {
-            self.fail("Another send operation changed the journal");
+            self.apply_event(SendEvent::JournalConflict, "journal_conflict")?;
+            self.diagnostic = Some(bounded_diagnostic(
+                "Another send operation changed the journal",
+            ));
             return Err(SendWorkflowError::JournalConflict);
         }
 
-        self.journal_version = Some(next_journal_version(self.journal_version)?);
+        let event = if self.stage == SendStage::PersistingPrepared {
+            SendEvent::PreparedJournalPersisted
+        } else {
+            SendEvent::TerminalJournalPersisted
+        };
+        let next_stage = self.next_stage(event, "journal_persisted")?;
+        let next_version = next_journal_version(self.journal_version)?;
+        self.journal_version = Some(next_version);
+        self.stage = next_stage;
 
-        match self.stage {
-            SendStage::PersistingPrepared => {
-                self.stage = SendStage::ReadyToSubmit;
+        match next_stage {
+            SendStage::ReadyToSubmit => {
                 let prepared = self.prepared_ref()?;
                 Ok(SendDirective::Submit {
                     signed_boc: prepared.signed_boc.clone(),
@@ -723,7 +805,7 @@ impl SendWorkflow {
             | SendStage::FetchingFreshAccount
             | SendStage::Authorizing
             | SendStage::Preparing
-            | SendStage::ReadyToSubmit
+            | SendStage::PersistingPrepared
             | SendStage::Submitting
             | SendStage::Confirmed
             | SendStage::Replaced
@@ -736,9 +818,7 @@ impl SendWorkflow {
     }
 
     pub(crate) fn submission_started(&mut self) -> Result<(), SendWorkflowError> {
-        self.expect(SendStage::ReadyToSubmit, "submission_started")?;
-
-        self.stage = SendStage::Submitting;
+        self.apply_event(SendEvent::SubmissionStarted, "submission_started")?;
 
         Ok(())
     }
@@ -747,11 +827,10 @@ impl SendWorkflow {
         &mut self,
         provider_reference: Option<String>,
     ) -> Result<SendDirective, SendWorkflowError> {
-        self.expect(SendStage::Submitting, "submission_succeeded")?;
+        self.apply_event(SendEvent::SubmissionSucceeded, "submission_succeeded")?;
 
         self.provider_reference = provider_reference;
         self.diagnostic = None;
-        self.stage = SendStage::Submitted;
 
         self.persist_directive()
     }
@@ -764,10 +843,9 @@ impl SendWorkflow {
         &mut self,
         diagnostic: String,
     ) -> Result<SendDirective, SendWorkflowError> {
-        self.expect(SendStage::Submitting, "submission_unknown")?;
+        self.apply_event(SendEvent::SubmissionUnknown, "submission_unknown")?;
 
         self.diagnostic = Some(bounded_diagnostic(diagnostic));
-        self.stage = SendStage::SubmissionUnknown;
 
         self.persist_directive()
     }
@@ -776,19 +854,24 @@ impl SendWorkflow {
         &mut self,
         diagnostic: String,
     ) -> Result<SendDirective, SendWorkflowError> {
-        self.expect(SendStage::Submitting, "submission_rejected")?;
-
-        self.fail(diagnostic);
+        self.apply_event(SendEvent::SubmissionRejected, "submission_rejected")?;
+        self.diagnostic = Some(bounded_diagnostic(diagnostic));
 
         self.persist_directive()
     }
 
     pub(crate) fn cancel(&mut self) -> Result<SendDirective, SendWorkflowError> {
-        if self.stage.is_terminal() {
+        let cancelled_stage = self.stage.transition(SendEvent::Cancel).ok_or(
+            SendWorkflowError::InvalidTransition {
+                from: self.stage,
+                event: "cancel",
+            },
+        )?;
+        if cancelled_stage == self.stage {
             return Ok(SendDirective::Finished);
         }
 
-        self.stage = SendStage::Cancelled;
+        self.stage = cancelled_stage;
 
         if self.prepared.is_some() {
             self.persist_directive()
@@ -879,20 +962,26 @@ impl SendWorkflow {
         Ok(())
     }
 
-    fn expect(&self, expected: SendStage, event: &'static str) -> Result<(), SendWorkflowError> {
-        if self.stage == expected {
-            Ok(())
-        } else {
-            Err(SendWorkflowError::InvalidTransition {
+    fn next_stage(
+        &self,
+        event: SendEvent,
+        event_name: &'static str,
+    ) -> Result<SendStage, SendWorkflowError> {
+        self.stage
+            .transition(event)
+            .ok_or(SendWorkflowError::InvalidTransition {
                 from: self.stage,
-                event,
+                event: event_name,
             })
-        }
     }
 
-    fn fail(&mut self, diagnostic: impl Into<String>) {
-        self.stage = SendStage::Failed;
-        self.diagnostic = Some(bounded_diagnostic(diagnostic.into()));
+    fn apply_event(
+        &mut self,
+        event: SendEvent,
+        event_name: &'static str,
+    ) -> Result<(), SendWorkflowError> {
+        self.stage = self.next_stage(event, event_name)?;
+        Ok(())
     }
 }
 
@@ -933,6 +1022,177 @@ fn next_journal_version(current: Option<u64>) -> Result<u64, SendWorkflowError> 
             .checked_add(1)
             .ok_or_else(|| SendWorkflowError::InvalidJournal("version exhausted".to_owned())),
         None => Ok(FIRST_JOURNAL_VERSION),
+    }
+}
+
+/// Exhaustive checks for the small, security-sensitive part of the send model.
+///
+/// These harnesses intentionally avoid HTTP, serialization, and cryptography.
+/// Kani can therefore explore every journal version and every internal send
+/// stage instead of sampling a few examples as a unit test would.
+#[cfg(kani)]
+mod verification {
+    use super::*;
+
+    /// Proves that journal compare-and-swap versions increase exactly once and
+    /// that exhaustion is reported instead of wrapping to zero.
+    #[kani::proof]
+    fn journal_version_increments_without_wrapping() {
+        let current = kani::any::<Option<u64>>();
+        let result = next_journal_version(current);
+
+        match current {
+            None => assert_eq!(result, Ok(FIRST_JOURNAL_VERSION)),
+            Some(u64::MAX) => assert!(result.is_err()),
+            Some(version) => {
+                assert!(result.is_ok());
+                if let Ok(next) = result {
+                    assert_eq!(next, version + 1);
+                    assert!(next > version);
+                }
+            }
+        }
+    }
+
+    /// Proves that replacement signing is enabled only by durable terminal
+    /// evidence. Provider acceptance and ambiguous submission remain blocking
+    /// until the resolver records an on-chain outcome.
+    #[kani::proof]
+    fn only_resolved_terminal_stages_permit_replacement() {
+        let stage = kani::any::<SendStage>();
+
+        if stage.permits_replacement() {
+            assert!(stage.is_terminal());
+        }
+        if matches!(stage, SendStage::SubmissionUnknown | SendStage::Submitted) {
+            assert!(stage.is_terminal());
+            assert!(!stage.permits_replacement());
+        }
+        if stage.is_terminal()
+            && !matches!(stage, SendStage::SubmissionUnknown | SendStage::Submitted)
+        {
+            assert!(stage.permits_replacement());
+        }
+    }
+
+    /// Proves that cancellation cannot rewrite an existing terminal result and
+    /// always turns a nonterminal reducer stage into the terminal cancelled state.
+    #[kani::proof]
+    fn cancellation_preserves_terminal_results() {
+        let stage = kani::any::<SendStage>();
+        let cancelled = stage.after_cancellation();
+
+        if stage.is_terminal() {
+            assert_eq!(cancelled, stage);
+        } else {
+            assert_eq!(cancelled, SendStage::Cancelled);
+            assert!(cancelled.permits_replacement());
+        }
+        assert!(cancelled.is_terminal());
+    }
+
+    /// Proves the complete account-state policy for every status and every
+    /// possible wallet sequence number.
+    #[kani::proof]
+    fn fresh_account_policy_accepts_only_signable_states() {
+        let account = kani::any::<FreshSendAccount>();
+
+        match account.status {
+            AccountStatus::Active => {
+                assert!(account.permits_send());
+                assert!(!account.needs_state_init());
+            }
+            AccountStatus::Nonexistent | AccountStatus::Uninitialized => {
+                assert_eq!(account.permits_send(), account.seqno == 0);
+                assert!(account.needs_state_init());
+            }
+            AccountStatus::Frozen | AccountStatus::Unknown => {
+                assert!(!account.permits_send());
+            }
+        }
+    }
+
+    /// Proves that every accepted deployment uses seqno zero and that no active
+    /// wallet accidentally includes `StateInit`.
+    #[kani::proof]
+    fn state_init_is_used_only_for_a_first_deployment() {
+        let account = kani::any::<FreshSendAccount>();
+
+        if account.permits_send() && account.needs_state_init() {
+            assert_eq!(account.seqno, 0);
+            assert!(matches!(
+                account.status,
+                AccountStatus::Nonexistent | AccountStatus::Uninitialized
+            ));
+        }
+        if account.permits_send() && !account.needs_state_init() {
+            assert_eq!(account.status, AccountStatus::Active);
+        }
+    }
+
+    /// Explores arbitrary ordered and out-of-order reducer events as one bounded
+    /// workflow instead of checking a single transition in isolation.
+    ///
+    /// The proof tracks the historical durable-commit fact separately from the
+    /// current stage. Submission-capable stages must never become reachable
+    /// before the prepared BOC has crossed that boundary.
+    #[kani::proof]
+    #[kani::unwind(11)]
+    fn arbitrary_event_sequences_cannot_submit_before_durable_persistence() {
+        let events = kani::any::<[SendEvent; 10]>();
+        let mut stage = SendStage::Validating;
+        let mut prepared_is_durable = false;
+        let mut reached_submitted = false;
+        let mut reached_submission_unknown = false;
+
+        for event in events {
+            let previous = stage;
+            if let Some(next) = previous.transition(event) {
+                if previous == SendStage::PersistingPrepared
+                    && event == SendEvent::PreparedJournalPersisted
+                {
+                    prepared_is_durable = true;
+                }
+                stage = next;
+            } else {
+                assert_eq!(stage, previous);
+            }
+
+            if matches!(
+                stage,
+                SendStage::ReadyToSubmit
+                    | SendStage::Submitting
+                    | SendStage::SubmissionUnknown
+                    | SendStage::Submitted
+            ) {
+                assert!(prepared_is_durable);
+            }
+            if matches!(stage, SendStage::SubmissionUnknown | SendStage::Submitted) {
+                assert!(!stage.permits_replacement());
+            }
+
+            reached_submitted |= stage == SendStage::Submitted;
+            reached_submission_unknown |= stage == SendStage::SubmissionUnknown;
+        }
+
+        // Ensure that both terminal submission branches are genuinely reachable
+        // within the bound; otherwise their safety assertions could pass vacuously.
+        kani::cover!(reached_submitted);
+        kani::cover!(reached_submission_unknown);
+    }
+
+    /// Proves that send-reducer events cannot rewrite any terminal result. Only
+    /// the separate resolver is allowed to replace pending submission evidence.
+    #[kani::proof]
+    fn terminal_send_stages_are_absorbing() {
+        let stage = kani::any::<SendStage>();
+        let event = kani::any::<SendEvent>();
+
+        kani::assume(stage.is_terminal());
+        kani::cover!();
+        if let Some(next) = stage.transition(event) {
+            assert_eq!(next, stage);
+        }
     }
 }
 

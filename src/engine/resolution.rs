@@ -231,10 +231,13 @@ impl WalletClient {
                 .await;
         }
 
-        let expiration_boundary = pending
-            .valid_until
-            .saturating_add(config.resolution_margin_seconds);
-        if pending_observed && provider_time > expiration_boundary {
+        if pending_observed
+            && resolution_window_expired(
+                provider_time,
+                pending.valid_until,
+                config.resolution_margin_seconds,
+            )
+        {
             return self
                 .persist_send_resolution(owner, pending, SendResolution::Expired)
                 .await;
@@ -422,6 +425,80 @@ impl WalletClient {
                 }
                 WalletClientError::SendFailed { diagnostic }
             }
+        }
+    }
+}
+
+/// Reports whether provider time is strictly beyond the signed validity window
+/// and its indexer synchronization margin.
+///
+/// Saturation is conservative: if the boundary cannot fit in `u64`, the send
+/// remains pending instead of being unlocked early for a replacement signature.
+const fn resolution_window_expired(
+    provider_time: u64,
+    valid_until: u64,
+    margin_seconds: u64,
+) -> bool {
+    provider_time > valid_until.saturating_add(margin_seconds)
+}
+
+#[cfg(kani)]
+mod verification {
+    use super::resolution_window_expired;
+
+    /// Proves that expiration is impossible before both the signed deadline and
+    /// the complete resolver margin have elapsed.
+    #[kani::proof]
+    fn resolution_never_expires_before_its_boundary() {
+        let provider_time = kani::any::<u64>();
+        let valid_until = kani::any::<u64>();
+        let margin_seconds = kani::any::<u64>();
+        let boundary = valid_until.saturating_add(margin_seconds);
+
+        if resolution_window_expired(provider_time, valid_until, margin_seconds) {
+            assert!(provider_time > boundary);
+            assert!(provider_time > valid_until);
+        }
+    }
+
+    /// Proves that an unrepresentable deadline remains pending for every
+    /// possible provider timestamp instead of wrapping and expiring early.
+    #[kani::proof]
+    fn overflowing_resolution_boundary_never_expires() {
+        let provider_time = kani::any::<u64>();
+        let valid_until = kani::any::<u64>();
+        let margin_seconds = kani::any::<u64>();
+
+        kani::assume(valid_until.checked_add(margin_seconds).is_none());
+        kani::cover!();
+        assert!(!resolution_window_expired(
+            provider_time,
+            valid_until,
+            margin_seconds
+        ));
+    }
+
+    /// Proves the strict boundary behavior: equality remains pending and the
+    /// first representable second after the boundary expires the send.
+    #[kani::proof]
+    fn resolution_expires_immediately_after_a_representable_boundary() {
+        let valid_until = kani::any::<u64>();
+        let margin_seconds = kani::any::<u64>();
+        let Some(boundary) = valid_until.checked_add(margin_seconds) else {
+            return;
+        };
+
+        assert!(!resolution_window_expired(
+            boundary,
+            valid_until,
+            margin_seconds
+        ));
+        if let Some(after_boundary) = boundary.checked_add(1) {
+            assert!(resolution_window_expired(
+                after_boundary,
+                valid_until,
+                margin_seconds
+            ));
         }
     }
 }
