@@ -1,15 +1,15 @@
 //! Public transfer requests, phases, snapshots, and results.
 
-use crate::Base64Hash;
+use crate::{Base64Hash, UnsignedDecimalString, UnsignedDecimalStringError};
 
 /// The transfer value policy applied by the wallet contract.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Enum)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum SendAmount {
-    /// Send one exact positive value and pay network fees separately.
+    /// Send one exact nonnegative value and pay network fees separately.
     Exact {
-        /// The exact value in canonical base-10 nanograms.
-        nanograms: String,
+        /// The exact value, in nanograms.
+        nanograms: UnsignedDecimalString,
     },
     /// Send the complete remaining wallet balance after network fees.
     All,
@@ -18,13 +18,12 @@ pub enum SendAmount {
 impl SendAmount {
     /// Creates an exact-value transfer intent.
     ///
-    /// Public request validation still rejects zero, noncanonical, and
-    /// nonnumeric values at the wallet-client boundary.
-    #[must_use]
-    pub fn exact(nanograms: impl Into<String>) -> Self {
-        Self::Exact {
-            nanograms: nanograms.into(),
-        }
+    /// Validation rejects signed, noncanonical, and nonnumeric values before
+    /// they can become part of the transfer intent. Zero is valid.
+    pub fn exact(nanograms: impl Into<String>) -> Result<Self, UnsignedDecimalStringError> {
+        Ok(Self::Exact {
+            nanograms: UnsignedDecimalString::try_from(nanograms.into())?,
+        })
     }
 }
 
@@ -71,7 +70,7 @@ pub struct SendPreview {
     pub comment: Option<String>,
     /// The V5R1 message expiration timestamp used only by this emulation.
     /// A real send calculates a new timestamp from fresh provider state.
-    pub valid_until: u32,
+    pub valid_until: u64,
     /// The complete fake-signed external message submitted for emulation.
     /// The value is a standard padded Base64-encoded BOC. Clients can pass it
     /// to an independent emulator or explorer without reconstructing the message.
@@ -132,8 +131,8 @@ pub enum PendingReason {
 pub struct ResolutionInfo {
     /// The confirmed transaction hash, when the message was executed.
     pub transaction_hash: Option<Base64Hash>,
-    /// The confirmed transaction logical time as a canonical decimal string.
-    pub transaction_lt: Option<String>,
+    /// The confirmed transaction logical time.
+    pub transaction_lt: Option<UnsignedDecimalString>,
     /// Why the message remains unresolved, when no terminal evidence exists.
     pub pending_reason: Option<PendingReason>,
     /// Whether this engine version can build an explicit same-seqno replacement.
@@ -164,9 +163,9 @@ pub struct SendEmulation {
     /// The masterchain block used as the emulation state snapshot.
     pub mc_block_seqno: u32,
     /// Fees charged by the source wallet transaction, in nanograms.
-    pub wallet_fees_nanograms: String,
+    pub wallet_fees_nanograms: UnsignedDecimalString,
     /// Sum of fees across every transaction currently present in the trace.
-    pub trace_fees_nanograms: String,
+    pub trace_fees_nanograms: UnsignedDecimalString,
     /// Number of transactions currently present in the emulated trace.
     pub transaction_count: u64,
     /// High-level actions recognized by Toncenter in the emulated trace.
@@ -211,4 +210,20 @@ pub struct SendResult {
     pub message_hash: Base64Hash,
     /// The terminal phase. This can be [`SendPhase::SubmissionUnknown`].
     pub phase: SendPhase,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SendAmount;
+
+    #[test]
+    fn exact_amount_rejects_negative_input() {
+        assert!(SendAmount::exact("-100").is_err());
+    }
+
+    #[test]
+    fn serde_rejects_negative_exact_amount() {
+        let result = serde_json::from_str::<SendAmount>(r#"{"kind":"exact","nanograms":"-100"}"#);
+        assert!(result.is_err());
+    }
 }

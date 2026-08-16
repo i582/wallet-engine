@@ -3,7 +3,7 @@ import Foundation
 /// Exact decimal conversion for the  send boundary.
 ///
 /// GRAM has nine fractional decimal places. This parser intentionally never
-/// passes through `Double` or `Decimal`, so the signed nanogram amount is the
+/// passes through `Double` or `Decimal`, so the unsigned nanogram amount is the
 /// exact value the user entered.
 nonisolated enum GramAmount {
     static func nanograms(from input: String) -> String? {
@@ -47,8 +47,7 @@ nonisolated enum GramAmount {
         let fractionalDigits = String(fraction) + String(repeating: "0", count: 9 - fraction.count)
         let combined = wholeDigits + fractionalDigits
         let canonical = combined.drop(while: { $0 == "0" })
-        guard !canonical.isEmpty else { return nil }
-        return String(canonical)
+        return canonical.isEmpty ? "0" : String(canonical)
     }
 
     static func format(nanograms: String) -> String {

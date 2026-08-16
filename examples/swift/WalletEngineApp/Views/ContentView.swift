@@ -1566,7 +1566,7 @@ private enum SendPresentationError: LocalizedError {
         case .walletNotMigrated:
             "This wallet must finish its  migration before it can send."
         case .invalidAmount:
-            "Enter a positive GRAM amount with no more than 9 decimal places."
+            "Enter a nonnegative GRAM amount with no more than 9 decimal places."
         }
     }
 }

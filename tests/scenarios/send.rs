@@ -1,8 +1,14 @@
 use super::support::*;
-use wallet_engine::{AccountStatus, PendingReason, SendPhase, WalletClientError};
+use wallet_engine::{
+    AccountStatus, PendingReason, SendPhase, UnsignedDecimalString, WalletClientError,
+};
 
 const EMPTY_DESTINATION: &str =
     "0:2222222222222222222222222222222222222222222222222222222222222222";
+
+fn decimal(value: impl Into<String>) -> UnsignedDecimalString {
+    UnsignedDecimalString::try_from(value.into()).expect("scenario decimal must be canonical")
+}
 
 #[test]
 fn second_send_is_rejected_while_first_is_in_progress() {
@@ -160,7 +166,7 @@ fn invalid_preview_is_rejected_before_network_or_state_changes() {
         .given(wallet().active().balance(grams(10)).seqno(7))
         .when(call(
             "invalid",
-            preview_send(send().to(own_address()).nanograms(0)),
+            preview_send(send().to(invalid_address()).grams(1)),
         ))
         .then(error("invalid", WalletClientError::InvalidSendRequest))
         .then(protected_secret_was_not_read())
@@ -225,8 +231,8 @@ fn preview_rejects_an_amount_larger_than_the_fresh_balance() {
         .then(error(
             "preview",
             WalletClientError::InsufficientBalance {
-                available_nanograms: grams(1).as_nanograms(),
-                requested_nanograms: grams(100).as_nanograms(),
+                available_nanograms: decimal(grams(1).as_nanograms()),
+                requested_nanograms: decimal(grams(100).as_nanograms()),
             },
         ))
         .then(protected_secret_was_not_read())
@@ -289,10 +295,7 @@ fn preview_requires_provider_synchronization_time() {
             "preview",
             preview_send(send().to(own_address()).grams(1)),
         ))
-        .then(error(
-            "preview",
-            send_failed("fresh account state has no valid synchronization time"),
-        ))
+        .then(error("preview", send_failed("missing field `sync_utime`")))
         .then(protected_secret_was_not_read())
         .then(journal_is_empty())
         .then(no_message_was_submitted())
@@ -315,7 +318,9 @@ fn preview_provider_time_must_fit_the_wallet_timestamp() {
         ))
         .then(error(
             "preview",
-            send_failed("fresh account state has no valid synchronization time"),
+            WalletClientError::EmulationFailed {
+                diagnostic: "failed to prepare emulation: transfer expiration timestamp exceeds the wallet uint32 field".to_owned(),
+            },
         ))
         .then(protected_secret_was_not_read())
         .then(journal_is_empty())
@@ -324,14 +329,14 @@ fn preview_provider_time_must_fit_the_wallet_timestamp() {
 }
 
 #[test]
-fn preview_expiration_must_not_overflow() {
-    scenario("preview validity must fit the wallet timestamp field")
+fn preview_expiration_must_not_overflow_u64() {
+    scenario("preview validity addition must not overflow u64")
         .given(
             wallet()
                 .active()
                 .balance(grams(10))
                 .seqno(7)
-                .sync_time(u64::from(u32::MAX)),
+                .sync_time(u64::MAX),
         )
         .when(call(
             "preview",
@@ -528,9 +533,9 @@ fn exact_preview_rejects_a_value_that_leaves_no_balance_for_fees() {
         .then(error(
             "preview",
             WalletClientError::InsufficientBalanceForFees {
-                available_nanograms: "1000000000".to_owned(),
-                requested_nanograms: "1000000000".to_owned(),
-                estimated_fee_nanograms: "1000000".to_owned(),
+                available_nanograms: decimal("1000000000"),
+                requested_nanograms: decimal("1000000000"),
+                estimated_fee_nanograms: decimal("1000000"),
             },
         ))
         .then(protected_secret_was_not_read())
@@ -553,9 +558,9 @@ fn exact_preview_requires_a_positive_remainder_after_the_estimated_fee() {
         .then(error(
             "preview",
             WalletClientError::InsufficientBalanceForFees {
-                available_nanograms: "1000000000".to_owned(),
-                requested_nanograms: "999000000".to_owned(),
-                estimated_fee_nanograms: "1000000".to_owned(),
+                available_nanograms: decimal("1000000000"),
+                requested_nanograms: decimal("999000000"),
+                estimated_fee_nanograms: decimal("1000000"),
             },
         ))
         .then(protected_secret_was_not_read())
@@ -1175,12 +1180,27 @@ fn submitted_send_resolves_before_replacement() {
 }
 
 #[test]
-fn zero_amount_is_rejected_before_send_state_changes() {
-    scenario("zero amount is not a valid transfer")
+fn zero_value_transfer_is_submitted() {
+    scenario("zero value is a valid contract message")
         .given(wallet().active().balance(grams(10)).seqno(7))
         .when(call("send", send().to(own_address()).nanograms(0)))
-        .then(error("send", WalletClientError::InvalidSendRequest))
-        .then(snapshot().send_phase(SendPhase::Idle))
+        .then(result("send").submitted())
+        .then(snapshot().send_phase(SendPhase::Submitted))
+        .run();
+}
+
+#[test]
+fn zero_balance_is_reported_as_insufficient_for_a_positive_transfer() {
+    scenario("zero balance is valid but insufficient")
+        .given(wallet().active().balance(grams(0)).seqno(7))
+        .when(call("send", send().to(own_address()).nanograms(1)))
+        .then(error(
+            "send",
+            WalletClientError::InsufficientBalance {
+                available_nanograms: decimal("0"),
+                requested_nanograms: decimal("1"),
+            },
+        ))
         .run();
 }
 
@@ -1280,8 +1300,8 @@ fn amount_larger_than_the_fresh_balance_fails_before_signing() {
         .then(error(
             "too-large",
             WalletClientError::InsufficientBalance {
-                available_nanograms: grams(1).as_nanograms(),
-                requested_nanograms: grams(100).as_nanograms(),
+                available_nanograms: decimal(grams(1).as_nanograms()),
+                requested_nanograms: decimal(grams(100).as_nanograms()),
             },
         ))
         .then(snapshot().send_phase(SendPhase::Failed))
@@ -1310,10 +1330,7 @@ fn missing_provider_time_prevents_transfer_expiration() {
                 .without_sync_time(),
         )
         .when(call("send", send().to(own_address()).grams(1)))
-        .then(error(
-            "send",
-            send_failed("fresh account state did not include provider synchronization time"),
-        ))
+        .then(error("send", send_failed("missing field `sync_utime`")))
         .then(snapshot().send_phase(SendPhase::Failed))
         .run();
 }
@@ -1331,7 +1348,9 @@ fn provider_time_must_fit_the_wallet_timestamp_field() {
         .when(call("send", send().to(own_address()).grams(1)))
         .then(error(
             "send",
-            send_failed("provider synchronization time does not fit the wallet timestamp field"),
+            send_failed(
+                "failed to prepare transfer: transfer expiration timestamp exceeds the wallet uint32 field",
+            ),
         ))
         .then(snapshot().send_phase(SendPhase::Failed))
         .then(journal_is_empty())
@@ -1341,13 +1360,13 @@ fn provider_time_must_fit_the_wallet_timestamp_field() {
 
 #[test]
 fn transfer_expiration_overflow_fails_before_persistence() {
-    scenario("provider time plus validity must fit u32")
+    scenario("provider time plus validity must not overflow u64")
         .given(
             wallet()
                 .active()
                 .balance(grams(10))
                 .seqno(7)
-                .sync_time(u64::from(u32::MAX)),
+                .sync_time(u64::MAX),
         )
         .when(call("send", send().to(own_address()).grams(1)))
         .then(error(

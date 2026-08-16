@@ -292,7 +292,7 @@ fn render_account_pane(frame: &mut Frame<'_>, area: Rect, app: &App) {
         |snapshot| {
             let balance = snapshot.account.as_ref().map_or_else(
                 || "—".to_owned(),
-                |account| format_nanograms(&account.balance_nanograms),
+                |account| format_nanograms(&account.balance_nanograms.to_decimal_string()),
             );
             let status = snapshot
                 .account
@@ -393,7 +393,7 @@ fn render_activity_pane(frame: &mut Frame<'_>, area: Rect, snapshot: Option<&Wal
                 Cell::from(Span::styled(direction, Style::default().fg(color))),
                 Cell::from(format!(
                     "{sign}{}",
-                    format_nanograms(&item.amount_nanograms)
+                    format_nanograms(&item.amount_nanograms.to_decimal_string())
                 )),
                 Cell::from(
                     item.counterparty

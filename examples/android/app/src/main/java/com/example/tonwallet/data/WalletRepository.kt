@@ -142,7 +142,7 @@ class WalletRepository(private val store: SecureWalletStore) {
                     localSecretRef = wallet.descriptor().secretRef,
                     network = wallet.network,
                     sendValiditySeconds = SEND_VALIDITY_SECONDS,
-                    resolutionMarginSeconds = 60u,
+                    resolutionMarginSeconds = 60uL,
                     providers = ProviderConfig(
                         toncenterBaseUrl = if (wallet.testnet) TESTNET_BASE_URL else MAINNET_BASE_URL,
                         requestTimeoutMs = PROVIDER_REQUEST_TIMEOUT_MILLIS.toULong(),
@@ -161,7 +161,7 @@ class WalletRepository(private val store: SecureWalletStore) {
             AccountSnapshot(
                 balanceNanograms = it.balanceNanograms,
                 status = it.status.name.lowercase(),
-                syncUtime = it.syncUtime?.toLong(),
+                syncUtime = it.syncUtime.toLong(),
             )
         },
         transactions = activity.map {
@@ -200,6 +200,6 @@ class WalletRepository(private val store: SecureWalletStore) {
         const val TESTNET_BASE_URL = "https://testnet.toncenter.com"
         const val MAINNET_BASE_URL = "https://toncenter.com"
         const val PROVIDER_REQUEST_TIMEOUT_MILLIS = 15_000
-        val SEND_VALIDITY_SECONDS: UInt = 300u
+        val SEND_VALIDITY_SECONDS: ULong = 300uL
     }
 }

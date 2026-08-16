@@ -10,7 +10,6 @@ use super::state::{OperationFamily, ensure_running};
 use super::validation::validate_send;
 
 use crate::domain::bounded_diagnostic;
-use crate::types::parse_positive_decimal;
 use crate::wallet::send::{FreshSendAccount, SendDirective, SendWorkflow};
 use crate::wallet::transfer::{derive_source, prepare_transfer};
 use crate::{AccountStatus, SendAmount, SendPhase, SendRequest, SendResult, WalletClientError};
@@ -139,12 +138,7 @@ impl WalletClient {
         let account = evaluate_response(&account_request, account_response, parse_account)
             .map_err(|error| self.send_failed_error(generation, error.developer_message))?;
 
-        let provider_time = account.sync_utime.ok_or_else(|| {
-            self.send_failed_error(
-                generation,
-                "fresh account state did not include provider synchronization time",
-            )
-        })?;
+        let provider_time = account.sync_utime;
 
         let journal_record = if let Some(pending) = pending {
             // Resolve the old signed message before authorizing a new one. Only
@@ -182,19 +176,16 @@ impl WalletClient {
 
         // Reject an impossible value before reading the mnemonic or creating a signed BOC.
         // Fees are intentionally not estimated here, so equality can still fail on-chain.
-        let available = parse_positive_decimal(&account.balance_nanograms)
-            .ok_or_else(|| self.send_failed_error(generation, "invalid fresh account balance"))?;
-        if let SendAmount::Exact { nanograms } = &request.amount {
-            let requested = parse_positive_decimal(nanograms)
-                .ok_or_else(|| self.send_failed_error(generation, "invalid send amount"))?;
-            if requested > available {
-                let error = WalletClientError::InsufficientBalance {
-                    available_nanograms: available.to_string(),
-                    requested_nanograms: requested.to_string(),
-                };
-                self.fail_send(generation, error.to_string())?;
-                return Err(error);
-            }
+        let available = &account.balance_nanograms;
+        if let SendAmount::Exact { nanograms } = &request.amount
+            && nanograms > available
+        {
+            let error = WalletClientError::InsufficientBalance {
+                available_nanograms: available.clone(),
+                requested_nanograms: nanograms.clone(),
+            };
+            self.fail_send(generation, error.to_string())?;
+            return Err(error);
         }
 
         // Active wallets require a fresh seqno for replay protection. A wallet that is not yet
@@ -209,20 +200,14 @@ impl WalletClient {
         } else {
             0
         };
+
         let fresh = FreshSendAccount {
             status: account.status,
             seqno,
-            observed_at: account.sync_utime.unwrap_or_default(),
         };
 
         // Use synchronized provider time for the real signature. A UI preview
         // can be several blocks old by the time the user confirms it.
-        let provider_time = u32::try_from(provider_time).map_err(|_| {
-            self.send_failed_error(
-                generation,
-                "provider synchronization time does not fit the wallet timestamp field",
-            )
-        })?;
         let valid_until = provider_time
             .checked_add(config.send_validity_seconds)
             .ok_or_else(|| {

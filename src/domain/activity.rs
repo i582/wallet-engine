@@ -1,6 +1,6 @@
 //! Account state and paginated wallet activity.
 
-use crate::Base64Hash;
+use crate::{Base64Hash, UnsignedDecimalString};
 
 /// The lifecycle state of a TON account.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Enum)]
@@ -22,13 +22,12 @@ pub enum AccountStatus {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountSnapshot {
-    /// The exact unsigned balance in nanograms as a canonical decimal string.
-    /// Hosts can parse it with their arbitrary-precision integer type.
-    pub balance_nanograms: String,
+    /// The exact account balance, in nanograms.
+    pub balance_nanograms: UnsignedDecimalString,
     /// The account lifecycle state.
     pub status: AccountStatus,
-    /// The provider synchronization time as a Unix timestamp, if available.
-    pub sync_utime: Option<u64>,
+    /// The provider synchronization time as a Unix timestamp.
+    pub sync_utime: u64,
 }
 
 /// The value flow direction for one activity item.
@@ -49,15 +48,14 @@ pub struct ActivityItem {
     pub id: String,
     /// The transaction hash in standard padded Base64.
     pub transaction_hash: Base64Hash,
-    /// The transaction logical time as a canonical unsigned decimal string.
-    pub logical_time: String,
+    /// The transaction logical time.
+    pub logical_time: UnsignedDecimalString,
     /// The transaction Unix timestamp.
     pub timestamp: u64,
     /// The value flow direction relative to this wallet.
     pub direction: ActivityDirection,
-    /// The exact transferred value in nanograms as a canonical decimal string.
-    /// Hosts can parse it with their arbitrary-precision integer type.
-    pub amount_nanograms: String,
+    /// The exact transferred value, in nanograms.
+    pub amount_nanograms: UnsignedDecimalString,
     /// The source or destination address, if the provider supplies it.
     pub counterparty: Option<String>,
 }
@@ -66,8 +64,8 @@ pub struct ActivityItem {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct ActivityCursor {
-    /// The oldest loaded transaction logical time as a canonical decimal string.
-    pub logical_time: String,
+    /// The oldest loaded transaction logical time.
+    pub logical_time: UnsignedDecimalString,
     /// The oldest loaded transaction hash in standard padded Base64.
     pub hash: Base64Hash,
 }

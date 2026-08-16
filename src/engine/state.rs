@@ -34,7 +34,7 @@ pub(super) struct State {
     pub(super) snapshot: WalletSnapshot,
 
     /// The authoritative activity list with numeric amounts and logical times.
-    /// The public snapshot uses decimal strings for FFI portability.
+    /// The public snapshot uses the portable unsigned integer boundary type.
     /// [`Self::sync_activity_snapshot`] publishes this list after each committed merge.
     pub(super) activity: Vec<ActivityRecord>,
 

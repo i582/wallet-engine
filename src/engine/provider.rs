@@ -30,7 +30,7 @@ struct Account {
     balance: Value,
     #[serde(default)]
     state: String,
-    sync_utime: Option<u64>,
+    sync_utime: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -102,16 +102,16 @@ pub(crate) struct ActivityRecord {
 impl ActivityRecord {
     /// Creates the portable public representation used by generated bindings.
     ///
-    /// Swift and Kotlin have no shared arbitrary-precision integer ABI with
-    /// Rust, so conversion to canonical decimal strings happens only here.
+    /// The public wrapper remains numeric inside Rust and becomes a decimal
+    /// string only when Serde or a generated language binding lowers it.
     pub(crate) fn snapshot(&self, network: Network) -> ActivityItem {
         ActivityItem {
             id: self.id.clone(),
             transaction_hash: self.transaction_hash.clone(),
-            logical_time: self.logical_time.to_string(),
+            logical_time: (&self.logical_time).into(),
             timestamp: self.timestamp,
             direction: self.direction,
-            amount_nanograms: self.amount_nanograms.to_string(),
+            amount_nanograms: (&self.amount_nanograms).into(),
             counterparty: self
                 .counterparty
                 .as_ref()
@@ -136,7 +136,7 @@ impl ActivityPageCursor {
     /// Converts the internal cursor to its portable public representation.
     pub(crate) fn snapshot(&self) -> ActivityCursor {
         ActivityCursor {
-            logical_time: self.logical_time.to_string(),
+            logical_time: (&self.logical_time).into(),
             hash: self.hash.clone(),
         }
     }
@@ -194,8 +194,7 @@ pub(crate) fn response_error(
 
 pub(crate) fn parse_account(body: &[u8]) -> Result<AccountSnapshot, DomainError> {
     let account: Account = decode_envelope(body)?;
-    let balance_nanograms =
-        parse_unsigned_decimal(&account.balance, "account balance")?.to_string();
+    let balance_nanograms = parse_unsigned_decimal(&account.balance, "account balance")?.into();
 
     let status = match account.state.as_str() {
         "nonexist" | "nonexistent" => AccountStatus::Nonexistent,
@@ -496,6 +495,7 @@ mod tests {
     use super::{parse_account, parse_activity, response_error};
     use crate::{
         AccountStatus, ActivityDirection, ErrorCategory, ErrorCode, HttpHeader, RetryAdvice,
+        UnsignedDecimalString,
     };
 
     const ADDRESS: &str = "0:0000000000000000000000000000000000000000000000000000000000000001";
@@ -518,9 +518,12 @@ mod tests {
                 "result": { "balance": 42, "state": state, "sync_utime": 123 }
             });
             let account = parse_account(&encode(body)).expect("account must parse");
-            assert_eq!(account.balance_nanograms, "42");
+            assert_eq!(
+                account.balance_nanograms,
+                UnsignedDecimalString::from(42_u64)
+            );
             assert_eq!(account.status, expected);
-            assert_eq!(account.sync_utime, Some(123));
+            assert_eq!(account.sync_utime, 123);
         }
     }
 
@@ -614,7 +617,7 @@ mod tests {
     fn rejects_non_decimal_json_types_before_publishing_provider_data() {
         let account = parse_account(&encode(json!({
             "ok": true,
-            "result": { "balance": true, "state": "active" }
+            "result": { "balance": true, "state": "active", "sync_utime": 1 }
         })))
         .expect_err("a boolean balance must fail");
         assert_eq!(account.code, ErrorCode::InvalidProviderResponse);
@@ -640,6 +643,18 @@ mod tests {
             activity.developer_message,
             "logical time is not a decimal value"
         );
+    }
+
+    #[test]
+    fn rejects_an_account_response_without_sync_utime() {
+        let error = parse_account(&encode(json!({
+            "ok": true,
+            "result": { "balance": "1", "state": "active" }
+        })))
+        .expect_err("Toncenter v2 must provide sync_utime");
+
+        assert_eq!(error.code, ErrorCode::InvalidProviderResponse);
+        assert_eq!(error.developer_message, "missing field `sync_utime`");
     }
 
     #[test]

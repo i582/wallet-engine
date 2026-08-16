@@ -84,12 +84,8 @@ impl WalletClient {
             .map_err(|error| {
                 self.fail_standalone_resolution(generation, error.developer_message)
             })?;
-        let provider_time = account.sync_utime.ok_or_else(|| {
-            self.fail_standalone_resolution(
-                generation,
-                "fresh account state did not include provider synchronization time",
-            )
-        })?;
+
+        let provider_time = account.sync_utime;
         let requests = ResolutionRequests::new(&config, &pending, resolution_ids)
             .map_err(|error| self.fail_standalone_resolution(generation, error.to_string()))?;
         let resolved = self

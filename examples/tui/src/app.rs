@@ -359,11 +359,19 @@ impl App {
             }
         };
 
+        let amount = match SendAmount::exact(amount_nanograms) {
+            Ok(amount) => amount,
+            Err(error) => {
+                self.status = Some(error.to_string());
+                return;
+            }
+        };
+
         self.status = Some("Checking transfer…".to_owned());
         match client
             .preview_send(SendPreviewRequest {
                 destination: self.send_destination.clone(),
-                amount: SendAmount::exact(amount_nanograms.clone()),
+                amount: amount.clone(),
                 comment: None,
             })
             .await
@@ -379,7 +387,7 @@ impl App {
         let request = SendRequest {
             operation_id: new_id("send"),
             destination: self.send_destination.clone(),
-            amount: SendAmount::exact(amount_nanograms),
+            amount,
             comment: None,
         };
         match client.send(request).await {
@@ -448,7 +456,7 @@ fn parse_gram_amount(value: &str) -> Result<String, String> {
         || !fraction.bytes().all(|byte| byte.is_ascii_digit())
         || fraction.len() > 9
     {
-        return Err("Enter a positive amount with at most 9 decimal places".to_owned());
+        return Err("Enter a nonnegative amount with at most 9 decimal places".to_owned());
     }
 
     let whole = whole
@@ -458,9 +466,6 @@ fn parse_gram_amount(value: &str) -> Result<String, String> {
         .parse::<BigUint>()
         .map_err(|_| "Amount is invalid".to_owned())?;
     let nanograms = whole * BigUint::from(1_000_000_000_u64) + fraction;
-    if nanograms == BigUint::default() {
-        return Err("Amount must be greater than zero".to_owned());
-    }
     Ok(nanograms.to_string())
 }
 
@@ -471,13 +476,13 @@ mod tests {
     #[test]
     fn parses_gram_amount_without_losing_precision() {
         assert_eq!(parse_gram_amount("1").as_deref(), Ok("1000000000"));
+        assert_eq!(parse_gram_amount("0").as_deref(), Ok("0"));
         assert_eq!(parse_gram_amount("0.000000001").as_deref(), Ok("1"));
         assert_eq!(parse_gram_amount("12.3405").as_deref(), Ok("12340500000"));
     }
 
     #[test]
     fn rejects_invalid_gram_amount() {
-        assert!(parse_gram_amount("0").is_err());
         assert!(parse_gram_amount("1.0000000001").is_err());
         assert!(parse_gram_amount("1.2.3").is_err());
         assert!(parse_gram_amount("-1").is_err());

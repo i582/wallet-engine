@@ -6,7 +6,7 @@ use serde_json::Value;
 use crate::domain::bounded_diagnostic;
 use crate::{
     Base64Hash, DomainError, ErrorCategory, ErrorCode, HttpRequest, HttpRequestId, RetryAdvice,
-    WalletClientConfig, WalletClientError,
+    UnsignedDecimalString, WalletClientConfig, WalletClientError,
 };
 
 use super::http::build_toncenter_v3_request;
@@ -14,7 +14,7 @@ use super::http::build_toncenter_v3_request;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ExecutedMessage {
     pub(super) transaction_hash: Base64Hash,
-    pub(super) transaction_lt: String,
+    pub(super) transaction_lt: UnsignedDecimalString,
 }
 
 #[derive(Debug, Deserialize)]
@@ -186,15 +186,15 @@ fn parse_u32(value: &Value, field: &str) -> Result<u32, DomainError> {
 
 /// Normalizes provider logical time to the public decimal-string form without
 /// losing precision in language bindings.
-fn parse_u64_string(value: &Value, field: &str) -> Result<String, DomainError> {
+fn parse_u64_string(value: &Value, field: &str) -> Result<UnsignedDecimalString, DomainError> {
     match value {
         Value::Number(number) => number
             .as_u64()
-            .map(|value| value.to_string())
+            .map(UnsignedDecimalString::from)
             .ok_or_else(|| invalid_response(format!("invalid {field}"))),
         Value::String(value) => value
             .parse::<u64>()
-            .map(|parsed| parsed.to_string())
+            .map(UnsignedDecimalString::from)
             .map_err(|_| invalid_response(format!("invalid {field}"))),
         _ => Err(invalid_response(format!("invalid {field}"))),
     }
@@ -230,7 +230,7 @@ mod tests {
         .expect("one transaction");
 
         assert_eq!(evidence.transaction_hash.as_str(), ONE_HASH);
-        assert_eq!(evidence.transaction_lt, "42");
+        assert_eq!(evidence.transaction_lt, UnsignedDecimalString::from(42_u64));
         assert_eq!(parse_executed_message(br#"{"transactions":[]}"#), Ok(None));
     }
 

@@ -27,7 +27,7 @@ data class StoredWallet(
 data class AccountSnapshot(
     val balanceNanograms: String,
     val status: String,
-    val syncUtime: Long?,
+    val syncUtime: Long,
 ) {
     val balanceGrams: String get() = formatNanograms(balanceNanograms)
 }

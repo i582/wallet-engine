@@ -31,7 +31,7 @@ mod wallet;
 
 pub use domain::*;
 pub use engine::{WalletClient, WalletHttpHost, WalletPlatformHost};
-pub use types::{Base64Hash, Base64HashError};
+pub use types::{Base64Hash, Base64HashError, UnsignedDecimalString, UnsignedDecimalStringError};
 pub use wallet::*;
 
 uniffi::setup_scaffolding!();

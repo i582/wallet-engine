@@ -9,7 +9,7 @@ pub const DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS: u64 = 15_000;
 pub const MAX_PROVIDER_REQUEST_TIMEOUT_MS: u64 = 300_000;
 
 /// Default indexer-lag margin after a signed message validity window.
-pub const DEFAULT_RESOLUTION_MARGIN_SECONDS: u32 = 60;
+pub const DEFAULT_RESOLUTION_MARGIN_SECONDS: u64 = 60;
 
 /// Selects the TON network used for addresses, providers, and wallet derivation.
 #[derive(
@@ -91,18 +91,18 @@ pub struct WalletClientConfig {
     /// the fresh account-state request. It does not use the host device clock.
     /// A short value can expire before the network includes the message. A long
     /// value extends the period in which the signed message can be submitted.
-    pub send_validity_seconds: u32,
+    pub send_validity_seconds: u64,
     /// Additional provider-time margin before an unseen message becomes expired.
     ///
     /// This protects against declaring expiration while the transaction index is
     /// still catching up with the account state used by the resolver.
     #[serde(default = "default_resolution_margin_seconds")]
-    pub resolution_margin_seconds: u32,
+    pub resolution_margin_seconds: u64,
     /// The provider endpoint.
     pub providers: ProviderConfig,
 }
 
-const fn default_resolution_margin_seconds() -> u32 {
+const fn default_resolution_margin_seconds() -> u64 {
     DEFAULT_RESOLUTION_MARGIN_SECONDS
 }
 

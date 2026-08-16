@@ -1,7 +1,6 @@
 //! Pre-authorization transfer previews built from fresh provider state.
 
 use crate::domain::bounded_diagnostic;
-use crate::types::{parse_canonical_decimal, parse_positive_decimal};
 use crate::wallet::send::FreshSendAccount;
 use crate::wallet::transfer::prepare_transfer_emulation;
 use crate::{
@@ -90,27 +89,18 @@ impl WalletClient {
                 )
             })?;
 
-        let available = parse_positive_decimal(&account.balance_nanograms).ok_or_else(|| {
-            self.preview_error(
+        let available = account.balance_nanograms.clone();
+
+        if let SendAmount::Exact { nanograms } = &request.amount
+            && nanograms > &available
+        {
+            return Err(self.preview_error(
                 generation,
-                WalletClientError::SendFailed {
-                    diagnostic: "invalid fresh account balance".to_owned(),
+                WalletClientError::InsufficientBalance {
+                    available_nanograms: available.clone(),
+                    requested_nanograms: nanograms.clone(),
                 },
-            )
-        })?;
-        if let SendAmount::Exact { nanograms } = &request.amount {
-            let requested = parse_positive_decimal(nanograms).ok_or_else(|| {
-                self.preview_error(generation, WalletClientError::InvalidSendRequest)
-            })?;
-            if requested > available {
-                return Err(self.preview_error(
-                    generation,
-                    WalletClientError::InsufficientBalance {
-                        available_nanograms: available.to_string(),
-                        requested_nanograms: requested.to_string(),
-                    },
-                ));
-            }
+            ));
         }
 
         let seqno = match account.status {
@@ -136,18 +126,7 @@ impl WalletClient {
             }
         };
 
-        let provider_time = account
-            .sync_utime
-            .and_then(|value| u32::try_from(value).ok())
-            .ok_or_else(|| {
-                self.preview_error(
-                    generation,
-                    WalletClientError::SendFailed {
-                        diagnostic: "fresh account state has no valid synchronization time"
-                            .to_owned(),
-                    },
-                )
-            })?;
+        let provider_time = account.sync_utime;
         let valid_until = provider_time
             .checked_add(config.send_validity_seconds)
             .ok_or_else(|| {
@@ -158,10 +137,10 @@ impl WalletClient {
                     },
                 )
             })?;
+
         let fresh = FreshSendAccount {
             status: account.status,
             seqno,
-            observed_at: account.sync_utime.unwrap_or_default(),
         };
 
         let boc = prepare_transfer_emulation(
@@ -221,28 +200,16 @@ impl WalletClient {
         }
 
         if let SendAmount::Exact { nanograms } = &request.amount {
-            let requested = parse_positive_decimal(nanograms).ok_or_else(|| {
-                self.preview_error(generation, WalletClientError::InvalidSendRequest)
-            })?;
-            let estimated_fee = parse_canonical_decimal(&evaluated.summary.wallet_fees_nanograms)
-                .ok_or_else(|| {
-                self.preview_error(
-                    generation,
-                    WalletClientError::EmulationFailed {
-                        diagnostic: "emulation returned an invalid wallet fee".to_owned(),
-                    },
-                )
-            })?;
             // Exact sends must leave a positive remainder after the emulated
             // wallet fee. Use `SendAmount::All` when the intent is to drain
             // the wallet with carry-all-balance mode instead.
-            if &requested + &estimated_fee >= available {
+            if nanograms + &evaluated.summary.wallet_fees_nanograms >= available {
                 return Err(self.preview_error(
                     generation,
                     WalletClientError::InsufficientBalanceForFees {
-                        available_nanograms: available.to_string(),
-                        requested_nanograms: requested.to_string(),
-                        estimated_fee_nanograms: estimated_fee.to_string(),
+                        available_nanograms: available.clone(),
+                        requested_nanograms: nanograms.clone(),
+                        estimated_fee_nanograms: evaluated.summary.wallet_fees_nanograms,
                     },
                 ));
             }

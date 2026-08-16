@@ -43,7 +43,7 @@ describe("wallet display helpers", () => {
   test("converts GRAM to nanograms without floating point", () => {
     expect(gramsToNanograms("1")).toBe("1000000000")
     expect(gramsToNanograms("12.000000001")).toBe("12000000001")
-    expect(() => gramsToNanograms("0")).toThrow("greater than zero")
+    expect(gramsToNanograms("0")).toBe("0")
     expect(() => gramsToNanograms("1.0000000001")).toThrow("9 decimal places")
   })
 })

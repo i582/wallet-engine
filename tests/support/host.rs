@@ -356,6 +356,13 @@ impl ScenarioHttpHost {
 
     fn account_response(&self, request: &HttpRequest) -> HttpResponse {
         let state = lock(&self.state);
+        let mut account = json!({
+            "balance": state.wallet.balance_nanograms,
+            "state": state.wallet.status,
+        });
+        if let Some(sync_utime) = state.wallet.sync_utime {
+            account["sync_utime"] = json!(sync_utime);
+        }
         let mut response = response_with_status(
             request,
             state.account_status,
@@ -364,11 +371,7 @@ impl ScenarioHttpHost {
             } else {
                 json!({
                     "ok": true,
-                    "result": {
-                        "balance": state.wallet.balance_nanograms,
-                        "state": state.wallet.status,
-                        "sync_utime": state.wallet.sync_utime,
-                    }
+                    "result": account,
                 })
             },
         );

@@ -6,9 +6,8 @@ use ton::ton_core::types::TonAddress;
 use url::{Host, Url};
 
 use crate::MAX_PROVIDER_REQUEST_TIMEOUT_MS;
-use crate::types::parse_positive_decimal;
 use crate::wallet::crypto::derive_v5r1_public_state;
-use crate::{SendAmount, SendPreviewRequest, SendRequest, WalletClientConfig, WalletClientError};
+use crate::{SendPreviewRequest, SendRequest, WalletClientConfig, WalletClientError};
 
 pub(super) fn validate_config(config: &WalletClientConfig) -> Result<(), WalletClientError> {
     if config.record_id.trim().is_empty()
@@ -37,7 +36,6 @@ pub(super) fn validate_send(request: &SendRequest) -> Result<(), WalletClientErr
     if request.operation_id.trim().is_empty()
         || request.destination.trim().is_empty()
         || TonAddress::from_str(&request.destination).is_err()
-        || !valid_send_amount(&request.amount)
     {
         return Err(WalletClientError::InvalidSendRequest);
     }
@@ -46,21 +44,12 @@ pub(super) fn validate_send(request: &SendRequest) -> Result<(), WalletClientErr
 }
 
 pub(super) fn validate_send_preview(request: &SendPreviewRequest) -> Result<(), WalletClientError> {
-    if request.destination.trim().is_empty()
-        || TonAddress::from_str(&request.destination).is_err()
-        || !valid_send_amount(&request.amount)
+    if request.destination.trim().is_empty() || TonAddress::from_str(&request.destination).is_err()
     {
         return Err(WalletClientError::InvalidSendRequest);
     }
 
     Ok(())
-}
-
-fn valid_send_amount(amount: &SendAmount) -> bool {
-    match amount {
-        SendAmount::Exact { nanograms } => parse_positive_decimal(nanograms).is_some(),
-        SendAmount::All => true,
-    }
 }
 
 impl WalletClientConfig {

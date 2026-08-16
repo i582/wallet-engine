@@ -22,7 +22,7 @@ struct StoredWallet: Codable, Identifiable, Sendable {
 struct WalletAccountSnapshot: Sendable {
     let balanceNanograms: String
     let status: String
-    let syncUtime: UInt64?
+    let syncUtime: UInt64
 
     var balanceGrams: String {
         GramAmount.format(nanograms: balanceNanograms)

@@ -4,7 +4,6 @@
 //! callbacks itself. Its journal record prevents a second signature after an
 //! ambiguous submission result.
 
-use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use ton::ton_core::types::TonAddress;
@@ -14,8 +13,8 @@ use crate::domain::{
     PendingReason, ProtectedSecretRead, ProtectedSecretRef, ResolutionInfo, SecretAccessReason,
     SendPhase, SendRequest, SendSnapshot, bounded_diagnostic,
 };
-use crate::types::{Boc, parse_positive_decimal};
-use crate::{Base64Hash, SendAmount};
+use crate::types::Boc;
+use crate::{Base64Hash, SendAmount, UnsignedDecimalString};
 
 const JOURNAL_SCHEMA_VERSION: u32 = 2;
 const FIRST_JOURNAL_VERSION: u64 = 1;
@@ -36,10 +35,6 @@ pub(crate) struct FreshSendAccount {
     /// A new send after a submitted operation requires this value to increase.
     /// Nonexistent and uninitialized accounts can send only with a zero value.
     pub seqno: u32,
-
-    /// The provider synchronization time as a Unix timestamp.
-    /// Transfer expiration uses this value instead of the device clock.
-    pub observed_at: u64,
 }
 
 impl FreshSendAccount {
@@ -80,7 +75,7 @@ pub(crate) struct PreparedTransfer {
 
     /// The unsigned Unix expiration time signed into the wallet message.
     /// The engine derives it from provider time and the configured validity interval.
-    pub valid_until: u32,
+    pub valid_until: u64,
 
     /// The validated signed external-message BOC submitted to Toncenter.
     /// The journal preserves it after an ambiguous transport result.
@@ -252,7 +247,7 @@ struct DurableSendRecord {
     /// Reports whether the signed message contains the wallet `StateInit`.
     needs_state_init: bool,
     /// The unsigned Unix expiration time signed into the wallet message.
-    valid_until: u32,
+    valid_until: u64,
     /// The validated signed BOC.
     /// JSON clients receive it as standard padded Base64.
     #[serde(rename = "signed_boc_base64")]
@@ -271,7 +266,7 @@ struct DurableSendRecord {
     confirmed_transaction_hash: Option<Base64Hash>,
     /// Confirmed transaction logical time retained as terminal evidence.
     #[serde(default)]
-    confirmed_transaction_lt: Option<String>,
+    confirmed_transaction_lt: Option<UnsignedDecimalString>,
 }
 
 /// Durable signed send that still needs chain evidence before replacement is safe.
@@ -282,7 +277,7 @@ pub(crate) struct PendingSendRecord {
     pub(crate) record_id: String,
     pub(crate) source: TonAddress,
     pub(crate) seqno: u32,
-    pub(crate) valid_until: u32,
+    pub(crate) valid_until: u64,
     pub(crate) message_hash: Base64Hash,
     stage: SendStage,
     durable: DurableSendRecord,
@@ -294,7 +289,7 @@ pub(crate) struct PendingSendRecord {
 pub(crate) enum SendResolution {
     Confirmed {
         transaction_hash: Base64Hash,
-        transaction_lt: String,
+        transaction_lt: UnsignedDecimalString,
     },
     Replaced,
     Expired,
@@ -894,8 +889,6 @@ fn validate_request(record_id: &str, request: &SendRequest) -> Result<(), SendWo
         ));
     }
 
-    validate_amount(&request.amount)?;
-
     Ok(())
 }
 
@@ -915,10 +908,7 @@ fn decode_durable_record(record: &JournalRecord) -> Result<DurableSendRecord, Se
         ));
     }
 
-    if durable.operation_id.trim().is_empty()
-        || durable.record_id.trim().is_empty()
-        || validate_amount(&durable.amount).is_err()
-    {
+    if durable.operation_id.trim().is_empty() || durable.record_id.trim().is_empty() {
         return Err(SendWorkflowError::InvalidJournal(
             "record fields are invalid".to_owned(),
         ));
@@ -926,10 +916,10 @@ fn decode_durable_record(record: &JournalRecord) -> Result<DurableSendRecord, Se
 
     if durable.stage == SendStage::Confirmed
         && (durable.confirmed_transaction_hash.is_none()
-            || !durable.confirmed_transaction_lt.as_ref().is_some_and(|lt| {
-                lt.parse::<u64>()
-                    .is_ok_and(|value| value.to_string() == *lt)
-            }))
+            || durable
+                .confirmed_transaction_lt
+                .as_ref()
+                .is_none_or(|lt| lt.try_to::<u64>().is_err()))
     {
         return Err(SendWorkflowError::InvalidJournal(
             "confirmed record evidence is invalid".to_owned(),
@@ -937,19 +927,6 @@ fn decode_durable_record(record: &JournalRecord) -> Result<DurableSendRecord, Se
     }
 
     Ok(durable)
-}
-
-fn parse_amount_nanograms(value: &str) -> Result<BigUint, SendWorkflowError> {
-    parse_positive_decimal(value).ok_or_else(|| {
-        SendWorkflowError::InvalidRequest("amount must be positive canonical nanograms".to_owned())
-    })
-}
-
-fn validate_amount(amount: &SendAmount) -> Result<(), SendWorkflowError> {
-    match amount {
-        SendAmount::Exact { nanograms } => parse_amount_nanograms(nanograms).map(drop),
-        SendAmount::All => Ok(()),
-    }
 }
 
 fn next_journal_version(current: Option<u64>) -> Result<u64, SendWorkflowError> {
@@ -999,14 +976,6 @@ mod tests {
                     ..request()
                 },
                 "destination is invalid",
-            ),
-            (
-                "record",
-                SendRequest {
-                    amount: SendAmount::exact("01"),
-                    ..request()
-                },
-                "amount must be positive canonical nanograms",
             ),
         ];
 
@@ -1100,7 +1069,7 @@ mod tests {
             Base64Hash::from_bytes(&[9; 32]).expect("the hash fixture has 32 bytes");
         let resolution = SendResolution::Confirmed {
             transaction_hash: transaction_hash.clone(),
-            transaction_lt: "42".to_owned(),
+            transaction_lt: UnsignedDecimalString::try_from("42").expect("valid transaction lt"),
         };
         let mutation = pending
             .terminal_mutation(&resolution)
@@ -1113,7 +1082,8 @@ mod tests {
             terminal_send_resolution(&mutation.replacement, "record", &source()),
             Ok(Some(SendResolution::Confirmed {
                 transaction_hash,
-                transaction_lt: "42".to_owned(),
+                transaction_lt: UnsignedDecimalString::try_from("42")
+                    .expect("valid transaction lt"),
             }))
         );
     }
@@ -1245,7 +1215,7 @@ mod tests {
             Box::new(|prepared| prepared.source = other_address()),
             Box::new(|prepared| prepared.destination = other_address()),
             Box::new(|prepared| {
-                prepared.amount = SendAmount::exact("2");
+                prepared.amount = SendAmount::exact("2").expect("valid exact amount");
             }),
             Box::new(|prepared| prepared.comment = Some("different".to_owned())),
             Box::new(|prepared| prepared.seqno = 8),
@@ -1284,7 +1254,7 @@ mod tests {
         SendRequest {
             operation_id: "operation".to_owned(),
             destination: RAW_DESTINATION.to_owned(),
-            amount: SendAmount::exact("1"),
+            amount: SendAmount::exact("1").expect("valid exact amount"),
             comment: None,
         }
     }
@@ -1311,7 +1281,6 @@ mod tests {
         FreshSendAccount {
             status: AccountStatus::Active,
             seqno: 7,
-            observed_at: 1_800_000_000,
         }
     }
 
@@ -1321,7 +1290,7 @@ mod tests {
             record_id: "record".to_owned(),
             source: source(),
             destination: destination(),
-            amount: SendAmount::exact("1"),
+            amount: SendAmount::exact("1").expect("valid exact amount"),
             comment: None,
             seqno: 7,
             needs_state_init: false,

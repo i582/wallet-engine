@@ -106,12 +106,9 @@ export function formatTimestamp(timestamp: number): string {
 export function gramsToNanograms(value: string): string {
   const normalized: string = value.trim()
   if (!GRAM_AMOUNT.test(normalized)) {
-    throw new Error("Enter a positive amount with no more than 9 decimal places")
+    throw new Error("Enter a nonnegative amount with no more than 9 decimal places")
   }
   const [grams, fraction = ""]: string[] = normalized.split(".")
   const nanograms: bigint = BigInt(grams) * 1_000_000_000n + BigInt(fraction.padEnd(9, "0"))
-  if (nanograms === 0n) {
-    throw new Error("The amount must be greater than zero")
-  }
   return nanograms.toString()
 }

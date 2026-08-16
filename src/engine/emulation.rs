@@ -108,8 +108,8 @@ pub(super) fn parse_emulation(
     Ok(EvaluatedEmulation {
         summary: SendEmulation {
             mc_block_seqno: response.mc_block_seqno,
-            wallet_fees_nanograms: wallet_fees.to_string(),
-            trace_fees_nanograms: trace_fees.to_string(),
+            wallet_fees_nanograms: wallet_fees.into(),
+            trace_fees_nanograms: trace_fees.into(),
             transaction_count,
             actions,
             trace_succeeded,
@@ -269,7 +269,7 @@ struct EmulatedActionPhase {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Network, ProviderConfig};
+    use crate::{Network, ProviderConfig, UnsignedDecimalString};
 
     const ADDRESS: &str = "0:1111111111111111111111111111111111111111111111111111111111111111";
 
@@ -313,8 +313,14 @@ mod tests {
 
         assert!(parsed.wallet_succeeded);
         assert_eq!(parsed.summary.mc_block_seqno, 17);
-        assert_eq!(parsed.summary.wallet_fees_nanograms, "11");
-        assert_eq!(parsed.summary.trace_fees_nanograms, "18");
+        assert_eq!(
+            parsed.summary.wallet_fees_nanograms,
+            UnsignedDecimalString::from(11_u64)
+        );
+        assert_eq!(
+            parsed.summary.trace_fees_nanograms,
+            UnsignedDecimalString::from(18_u64)
+        );
         assert_eq!(parsed.summary.transaction_count, 2);
         assert!(!parsed.summary.trace_succeeded);
         assert!(parsed.summary.is_incomplete);

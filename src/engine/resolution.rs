@@ -236,8 +236,9 @@ impl WalletClient {
                 .await;
         }
 
-        let expiration_boundary = u64::from(pending.valid_until)
-            .saturating_add(u64::from(config.resolution_margin_seconds));
+        let expiration_boundary = pending
+            .valid_until
+            .saturating_add(config.resolution_margin_seconds);
         if pending_observed && provider_time > expiration_boundary {
             return self
                 .persist_send_resolution(owner, pending, SendResolution::Expired)

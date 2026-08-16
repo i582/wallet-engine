@@ -114,7 +114,8 @@ pub(crate) const fn network() -> NetworkFixtureBuilder {
 pub(crate) fn send() -> SendAction {
     SendAction {
         destination: Destination::SelfWallet,
-        amount: SendAmount::exact(NANOGRAMS_PER_GRAM.to_string()),
+        amount: SendAmount::exact(NANOGRAMS_PER_GRAM.to_string())
+            .expect("fixture amount must be canonical"),
         comment: None,
     }
 }
@@ -581,12 +582,12 @@ pub(crate) struct JournalFixture {
 }
 
 pub(crate) struct ClientFixture {
-    send_validity_seconds: u32,
+    send_validity_seconds: u64,
 }
 
 impl ClientFixture {
     #[must_use]
-    pub(crate) const fn send_validity_seconds(mut self, seconds: u32) -> Self {
+    pub(crate) const fn send_validity_seconds(mut self, seconds: u64) -> Self {
         self.send_validity_seconds = seconds;
         self
     }
@@ -760,13 +761,15 @@ impl SendAction {
 
     #[must_use]
     pub(crate) fn grams(mut self, value: u64) -> Self {
-        self.amount = SendAmount::exact(grams(value).nanograms);
+        self.amount =
+            SendAmount::exact(grams(value).nanograms).expect("fixture amount must be canonical");
         self
     }
 
     #[must_use]
     pub(crate) fn nanograms(mut self, value: u64) -> Self {
-        self.amount = SendAmount::exact(value.to_string());
+        self.amount =
+            SendAmount::exact(value.to_string()).expect("fixture amount must be canonical");
         self
     }
 
@@ -1810,8 +1813,6 @@ impl ScenarioRunner {
                 match self.results.get(&operation) {
                     Some(OperationResult::Preview(Ok(preview)))
                         if preview.emulation.transaction_count > 0
-                            && !preview.emulation.wallet_fees_nanograms.is_empty()
-                            && !preview.emulation.trace_fees_nanograms.is_empty()
                             && STANDARD
                                 .decode(&preview.message_boc_base64)
                                 .ok()
@@ -2007,7 +2008,9 @@ impl ScenarioRunner {
                     .ok_or_else(|| "expected a localnet activity request".to_owned())?;
                 let parsed = url::Url::parse(&request).map_err(|error| error.to_string())?;
                 let query: HashMap<_, _> = parsed.query_pairs().into_owned().collect();
-                if query.get("lt") == Some(&cursor.logical_time)
+                if query
+                    .get("lt")
+                    .is_some_and(|logical_time| logical_time == &cursor.logical_time.to_string())
                     && query.get("hash").map(String::as_str) == Some(cursor.hash.as_str())
                 {
                     Ok(())

@@ -58,7 +58,7 @@ export interface AccountSnapshot {
   /** Exact unsigned balance in nanograms, encoded as a base-10 integer string. */
   readonly balanceNanograms: string
   readonly status: AccountStatus
-  readonly syncUtime?: number
+  readonly syncUtime: number
 }
 
 export interface ActivityItem {

@@ -1,6 +1,7 @@
 //! Resource state and errors exposed by wallet operations.
 
 use super::{AccountStatus, HttpHostErrorKind};
+use crate::UnsignedDecimalString;
 
 /// Replaces control characters and bounds diagnostics stored in public errors.
 ///
@@ -206,22 +207,22 @@ pub enum WalletClientError {
         "insufficient wallet balance: requested {requested_nanograms} nanograms, available {available_nanograms}"
     )]
     InsufficientBalance {
-        /// The fresh provider balance as a canonical decimal string.
-        available_nanograms: String,
-        /// The requested transfer value as a canonical decimal string.
-        requested_nanograms: String,
+        /// The fresh provider balance, in nanograms.
+        available_nanograms: UnsignedDecimalString,
+        /// The requested transfer value, in nanograms.
+        requested_nanograms: UnsignedDecimalString,
     },
     /// The requested exact value fits, but the value and emulated wallet fee do not.
     #[error(
         "insufficient wallet balance including fees: requested {requested_nanograms} nanograms, estimated fee {estimated_fee_nanograms} nanograms, available {available_nanograms} nanograms"
     )]
     InsufficientBalanceForFees {
-        /// The fresh provider balance as a canonical decimal string.
-        available_nanograms: String,
-        /// The exact requested value as a canonical decimal string.
-        requested_nanograms: String,
+        /// The fresh provider balance, in nanograms.
+        available_nanograms: UnsignedDecimalString,
+        /// The exact requested value, in nanograms.
+        requested_nanograms: UnsignedDecimalString,
         /// The wallet transaction fee returned by emulation.
-        estimated_fee_nanograms: String,
+        estimated_fee_nanograms: UnsignedDecimalString,
     },
     /// The protected secret cannot be decoded as a valid wallet recovery phrase.
     #[error("the protected wallet secret is invalid")]
