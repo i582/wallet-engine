@@ -111,4 +111,13 @@ mod tests {
             .expect("string serialization must work");
         assert!(serde_json::from_str::<Boc>(&encoded).is_err());
     }
+
+    #[test]
+    fn consuming_conversion_returns_the_complete_base64_boc() {
+        let boc = Boc::try_from(TonCell::EMPTY_BOC.to_vec())
+            .expect("the TON empty-cell BOC must be valid");
+        let expected = boc.to_base64();
+
+        assert_eq!(String::from(boc), expected);
+    }
 }

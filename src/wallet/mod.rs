@@ -356,23 +356,60 @@ fn validate_record_id(record_id: &str) -> Result<(), WalletLifecycleError> {
 mod tests {
     use super::*;
 
-    const ADDRESS: &str = "0:1111111111111111111111111111111111111111111111111111111111111111";
-
     #[test]
-    fn descriptor_must_use_the_record_bound_secret_reference() {
-        let descriptor = WalletDescriptor {
-            record_id: "wallet-record".to_owned(),
-            address: TonAddressString::try_from(ADDRESS).expect("valid TON address"),
-            public_key: vec![0; 32],
-            network: Network::Testnet,
-            secret_ref: ProtectedSecretRef {
-                value: "wallet:another-record:mnemonic".to_owned(),
-            },
-        };
+    fn descriptor_rejects_each_broken_identity_binding_independently() {
+        let descriptor = valid_descriptor();
+        assert_eq!(validate_descriptor(&descriptor), Ok(()));
 
+        let mut wrong_secret = descriptor.clone();
+        wrong_secret.secret_ref = ProtectedSecretRef {
+            value: "wallet:another-record:mnemonic".to_owned(),
+        };
         assert_eq!(
-            validate_descriptor(&descriptor),
+            validate_descriptor(&wrong_secret),
             Err(WalletLifecycleError::InvalidRecordId)
         );
+
+        let mut wrong_address = descriptor;
+        wrong_address.address = TonAddressString::try_from(
+            "0:1111111111111111111111111111111111111111111111111111111111111111",
+        )
+        .expect("valid alternate TON address");
+        assert_eq!(
+            validate_descriptor(&wrong_address),
+            Err(WalletLifecycleError::InvalidRecordId)
+        );
+    }
+
+    #[test]
+    fn record_identifier_enforces_each_boundary_independently() {
+        assert_eq!(
+            validate_record_id(""),
+            Err(WalletLifecycleError::InvalidRecordId)
+        );
+        assert_eq!(
+            validate_record_id("invalid/value"),
+            Err(WalletLifecycleError::InvalidRecordId)
+        );
+        assert_eq!(validate_record_id(&"a".repeat(MAX_RECORD_ID_BYTES)), Ok(()));
+        assert_eq!(
+            validate_record_id(&"a".repeat(MAX_RECORD_ID_BYTES + 1)),
+            Err(WalletLifecycleError::InvalidRecordId)
+        );
+    }
+
+    fn valid_descriptor() -> WalletDescriptor {
+        let record_id = "wallet-record";
+        let public_key = vec![0; 32];
+        let (address, _) = derive_v5r1_public_state(&public_key, Network::Testnet)
+            .expect("32-byte public key derives a wallet");
+
+        WalletDescriptor {
+            record_id: record_id.to_owned(),
+            address: TonAddressString::from_address(&address, Network::Testnet),
+            public_key,
+            network: Network::Testnet,
+            secret_ref: secret_ref_for(record_id),
+        }
     }
 }

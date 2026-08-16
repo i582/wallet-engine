@@ -257,6 +257,29 @@ mod tests {
     }
 
     #[test]
+    fn a_page_at_the_same_logical_time_does_not_advance_pagination() {
+        let mut state = state();
+        state.activity = vec![record("existing", 10, 1)];
+        state.activity_cursor = Some(cursor(10, 1));
+        state.activity_has_more = true;
+        state.sync_activity_snapshot();
+
+        let added = apply_activity_page(
+            &mut state,
+            ActivityPage {
+                items: vec![record("duplicate-boundary", 10, 2)],
+                cursor: Some(cursor(10, 2)),
+                has_more: true,
+            },
+        );
+
+        assert_eq!(added, 0);
+        assert_eq!(state.activity.len(), 1);
+        assert_eq!(state.activity[0].id, "existing");
+        assert!(!state.activity_has_more);
+    }
+
+    #[test]
     fn a_page_without_an_established_cursor_cannot_extend_existing_history() {
         let mut state = state();
         state.activity = vec![record("existing", 10, 1)];

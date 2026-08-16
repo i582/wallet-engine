@@ -61,6 +61,22 @@ fn refresh_supersedes_an_in_flight_older_page() {
 }
 
 #[test]
+fn a_second_page_load_is_skipped_while_pagination_is_active() {
+    scenario("one pagination request owns the older-page cursor")
+        .given(activity_pages(&[10, 3]))
+        .when(call("initial", refresh_wallet()))
+        .then(update("initial").completed())
+        .when(pause_next_activity_request("older-response"))
+        .when(start("first-older", load_more_activity()))
+        .when(wait_for_request("older-response"))
+        .when(call("second-older", load_more_activity()))
+        .then(update("second-older").skipped())
+        .when(release_request("older-response"))
+        .then(update("first-older").completed())
+        .run();
+}
+
+#[test]
 fn cancelling_an_older_page_preserves_loaded_activity() {
     scenario("cancelled pagination cannot publish its late provider response")
         .given(activity_pages(&[10, 3]))

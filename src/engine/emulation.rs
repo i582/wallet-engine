@@ -437,17 +437,61 @@ mod tests {
 
     #[test]
     fn recognizes_the_provider_message_not_accepted_diagnostic() {
-        let error = DomainError {
+        let error = diagnostic("TVM execution error: External message was not accepted");
+
+        assert!(is_message_not_accepted(&error));
+        assert!(!is_message_not_accepted(&diagnostic(
+            "external message failed for another reason"
+        )));
+        assert!(!is_message_not_accepted(&diagnostic(
+            "internal message was not accepted"
+        )));
+    }
+
+    #[test]
+    fn optional_transaction_phases_reject_each_explicit_failure_independently() {
+        let successful = emulated_transaction(Some((true, 0)), Some((true, 0)));
+        assert!(transaction_succeeded(&successful, false));
+        assert!(transaction_succeeded(&successful, true));
+
+        let compute_failed = emulated_transaction(Some((false, 0)), Some((true, 0)));
+        assert!(!transaction_succeeded(&compute_failed, false));
+
+        let action_failed = emulated_transaction(Some((true, 0)), Some((false, 0)));
+        assert!(!transaction_succeeded(&action_failed, false));
+    }
+
+    fn diagnostic(message: &str) -> DomainError {
+        DomainError {
             code: ErrorCode::HttpRejected,
             category: ErrorCategory::ProviderProtocol,
             retry: RetryAdvice::None,
-            developer_message: "TVM execution error: External message was not accepted".to_owned(),
+            developer_message: message.to_owned(),
             provider_status: Some(422),
             retry_after_ms: None,
             host_kind: None,
-        };
+        }
+    }
 
-        assert!(is_message_not_accepted(&error));
+    fn emulated_transaction(
+        compute: Option<(bool, i32)>,
+        action: Option<(bool, i32)>,
+    ) -> EmulatedTransaction {
+        EmulatedTransaction {
+            account: ADDRESS.to_owned(),
+            total_fees: "0".to_owned(),
+            description: EmulatedTransactionDescription {
+                aborted: Some(false),
+                compute_ph: compute.map(|(success, exit_code)| EmulatedComputePhase {
+                    success: Some(success),
+                    exit_code: Some(exit_code),
+                }),
+                action: action.map(|(success, result_code)| EmulatedActionPhase {
+                    success: Some(success),
+                    result_code: Some(result_code),
+                }),
+            },
+        }
     }
 
     #[test]

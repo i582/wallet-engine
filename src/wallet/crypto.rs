@@ -204,3 +204,20 @@ pub(crate) fn derive_v5r1_public_state(
 
     Ok((address, state_init))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sensitive_mnemonic_rejects_invalid_utf8_and_invalid_ton_words() {
+        assert!(matches!(
+            SensitiveMnemonic::from_bytes(vec![0xff]),
+            Err(WalletCryptoError::InvalidMnemonic)
+        ));
+        assert!(matches!(
+            SensitiveMnemonic::from_bytes(b"not a TON mnemonic".to_vec()),
+            Err(WalletCryptoError::InvalidMnemonic)
+        ));
+    }
+}

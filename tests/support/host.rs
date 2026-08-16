@@ -48,6 +48,7 @@ struct HttpState {
     emulation_rejected: bool,
     message_is_executed: bool,
     message_is_pending: bool,
+    pending_status: u16,
     activity_pages: Vec<usize>,
     activity_page_index: usize,
     next_activity_status: Option<u16>,
@@ -64,6 +65,8 @@ pub(crate) enum RequestKind {
     Activity,
     Seqno,
     Emulation,
+    ExecutedMessage,
+    PendingMessage,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -143,6 +146,7 @@ impl ScenarioHttpHost {
                 emulation_rejected: false,
                 message_is_executed: false,
                 message_is_pending: false,
+                pending_status: 200,
                 activity_pages: Vec::new(),
                 activity_page_index: 0,
                 next_activity_status: None,
@@ -180,6 +184,7 @@ impl ScenarioHttpHost {
         state.emulation_rejected = fixture.emulation_rejected;
         state.message_is_executed = fixture.message_is_executed;
         state.message_is_pending = fixture.message_is_pending;
+        state.pending_status = fixture.pending_status;
     }
 
     pub(super) fn set_activity_pages(&self, pages: Vec<usize>) {
@@ -693,32 +698,48 @@ impl WalletHttpHost for ScenarioHttpHost {
             } else {
                 Vec::new()
             };
-            return Ok(response(
+            let response = response(
                 &request,
                 json!({ "transactions": transactions, "address_book": {} }),
-            ));
+            );
+            self.wait_at_request_gate(RequestKind::ExecutedMessage, request.id)
+                .await?;
+            return Ok(response);
         }
         if request.url.contains("/api/v3/pendingTransactions") {
-            let state = lock(&self.state);
-            let transactions = if state.message_is_pending {
-                state
-                    .submitted_message
-                    .as_ref()
-                    .map(|submitted| {
-                        vec![json!({
-                            "hash": STANDARD.encode([8_u8; 32]),
-                            "lt": "8001",
-                            "in_msg": { "hash_norm": submitted.message_hash }
-                        })]
-                    })
-                    .unwrap_or_default()
-            } else {
-                Vec::new()
+            let response = {
+                let state = lock(&self.state);
+                if state.pending_status != 200 {
+                    response_with_status(
+                        &request,
+                        state.pending_status,
+                        json!({ "error": "scripted pending endpoint failure" }),
+                    )
+                } else {
+                    let transactions = if state.message_is_pending {
+                        state
+                            .submitted_message
+                            .as_ref()
+                            .map(|submitted| {
+                                vec![json!({
+                                    "hash": STANDARD.encode([8_u8; 32]),
+                                    "lt": "8001",
+                                    "in_msg": { "hash_norm": submitted.message_hash }
+                                })]
+                            })
+                            .unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    };
+                    response(
+                        &request,
+                        json!({ "transactions": transactions, "address_book": {} }),
+                    )
+                }
             };
-            return Ok(response(
-                &request,
-                json!({ "transactions": transactions, "address_book": {} }),
-            ));
+            self.wait_at_request_gate(RequestKind::PendingMessage, request.id)
+                .await?;
+            return Ok(response);
         }
         if request.url.contains("/api/v3/walletStates") {
             let seqno = lock(&self.state).wallet.seqno;
@@ -762,7 +783,7 @@ pub(super) struct MemoryPlatformHost {
     secret_user_presence: Mutex<HashMap<String, bool>>,
     secret_read_reasons: Mutex<Vec<(String, SecretAccessReason)>>,
     journal: Mutex<HashMap<(String, String), JournalRecord>>,
-    conflict_next_journal_write: Mutex<bool>,
+    conflict_next_journal_write: Mutex<Option<JournalConflict>>,
     secret_read_error: Mutex<Option<ProtectedSecretHostError>>,
     secret_store_error: Mutex<Option<ProtectedSecretHostError>>,
     secret_delete_error: Mutex<Option<ProtectedSecretHostError>>,
@@ -771,6 +792,13 @@ pub(super) struct MemoryPlatformHost {
     journal_write_count: Mutex<u64>,
     platform_gate: Mutex<Option<PlatformGate>>,
     platform_changed: Condvar,
+}
+
+#[derive(Clone, Copy)]
+enum JournalConflict {
+    SameRecord,
+    ForeignOperation,
+    ForeignMessage,
 }
 
 struct PlatformGate {
@@ -854,7 +882,15 @@ impl MemoryPlatformHost {
     }
 
     pub(super) fn conflict_next_journal_write(&self) {
-        *lock(&self.conflict_next_journal_write) = true;
+        *lock(&self.conflict_next_journal_write) = Some(JournalConflict::SameRecord);
+    }
+
+    pub(super) fn conflict_next_journal_write_with_foreign_operation(&self) {
+        *lock(&self.conflict_next_journal_write) = Some(JournalConflict::ForeignOperation);
+    }
+
+    pub(super) fn conflict_next_journal_write_with_foreign_message(&self) {
+        *lock(&self.conflict_next_journal_write) = Some(JournalConflict::ForeignMessage);
     }
 
     pub(super) fn fail_next_secret_read(&self) {
@@ -1015,7 +1051,30 @@ impl WalletPlatformHost for MemoryPlatformHost {
         let key = (mutation.key.record_id, mutation.key.slot);
         let mut journal = lock(&self.journal);
         let current = journal.get(&key).cloned();
-        if std::mem::take(&mut *lock(&self.conflict_next_journal_write)) {
+        let conflict = lock(&self.conflict_next_journal_write).take();
+        if let Some(conflict) = conflict {
+            let competing_identity = match conflict {
+                JournalConflict::SameRecord => None,
+                JournalConflict::ForeignOperation => Some((
+                    "operation_id",
+                    Value::String("foreign-operation".to_owned()),
+                )),
+                JournalConflict::ForeignMessage => {
+                    Some(("message_hash", Value::String(STANDARD.encode([4_u8; 32]))))
+                }
+            };
+            let current = current.map(|mut record| {
+                if let Some((field, value)) = &competing_identity {
+                    let mut payload: Value = serde_json::from_slice(&record.payload)
+                        .expect("durable scenario journal must contain JSON");
+                    payload[field] = value.clone();
+                    record.payload = serde_json::to_vec(&payload)
+                        .expect("mutated durable scenario journal must serialize");
+                    record.version = record.version.saturating_add(1);
+                    journal.insert(key.clone(), record.clone());
+                }
+                record
+            });
             return Ok(JournalCompareExchangeResult {
                 applied: false,
                 current,

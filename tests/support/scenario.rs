@@ -16,8 +16,9 @@ use ton::ton_core::traits::tlb::TLB;
 use wallet_engine::{
     AccountStatus, ActivityCursor, DomainError, HttpHostErrorKind, Network, NonEmptyString,
     PendingReason, ProtectedSecretRef, ProviderConfig, ResourcePhase, SendAmount, SendPhase,
-    SendPreview, SendPreviewRequest, SendRequest, SendResult, TonAddressString, WalletClient,
-    WalletClientConfig, WalletClientError, WalletHttpHost, WalletOperationOutcome, WalletUpdate,
+    SendPreview, SendPreviewRequest, SendRequest, SendResult, SendSnapshot, TonAddressString,
+    WalletClient, WalletClientConfig, WalletClientError, WalletHttpHost, WalletOperationOutcome,
+    WalletUpdate,
 };
 
 use super::host::{MemoryPlatformHost, PlatformCallKind, RequestKind, ScenarioHttpHost};
@@ -96,6 +97,8 @@ pub(crate) const fn secret() -> SecretFixture {
 pub(crate) const fn journal() -> JournalFixture {
     JournalFixture {
         conflict_next_write: false,
+        conflict_with_foreign_operation: false,
+        conflict_with_foreign_message: false,
         load_fails: false,
         failing_write: None,
     }
@@ -117,6 +120,7 @@ pub(crate) const fn provider() -> ProviderFixture {
         emulation_rejected: false,
         message_is_executed: false,
         message_is_pending: false,
+        pending_status: 200,
     }
 }
 
@@ -173,6 +177,10 @@ pub(crate) const fn wait_for_change(after_revision: u64) -> UserAction {
     UserAction::WaitForChange { after_revision }
 }
 
+pub(crate) const fn resolve_pending() -> UserAction {
+    UserAction::ResolvePending
+}
+
 pub(crate) fn pause_next_account_request(name: impl Into<String>) -> ControlStep {
     ControlStep::PauseRequest {
         name: name.into(),
@@ -198,6 +206,20 @@ pub(crate) fn pause_next_emulation_request(name: impl Into<String>) -> ControlSt
     ControlStep::PauseRequest {
         name: name.into(),
         kind: RequestKind::Emulation,
+    }
+}
+
+pub(crate) fn pause_next_executed_message_request(name: impl Into<String>) -> ControlStep {
+    ControlStep::PauseRequest {
+        name: name.into(),
+        kind: RequestKind::ExecutedMessage,
+    }
+}
+
+pub(crate) fn pause_next_pending_message_request(name: impl Into<String>) -> ControlStep {
+    ControlStep::PauseRequest {
+        name: name.into(),
+        kind: RequestKind::PendingMessage,
     }
 }
 
@@ -400,6 +422,10 @@ pub(crate) fn activity_is(names: &[&str]) -> Expectation {
 
 pub(crate) fn request_was_cancelled(name: impl Into<String>) -> Expectation {
     Expectation::RequestWasCancelled(name.into())
+}
+
+pub(crate) fn request_was_not_cancelled(name: impl Into<String>) -> Expectation {
+    Expectation::RequestWasNotCancelled(name.into())
 }
 
 pub(crate) fn remember_revision(name: impl Into<String>) -> Expectation {
@@ -612,6 +638,8 @@ impl SecretFixture {
 
 pub(crate) struct JournalFixture {
     conflict_next_write: bool,
+    conflict_with_foreign_operation: bool,
+    conflict_with_foreign_message: bool,
     load_fails: bool,
     failing_write: Option<u64>,
 }
@@ -643,6 +671,7 @@ pub(crate) struct ProviderFixture {
     pub(super) emulation_rejected: bool,
     pub(super) message_is_executed: bool,
     pub(super) message_is_pending: bool,
+    pub(super) pending_status: u16,
 }
 
 pub(crate) struct ActivityFixture {
@@ -659,6 +688,12 @@ impl ProviderFixture {
     #[must_use]
     pub(crate) const fn message_is_pending(mut self) -> Self {
         self.message_is_pending = true;
+        self
+    }
+
+    #[must_use]
+    pub(crate) const fn pending_fails(mut self, status: u16) -> Self {
+        self.pending_status = status;
         self
     }
 
@@ -740,6 +775,18 @@ impl JournalFixture {
     #[must_use]
     pub(crate) const fn conflicts_on_next_write(mut self) -> Self {
         self.conflict_next_write = true;
+        self
+    }
+
+    #[must_use]
+    pub(crate) const fn conflicts_with_foreign_operation(mut self) -> Self {
+        self.conflict_with_foreign_operation = true;
+        self
+    }
+
+    #[must_use]
+    pub(crate) const fn conflicts_with_foreign_message(mut self) -> Self {
+        self.conflict_with_foreign_message = true;
         self
     }
 
@@ -838,6 +885,7 @@ pub(crate) enum UserAction {
     CancelLoadMoreActivity,
     Shutdown,
     WaitForChange { after_revision: u64 },
+    ResolvePending,
     SpamTransfers { count: u32 },
     ReplayLastSubmission,
 }
@@ -1016,6 +1064,7 @@ pub(crate) enum Expectation {
     },
     ActivityIs(Vec<String>),
     RequestWasCancelled(String),
+    RequestWasNotCancelled(String),
     RememberRevision(String),
     RememberSnapshot(String),
     SnapshotIsExceptRevision(String),
@@ -1317,6 +1366,7 @@ enum OperationResult {
     Preview(Result<SendPreview, WalletClientError>),
     Update(Box<Result<WalletUpdate, WalletClientError>>),
     Snapshot(Box<Result<wallet_engine::WalletSnapshot, WalletClientError>>),
+    Resolution(Result<SendSnapshot, WalletClientError>),
     Unit(Result<(), WalletClientError>),
     Harness(Result<(), String>),
 }
@@ -1329,6 +1379,7 @@ impl OperationResult {
             }
             Self::Update(result) => result.as_ref().as_ref().err(),
             Self::Snapshot(result) => result.as_ref().as_ref().err(),
+            Self::Resolution(result) => result.as_ref().err(),
             Self::Send(Ok(_)) | Self::Preview(Ok(_)) | Self::Unit(Ok(())) | Self::Harness(_) => {
                 None
             }
@@ -1343,6 +1394,8 @@ impl ScenarioRunner {
         let mut use_localnet = false;
         let mut secret_behavior = SecretBehavior::Valid;
         let mut journal_conflict = false;
+        let mut journal_conflict_with_foreign_operation = false;
+        let mut journal_conflict_with_foreign_message = false;
         let mut journal_load_fails = false;
         let mut failing_journal_write = None;
         let mut provider_fixture = provider();
@@ -1359,6 +1412,9 @@ impl ScenarioRunner {
                 Step::Given(Given::Secret(fixture)) => secret_behavior = fixture.behavior,
                 Step::Given(Given::Journal(fixture)) => {
                     journal_conflict = fixture.conflict_next_write;
+                    journal_conflict_with_foreign_operation =
+                        fixture.conflict_with_foreign_operation;
+                    journal_conflict_with_foreign_message = fixture.conflict_with_foreign_message;
                     journal_load_fails = fixture.load_fails;
                     failing_journal_write = fixture.failing_write;
                 }
@@ -1378,6 +1434,7 @@ impl ScenarioRunner {
                         emulation_rejected: fixture.emulation_rejected,
                         message_is_executed: fixture.message_is_executed,
                         message_is_pending: fixture.message_is_pending,
+                        pending_status: fixture.pending_status,
                     };
                 }
                 Step::Given(Given::Activity(fixture)) => pages.clone_from(&fixture.pages),
@@ -1406,7 +1463,11 @@ impl ScenarioRunner {
         if secret_behavior == SecretBehavior::HostFailure {
             platform_host.fail_next_secret_read();
         }
-        if journal_conflict {
+        if journal_conflict_with_foreign_operation {
+            platform_host.conflict_next_journal_write_with_foreign_operation();
+        } else if journal_conflict_with_foreign_message {
+            platform_host.conflict_next_journal_write_with_foreign_message();
+        } else if journal_conflict {
             platform_host.conflict_next_journal_write();
         }
         if journal_load_fails {
@@ -1553,7 +1614,13 @@ impl ScenarioRunner {
                 Ok(())
             }
             Given::Journal(journal) => {
-                if journal.conflict_next_write {
+                if journal.conflict_with_foreign_operation {
+                    self.platform_host
+                        .conflict_next_journal_write_with_foreign_operation();
+                } else if journal.conflict_with_foreign_message {
+                    self.platform_host
+                        .conflict_next_journal_write_with_foreign_message();
+                } else if journal.conflict_next_write {
                     self.platform_host.conflict_next_journal_write();
                 }
                 if journal.load_fails {
@@ -1662,6 +1729,10 @@ impl ScenarioRunner {
                     UserAction::WaitForChange { after_revision } => std::thread::spawn(move || {
                         let result = block_on(client.wait_for_change(after_revision));
                         let _ = sender.send(OperationResult::Snapshot(Box::new(result)));
+                    }),
+                    UserAction::ResolvePending => std::thread::spawn(move || {
+                        let result = block_on(client.resolve_pending());
+                        let _ = sender.send(OperationResult::Resolution(result));
                     }),
                     UserAction::SpamTransfers { count } => {
                         let localnet = self.localnet_http_host.clone();
@@ -1841,9 +1912,11 @@ impl ScenarioRunner {
             Expectation::Success { operation } => {
                 self.finish_operation(&operation)?;
                 match self.results.get(&operation) {
-                    Some(OperationResult::Unit(Ok(())) | OperationResult::Harness(Ok(()))) => {
-                        Ok(())
-                    }
+                    Some(
+                        OperationResult::Unit(Ok(()))
+                        | OperationResult::Resolution(Ok(_))
+                        | OperationResult::Harness(Ok(())),
+                    ) => Ok(()),
                     actual => Err(format!(
                         "expected `{operation}` to succeed\nactual: {actual:?}"
                     )),
@@ -2127,6 +2200,22 @@ impl ScenarioRunner {
                     Ok(())
                 } else {
                     Err(format!("request at checkpoint `{name}` was not cancelled"))
+                }
+            }
+            Expectation::RequestWasNotCancelled(name) => {
+                let cancelled = if let Some(host) = &self.scripted_http_host {
+                    host.request_was_cancelled(&name)?
+                } else if let Some(host) = &self.localnet_http_host {
+                    host.request_was_cancelled(&name)?
+                } else {
+                    return Err("scenario has no HTTP host".to_owned());
+                };
+                if cancelled {
+                    Err(format!(
+                        "completed request at checkpoint `{name}` was cancelled later"
+                    ))
+                } else {
+                    Ok(())
                 }
             }
             Expectation::RememberRevision(name) => {

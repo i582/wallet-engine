@@ -333,4 +333,33 @@ mod tests {
         assert_eq!(without_comment.body.data_len_bits(), 0);
         assert_eq!(with_empty_comment.body.data_len_bits(), 32);
     }
+
+    #[test]
+    fn undeployed_preview_rejects_a_public_key_for_another_source() {
+        let (source, _) = derive_v5r1_public_state(&[1_u8; 32], Network::Testnet)
+            .expect("source public key must derive");
+        let source = TonAddressString::from_address(&source, Network::Testnet);
+        let request = SendPreviewRequest {
+            destination: TonAddressString::try_from(DESTINATION)
+                .expect("valid preview destination"),
+            amount: SendAmount::exact("1").expect("valid exact amount"),
+            comment: None,
+        };
+        let account = FreshSendAccount {
+            status: crate::AccountStatus::Uninitialized,
+            seqno: 0,
+        };
+
+        assert!(matches!(
+            prepare_transfer_emulation(
+                &source,
+                &[2_u8; 32],
+                Network::Testnet,
+                &request,
+                &account,
+                1,
+            ),
+            Err(TransferError::PublicKeyMismatch)
+        ));
+    }
 }

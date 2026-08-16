@@ -406,15 +406,23 @@ fn public_key_only_wallet_can_preview_but_cannot_sign_locally() {
 fn cancelling_emulation_discards_its_late_result_before_authorization() {
     scenario("cancelled preview cannot unlock or revive a send")
         .given(wallet().active().balance(grams(10)).seqno(7))
+        .when(pause_next_account_request("completed-account"))
+        .when(pause_next_seqno_request("completed-seqno"))
         .when(pause_next_emulation_request("emulation"))
         .when(start(
             "preview",
             preview_send(send().to(own_address()).grams(1)),
         ))
+        .when(wait_for_request("completed-account"))
+        .when(release_request("completed-account"))
+        .when(wait_for_request("completed-seqno"))
+        .when(release_request("completed-seqno"))
         .when(wait_for_request("emulation"))
         .when(call("cancel", cancel_send_preview()))
         .then(succeeds("cancel"))
         .then(request_was_cancelled("emulation"))
+        .then(request_was_not_cancelled("completed-account"))
+        .then(request_was_not_cancelled("completed-seqno"))
         .then(snapshot().send_phase(SendPhase::Idle))
         .then(protected_secret_was_not_read())
         .then(journal_is_empty())
@@ -702,12 +710,16 @@ fn cancelling_while_the_journal_load_is_pending_discards_its_late_result() {
 fn cancelling_while_seqno_is_pending_cancels_only_that_request() {
     scenario("cancel during seqno fetch cannot continue to authorization")
         .given(wallet().active().balance(grams(10)).seqno(7))
+        .when(pause_next_account_request("completed-account"))
         .when(pause_next_seqno_request("seqno"))
         .when(start("send", send().to(own_address()).grams(1)))
+        .when(wait_for_request("completed-account"))
+        .when(release_request("completed-account"))
         .when(wait_for_request("seqno"))
         .when(call("cancel", cancel_send()))
         .then(succeeds("cancel"))
         .then(request_was_cancelled("seqno"))
+        .then(request_was_not_cancelled("completed-account"))
         .then(snapshot().send_phase(SendPhase::Cancelled))
         .then(protected_secret_was_not_read())
         .then(journal_is_empty())
@@ -771,6 +783,43 @@ fn unknown_submission_blocks_a_replacement_send() {
 }
 
 #[test]
+fn a_stale_lower_seqno_cannot_mark_an_unknown_submission_as_replaced() {
+    scenario("a provider seqno behind the signed message is not replacement evidence")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(submission().paused("first-submit"))
+        .when(start("first", send().to(own_address()).grams(1)))
+        .then(send_phase("first", SendPhase::Submitting))
+        .when(resume("first-submit", submission_timeout()))
+        .then(result("first").submission_unknown())
+        .given(wallet().active().balance(grams(10)).seqno(6))
+        .when(call("replacement", send().to(own_address()).grams(2)))
+        .then(error(
+            "replacement",
+            WalletClientError::PreviousSubmissionUnresolved,
+        ))
+        .then(snapshot().pending_reason(PendingReason::AwaitingWindow))
+        .run();
+}
+
+#[test]
+fn an_advanced_seqno_marks_an_unseen_unknown_submission_as_replaced() {
+    scenario("a later wallet message permits a replacement after the resolver records it")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(submission().paused("first-submit"))
+        .when(start("first", send().to(own_address()).grams(1)))
+        .then(send_phase("first", SendPhase::Submitting))
+        .when(resume("first-submit", submission_timeout()))
+        .then(result("first").submission_unknown())
+        .given(wallet().active().balance(grams(10)).seqno(8))
+        .given(submission().paused("replacement-submit"))
+        .when(start("replacement", send().to(own_address()).grams(2)))
+        .then(send_phase("replacement", SendPhase::Submitting))
+        .when(resume("replacement-submit", submission_accepted()))
+        .then(result("replacement").submitted())
+        .run();
+}
+
+#[test]
 fn executed_unknown_submission_is_confirmed_before_replacement() {
     scenario("an executed unknown submission is confirmed before replacement")
         .given(wallet().active().balance(grams(10)).seqno(7))
@@ -785,6 +834,44 @@ fn executed_unknown_submission_is_confirmed_before_replacement() {
         .then(send_phase("replacement", SendPhase::Submitting))
         .when(resume("replacement-submit", submission_accepted()))
         .then(result("replacement").submitted())
+        .run();
+}
+
+#[test]
+fn resolver_rejects_a_cas_winner_with_another_operation_id() {
+    scenario("resolution cannot continue after a competing operation replaces the journal")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(submission().paused("first-submit"))
+        .when(start("first", send().to(own_address()).grams(1)))
+        .then(send_phase("first", SendPhase::Submitting))
+        .when(resume("first-submit", submission_timeout()))
+        .then(result("first").submission_unknown())
+        .given(provider().message_is_executed())
+        .given(journal().conflicts_with_foreign_operation())
+        .when(call("replacement", send().to(own_address()).grams(2)))
+        .then(error(
+            "replacement",
+            send_failed("another send replaced the journal during resolution"),
+        ))
+        .run();
+}
+
+#[test]
+fn resolver_rejects_a_cas_winner_with_another_signed_message() {
+    scenario("resolution binds a competing journal record to the exact signed message")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(submission().paused("first-submit"))
+        .when(start("first", send().to(own_address()).grams(1)))
+        .then(send_phase("first", SendPhase::Submitting))
+        .when(resume("first-submit", submission_timeout()))
+        .then(result("first").submission_unknown())
+        .given(provider().message_is_executed())
+        .given(journal().conflicts_with_foreign_message())
+        .when(call("replacement", send().to(own_address()).grams(2)))
+        .then(error(
+            "replacement",
+            send_failed("another send replaced the journal during resolution"),
+        ))
         .run();
 }
 
@@ -831,6 +918,131 @@ fn unseen_unknown_submission_expires_by_provider_time() {
         .then(send_phase("replacement", SendPhase::Submitting))
         .when(resume("replacement-submit", submission_accepted()))
         .then(result("replacement").submitted())
+        .run();
+}
+
+#[test]
+fn unknown_submission_remains_pending_at_the_exact_expiration_boundary() {
+    scenario("expiration requires provider time strictly after validity plus margin")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(submission().paused("first-submit"))
+        .when(start("first", send().to(own_address()).grams(1)))
+        .then(send_phase("first", SendPhase::Submitting))
+        .when(resume("first-submit", submission_timeout()))
+        .then(result("first").submission_unknown())
+        // valid_until is 1_800_000_300 and the default margin is 60 seconds.
+        .given(
+            wallet()
+                .active()
+                .balance(grams(10))
+                .seqno(7)
+                .sync_time(1_800_000_360),
+        )
+        .when(call("replacement", send().to(own_address()).grams(2)))
+        .then(error(
+            "replacement",
+            WalletClientError::PreviousSubmissionUnresolved,
+        ))
+        .then(snapshot().pending_reason(PendingReason::AwaitingWindow))
+        .run();
+}
+
+#[test]
+fn standalone_resolution_tracks_only_the_current_http_request() {
+    scenario("shutdown cancels the active resolver request but not its completed predecessor")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(submission().paused("first-submit"))
+        .when(start("first", send().to(own_address()).grams(1)))
+        .then(send_phase("first", SendPhase::Submitting))
+        .when(resume("first-submit", submission_timeout()))
+        .then(result("first").submission_unknown())
+        .when(crash_and_restart())
+        .when(pause_next_executed_message_request(
+            "completed-executed-query",
+        ))
+        .when(pause_next_pending_message_request("active-pending-query"))
+        .when(start("resolution", resolve_pending()))
+        .when(wait_for_request("completed-executed-query"))
+        .when(release_request("completed-executed-query"))
+        .when(wait_for_request("active-pending-query"))
+        .when(call("parallel-resolution", resolve_pending()))
+        .then(error(
+            "parallel-resolution",
+            WalletClientError::SendAlreadyInProgress,
+        ))
+        .when(call("shutdown", shutdown_client()))
+        .then(succeeds("shutdown"))
+        .then(request_was_not_cancelled("completed-executed-query"))
+        .then(request_was_cancelled("active-pending-query"))
+        .when(release_request("active-pending-query"))
+        .then(error("resolution", WalletClientError::StateUnavailable))
+        .run();
+}
+
+#[test]
+fn standalone_resolution_is_rejected_while_a_send_owns_the_wallet() {
+    scenario("resolver cannot race an active send")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .when(pause_next_account_request("send-account"))
+        .when(start("send", send().to(own_address()).grams(1)))
+        .when(wait_for_request("send-account"))
+        .when(call("resolution", resolve_pending()))
+        .then(error(
+            "resolution",
+            WalletClientError::SendAlreadyInProgress,
+        ))
+        .when(call("cancel", cancel_send()))
+        .then(succeeds("cancel"))
+        .when(release_request("send-account"))
+        .then(error("send", WalletClientError::StateUnavailable))
+        .run();
+}
+
+#[test]
+fn missing_optional_pending_endpoint_still_allows_expiration() {
+    scenario("a missing optional pending endpoint is an observed provider capability gap")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(submission().paused("first-submit"))
+        .when(start("first", send().to(own_address()).grams(1)))
+        .then(send_phase("first", SendPhase::Submitting))
+        .when(resume("first-submit", submission_timeout()))
+        .then(result("first").submission_unknown())
+        .given(
+            wallet()
+                .active()
+                .balance(grams(10))
+                .seqno(7)
+                .sync_time(1_800_000_361),
+        )
+        .given(provider().pending_fails(404))
+        .when(call("replacement", send().to(own_address()).grams(2)))
+        .then(result("replacement").submitted())
+        .run();
+}
+
+#[test]
+fn pending_endpoint_server_failure_suppresses_expiration() {
+    scenario("pending endpoint failure cannot prove that an expired message is absent")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(submission().paused("first-submit"))
+        .when(start("first", send().to(own_address()).grams(1)))
+        .then(send_phase("first", SendPhase::Submitting))
+        .when(resume("first-submit", submission_timeout()))
+        .then(result("first").submission_unknown())
+        .given(
+            wallet()
+                .active()
+                .balance(grams(10))
+                .seqno(7)
+                .sync_time(1_800_000_361),
+        )
+        .given(provider().pending_fails(500))
+        .when(call("replacement", send().to(own_address()).grams(2)))
+        .then(error(
+            "replacement",
+            WalletClientError::PreviousSubmissionUnresolved,
+        ))
+        .then(snapshot().pending_reason(PendingReason::AwaitingWindow))
         .run();
 }
 
@@ -1170,6 +1382,16 @@ fn zero_value_transfer_is_submitted() {
     scenario("zero value is a valid contract message")
         .given(wallet().active().balance(grams(10)).seqno(7))
         .when(call("send", send().to(own_address()).nanograms(0)))
+        .then(result("send").submitted())
+        .then(snapshot().send_phase(SendPhase::Submitted))
+        .run();
+}
+
+#[test]
+fn exact_transfer_equal_to_the_fresh_balance_reaches_submission() {
+    scenario("send does not preemptively reserve an unknown fee")
+        .given(wallet().active().balance(grams(1)).seqno(7))
+        .when(call("send", send().to(own_address()).grams(1)))
         .then(result("send").submitted())
         .then(snapshot().send_phase(SendPhase::Submitted))
         .run();

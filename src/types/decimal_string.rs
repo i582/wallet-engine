@@ -239,5 +239,6 @@ mod tests {
         assert!(ten > two);
         assert_eq!(&ten + &two, UnsignedDecimalString::from(12_u64));
         assert_eq!(ten.try_to::<u64>(), Ok(10));
+        assert_eq!(ten.to_string(), "10");
     }
 }

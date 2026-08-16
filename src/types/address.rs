@@ -132,9 +132,13 @@ impl TonAddressExt for TonAddress {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
+    use ton::ton_core::types::TonAddress;
     use uniffi::{Lift, Lower};
 
-    use super::TonAddressString;
+    use super::{TonAddressExt as _, TonAddressString};
+    use crate::Network;
 
     const RAW_ADDRESS: &str = "0:1111111111111111111111111111111111111111111111111111111111111111";
     const FRIENDLY_ADDRESS: &str = "0QA_6fh0aRAkD7n1MNfAUx8TvyCUw2iTQfzVM-0isMze2anN";
@@ -169,5 +173,26 @@ mod tests {
         let ffi_value = <String as Lower<crate::UniFfiTag>>::lower("invalid".to_owned());
         let result = <TonAddressString as Lift<crate::UniFfiTag>>::try_lift(ffi_value);
         assert!(result.is_err(), "UniFFI accepted an invalid TON address");
+    }
+
+    #[test]
+    fn conversions_and_formatters_preserve_the_selected_boundary_text() {
+        let address = TonAddress::from_str(RAW_ADDRESS).expect("raw TON address must parse");
+        let testnet = TonAddressString::from_address(&address, Network::Testnet);
+        let mainnet = TonAddressString::from_address(&address, Network::Mainnet);
+
+        assert_eq!(testnet.as_str(), address.to_user_friendly(Network::Testnet));
+        assert_eq!(mainnet.as_str(), address.to_user_friendly(Network::Mainnet));
+        assert_ne!(testnet.as_str(), mainnet.as_str());
+        assert_eq!(AsRef::<str>::as_ref(&testnet), testnet.as_str());
+        assert_eq!(testnet.to_string(), testnet.as_str());
+        assert_eq!(
+            format!("{testnet:?}"),
+            format!("TonAddressString({:?})", testnet.as_str())
+        );
+
+        let expected = mainnet.as_str().to_owned();
+        assert_eq!(mainnet.clone().into_string(), expected);
+        assert_eq!(String::from(mainnet), expected);
     }
 }

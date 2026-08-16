@@ -222,3 +222,98 @@ impl WalletClient {
             .map_err(|_| WalletClientError::StateUnavailable)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::state::ensure_running;
+    use crate::{HttpRequestId, Network, NonEmptyString, ProviderConfig, TonAddressString};
+
+    const ADDRESS: &str = "0:1111111111111111111111111111111111111111111111111111111111111111";
+
+    #[test]
+    fn shutdown_detects_revision_exhaustion_for_each_active_operation_family() {
+        for activate in [
+            activate_refresh as fn(&mut State),
+            activate_preview,
+            activate_send,
+            activate_resolution,
+        ] {
+            let mut state = state();
+            state.snapshot.revision = u64::MAX;
+            activate(&mut state);
+
+            assert!(matches!(
+                prepare_shutdown(&mut state),
+                Err(WalletClientError::IdentifierExhausted)
+            ));
+        }
+    }
+
+    #[test]
+    fn closing_and_shutdown_each_reject_new_work_independently() {
+        let mut closing = state();
+        closing.closing = true;
+        assert_eq!(ensure_running(&closing), Err(WalletClientError::Shutdown));
+
+        let mut shutdown = state();
+        shutdown.shutdown = true;
+        assert_eq!(ensure_running(&shutdown), Err(WalletClientError::Shutdown));
+    }
+
+    fn activate_refresh(state: &mut State) {
+        state.active_refresh = Some((1, vec![request_id()]));
+    }
+
+    fn activate_preview(state: &mut State) {
+        state.active_preview = Some((1, vec![request_id()]));
+    }
+
+    fn activate_send(state: &mut State) {
+        state.active_send = Some((1, vec![request_id()]));
+    }
+
+    fn activate_resolution(state: &mut State) {
+        state.active_resolution = Some((1, vec![request_id()]));
+    }
+
+    const fn request_id() -> HttpRequestId {
+        HttpRequestId { value: 7 }
+    }
+
+    fn state() -> State {
+        let config = WalletClientConfig {
+            record_id: NonEmptyString::try_from("client-tests").expect("valid record identifier"),
+            address: TonAddressString::try_from(ADDRESS).expect("valid TON address"),
+            public_key: vec![0; 32],
+            local_secret_ref: None,
+            network: Network::Testnet,
+            send_validity_seconds: 300,
+            resolution_margin_seconds: 60,
+            providers: ProviderConfig::standard(Network::Testnet),
+        };
+        State {
+            snapshot: WalletSnapshot::empty(&config),
+            config,
+            activity: Vec::new(),
+            activity_cursor: None,
+            activity_has_more: false,
+            next_id: 1,
+            refresh_generation: 0,
+            pagination_generation: 0,
+            preview_generation: 0,
+            send_generation: 0,
+            resolution_generation: 0,
+            active_refresh: None,
+            active_pagination: None,
+            active_preview: None,
+            active_send: None,
+            active_resolution: None,
+            send_commit_started: false,
+            send_workflow: None,
+            waiters: Vec::new(),
+            shutdown: false,
+            closing: false,
+        }
+    }
+}

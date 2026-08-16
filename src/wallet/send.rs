@@ -1264,6 +1264,33 @@ mod tests {
     }
 
     #[test]
+    fn every_journal_reader_rejects_each_foreign_identity_field_independently() {
+        let foreign_record_id = JournalRecord {
+            version: 1,
+            payload: durable_payload_with(|record| record.record_id = non_empty("other")),
+        };
+        let foreign_source = JournalRecord {
+            version: 1,
+            payload: durable_payload_with(|record| record.source = other_address()),
+        };
+
+        for record in [&foreign_record_id, &foreign_source] {
+            assert!(matches!(
+                pending_send_record(record, &non_empty("record"), &source()),
+                Err(SendWorkflowError::InvalidJournal(_))
+            ));
+            assert!(matches!(
+                terminal_send_resolution(record, &non_empty("record"), &source()),
+                Err(SendWorkflowError::InvalidJournal(_))
+            ));
+            assert!(matches!(
+                send_snapshot_from_journal(record, &non_empty("record"), &source()),
+                Err(SendWorkflowError::InvalidJournal(_))
+            ));
+        }
+    }
+
+    #[test]
     fn durable_records_from_before_comment_support_remain_compatible() {
         let mut payload: serde_json::Value =
             serde_json::from_slice(&durable_payload(SendStage::Cancelled))
@@ -1323,15 +1350,50 @@ mod tests {
 
     #[test]
     fn confirmed_record_without_complete_evidence_is_rejected() {
-        let record = JournalRecord {
-            version: 1,
-            payload: durable_payload(SendStage::Confirmed),
-        };
+        let transaction_hash =
+            Base64Hash::from_bytes(&[7; 32]).expect("the hash fixture has 32 bytes");
+        let transaction_lt = UnsignedDecimalString::try_from("42").expect("valid transaction lt");
+        let records = [
+            JournalRecord {
+                version: 1,
+                payload: durable_payload_with(|record| {
+                    record.stage = SendStage::Confirmed;
+                    record.confirmed_transaction_hash = Some(transaction_hash.clone());
+                }),
+            },
+            JournalRecord {
+                version: 1,
+                payload: durable_payload_with(|record| {
+                    record.stage = SendStage::Confirmed;
+                    record.confirmed_transaction_lt = Some(transaction_lt.clone());
+                }),
+            },
+        ];
+
+        for record in records {
+            assert!(matches!(
+                decode_durable_record(&record),
+                Err(SendWorkflowError::InvalidJournal(message))
+                    if message == "confirmed record evidence is invalid"
+            ));
+        }
+    }
+
+    #[test]
+    fn cancellation_cannot_replace_a_completed_submission() {
+        let mut workflow = ready_to_submit_workflow();
+        assert_eq!(workflow.submission_started(), Ok(()));
         assert!(matches!(
-            decode_durable_record(&record),
-            Err(SendWorkflowError::InvalidJournal(message))
-                if message == "confirmed record evidence is invalid"
+            workflow.submission_succeeded(Some("receipt-7".to_owned())),
+            Ok(SendDirective::PersistJournal(_))
         ));
+        assert_eq!(
+            workflow.journal_persisted(&applied()),
+            Ok(SendDirective::Finished)
+        );
+
+        assert_eq!(workflow.cancel(), Ok(SendDirective::Finished));
+        assert_eq!(workflow.snapshot().phase, SendPhase::Submitted);
     }
 
     #[test]
@@ -1374,6 +1436,22 @@ mod tests {
                 Ok(SendDirective::FetchFreshAccount)
             );
             assert_eq!(workflow.journal_version, Some(8));
+        }
+    }
+
+    #[test]
+    fn undeployed_account_with_nonzero_seqno_is_rejected() {
+        for status in [AccountStatus::Nonexistent, AccountStatus::Uninitialized] {
+            let mut workflow = workflow();
+            assert!(workflow.begin().is_ok());
+            assert_eq!(
+                workflow.journal_loaded(None),
+                Ok(SendDirective::FetchFreshAccount)
+            );
+            assert_eq!(
+                workflow.fresh_account_loaded(FreshSendAccount { status, seqno: 1 }),
+                Err(SendWorkflowError::AccountUnavailable { status })
+            );
         }
     }
 

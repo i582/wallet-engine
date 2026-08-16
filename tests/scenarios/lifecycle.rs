@@ -60,6 +60,20 @@ fn wait_for_change_is_released_by_a_newly_published_revision() {
 }
 
 #[test]
+fn wait_for_change_does_not_return_the_equal_revision() {
+    scenario("wait requires a strictly newer snapshot")
+        .when(call("first-refresh", refresh_wallet()))
+        .then(update("first-refresh").completed())
+        .then(remember_snapshot("at-revision-three"))
+        .when(start("wait", wait_for_change(3)))
+        .when(call("second-refresh", refresh_wallet()))
+        .then(update("second-refresh").completed())
+        .then(snapshot_is_except_revision("at-revision-three"))
+        .then(returned_snapshot_revision_is_greater_than("wait", 3))
+        .run();
+}
+
+#[test]
 fn a_future_snapshot_waiter_survives_insufficient_revisions() {
     scenario("a waiter completes only after revision advances past its requested value")
         .when(start("wait", wait_for_change(5)))
@@ -172,6 +186,10 @@ fn shutdown_waits_for_a_send_past_the_durable_boundary() {
         .then(send_phase("send", SendPhase::Submitting))
         .when(start("shutdown", shutdown_client()))
         .then(send_phase("send", SendPhase::Submitting))
+        .when(call("wait-during-closing", wait_for_change(0)))
+        .then(error("wait-during-closing", WalletClientError::Shutdown))
+        .when(call("refresh-during-closing", refresh_wallet()))
+        .then(error("refresh-during-closing", WalletClientError::Shutdown))
         .when(resume("submit", submission_accepted()))
         .then(result("send").submitted())
         .then(succeeds("shutdown"))
