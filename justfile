@@ -59,6 +59,9 @@ mutants *args:
 mutants-list *args:
     cargo mutants --list {{args}}
 
+proptest-rust:
+    cargo nextest run --locked --test proptests --run-ignored ignored-only {{ NEXTEST_CONFIG_ARGS }} {{ NEXTEST_PROFILE_ARGS }}
+
 test-c-abi-rust:
     cargo nextest run --locked --manifest-path c-bindings/Cargo.toml {{ NEXTEST_CONFIG_ARGS }} {{ NEXTEST_PROFILE_ARGS }}
 

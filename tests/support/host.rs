@@ -1,10 +1,12 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Condvar, Mutex, MutexGuard};
+use std::task::{Poll, Waker};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use futures::future::poll_fn;
 use serde_json::{Value, json};
 use ton::block_tlb::Msg;
 use ton::tep::snake_data::SnakeData;
@@ -51,7 +53,7 @@ struct HttpState {
     next_activity_status: Option<u16>,
     next_activity_host_error: Option<HttpHostErrorKind>,
     submission_gate: Option<SubmissionGate>,
-    request_gate: Option<RequestGate>,
+    request_gates: Vec<RequestGate>,
     submitted_message: Option<SubmittedMessage>,
     cancelled: HashSet<HttpRequestId>,
 }
@@ -76,6 +78,7 @@ struct RequestGate {
     request_id: Option<HttpRequestId>,
     reached: bool,
     released: bool,
+    waker: Option<Waker>,
 }
 
 #[derive(Clone)]
@@ -149,7 +152,7 @@ impl ScenarioHttpHost {
                     reached: false,
                     outcome: None,
                 }),
-                request_gate: None,
+                request_gates: Vec::new(),
                 submitted_message: None,
                 cancelled: HashSet::new(),
             }),
@@ -202,12 +205,13 @@ impl ScenarioHttpHost {
     }
 
     pub(super) fn pause_next_request(&self, name: String, kind: RequestKind) {
-        lock(&self.state).request_gate = Some(RequestGate {
+        lock(&self.state).request_gates.push(RequestGate {
             name,
             kind,
             request_id: None,
             reached: false,
             released: false,
+            waker: None,
         });
     }
 
@@ -216,15 +220,10 @@ impl ScenarioHttpHost {
         let deadline = Instant::now() + CHECKPOINT_TIMEOUT;
         loop {
             let gate = state
-                .request_gate
-                .as_ref()
+                .request_gates
+                .iter()
+                .find(|gate| gate.name == name)
                 .ok_or_else(|| format!("request checkpoint `{name}` does not exist"))?;
-            if gate.name != name {
-                return Err(format!(
-                    "expected request checkpoint `{}`, got `{name}`",
-                    gate.name
-                ));
-            }
             if gate.reached {
                 return Ok(());
             }
@@ -244,67 +243,76 @@ impl ScenarioHttpHost {
 
     pub(super) fn release_request(&self, name: &str) -> Result<(), String> {
         self.wait_for_request(name)?;
-        let mut state = lock(&self.state);
-        let gate = state
-            .request_gate
-            .as_mut()
-            .ok_or_else(|| format!("request checkpoint `{name}` disappeared"))?;
-        gate.released = true;
-        self.changed.notify_all();
+        let waker = {
+            let mut state = lock(&self.state);
+            let gate = state
+                .request_gates
+                .iter_mut()
+                .find(|gate| gate.name == name)
+                .ok_or_else(|| format!("request checkpoint `{name}` disappeared"))?;
+            gate.released = true;
+            self.changed.notify_all();
+            gate.waker.take()
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
         Ok(())
     }
 
     pub(super) fn request_was_cancelled(&self, name: &str) -> Result<bool, String> {
         let state = lock(&self.state);
         let gate = state
-            .request_gate
-            .as_ref()
+            .request_gates
+            .iter()
+            .find(|gate| gate.name == name)
             .ok_or_else(|| format!("request checkpoint `{name}` does not exist"))?;
-        if gate.name != name {
-            return Err(format!(
-                "expected request checkpoint `{}`, got `{name}`",
-                gate.name
-            ));
-        }
         let request_id = gate
             .request_id
             .ok_or_else(|| format!("request checkpoint `{name}` was not reached"))?;
         Ok(state.cancelled.contains(&request_id))
     }
 
-    fn wait_at_request_gate(
+    async fn wait_at_request_gate(
         &self,
         kind: RequestKind,
         request_id: HttpRequestId,
     ) -> Result<(), HttpHostError> {
-        let mut state = lock(&self.state);
-        let should_capture = matches!(
-            state.request_gate.as_ref(),
-            Some(gate) if gate.kind == kind && gate.request_id.is_none()
-        );
-        if should_capture {
-            let gate = state.request_gate.as_mut().expect("request gate exists");
-            gate.request_id = Some(request_id);
-            gate.reached = true;
-            self.changed.notify_all();
+        {
+            let mut state = lock(&self.state);
+            if let Some(gate) = state
+                .request_gates
+                .iter_mut()
+                .find(|gate| gate.kind == kind && gate.request_id.is_none())
+            {
+                gate.request_id = Some(request_id);
+                gate.reached = true;
+                self.changed.notify_all();
+            }
         }
 
-        loop {
-            let Some(gate) = state.request_gate.as_ref() else {
-                return Ok(());
+        poll_fn(|context| {
+            let mut state = lock(&self.state);
+            let Some(gate) = state
+                .request_gates
+                .iter_mut()
+                .find(|gate| gate.request_id == Some(request_id))
+            else {
+                return Poll::Ready(());
             };
-            if gate.request_id != Some(request_id) {
-                return Ok(());
-            }
             // A real transport can complete after cancellation. The gate
             // deliberately ignores the cancellation tombstone so scenarios
             // can release a successful late response and verify generation guards.
             if gate.released {
-                state.request_gate = None;
-                return Ok(());
+                return Poll::Ready(());
             }
-            state = wait(&self.changed, state);
-        }
+
+            gate.waker = Some(context.waker().clone());
+            Poll::Pending
+        })
+        .await;
+
+        Ok(())
     }
 
     pub(super) fn submitted_message(&self) -> Option<SubmittedMessage> {
@@ -434,7 +442,10 @@ impl ScenarioHttpHost {
         )
     }
 
-    fn emulation_response(&self, request: &HttpRequest) -> Result<HttpResponse, HttpHostError> {
+    async fn emulation_response(
+        &self,
+        request: &HttpRequest,
+    ) -> Result<HttpResponse, HttpHostError> {
         let body: Value = serde_json::from_slice(&request.body)
             .map_err(|error| host_error(HttpHostErrorKind::Other, error.to_string()))?;
         if body.get("ignore_chksig") != Some(&Value::Bool(true)) {
@@ -464,7 +475,8 @@ impl ScenarioHttpHost {
             .map_err(|error| host_error(HttpHostErrorKind::Other, error.to_string()))?
             .to_string();
 
-        self.wait_at_request_gate(RequestKind::Emulation, request.id)?;
+        self.wait_at_request_gate(RequestKind::Emulation, request.id)
+            .await?;
         let state = lock(&self.state);
         if let Some(kind) = state.emulation_host_error {
             return Err(host_error(kind, "scripted emulation transport failure"));
@@ -646,7 +658,8 @@ impl WalletHttpHost for ScenarioHttpHost {
     async fn execute_http(&self, request: HttpRequest) -> Result<HttpResponse, HttpHostError> {
         if request.url.contains("getAddressInformation") {
             let response = self.account_response(&request);
-            self.wait_at_request_gate(RequestKind::Account, request.id)?;
+            self.wait_at_request_gate(RequestKind::Account, request.id)
+                .await?;
             let host_error_kind = lock(&self.state).account_host_error;
             if let Some(kind) = host_error_kind {
                 return Err(host_error(kind, "scripted account transport failure"));
@@ -655,7 +668,8 @@ impl WalletHttpHost for ScenarioHttpHost {
         }
         if request.url.contains("getTransactions") {
             let response = self.activity_response(&request);
-            self.wait_at_request_gate(RequestKind::Activity, request.id)?;
+            self.wait_at_request_gate(RequestKind::Activity, request.id)
+                .await?;
             let host_error_kind = lock(&self.state).next_activity_host_error.take();
             if let Some(kind) = host_error_kind {
                 return Err(host_error(kind, "scripted activity transport failure"));
@@ -667,7 +681,7 @@ impl WalletHttpHost for ScenarioHttpHost {
             return Ok(response);
         }
         if request.url.contains("/api/emulate/v1/emulateTrace") {
-            return self.emulation_response(&request);
+            return self.emulation_response(&request).await;
         }
         if request.url.contains("/api/v3/transactionsByMessage") {
             let executed = lock(&self.state).message_is_executed;
@@ -719,7 +733,8 @@ impl WalletHttpHost for ScenarioHttpHost {
         match body.get("method").and_then(Value::as_str) {
             Some("runGetMethod") => {
                 let response = self.seqno_response(&request);
-                self.wait_at_request_gate(RequestKind::Seqno, request.id)?;
+                self.wait_at_request_gate(RequestKind::Seqno, request.id)
+                    .await?;
                 let host_error_kind = lock(&self.state).seqno_host_error;
                 if let Some(kind) = host_error_kind {
                     return Err(host_error(kind, "scripted seqno transport failure"));
