@@ -91,13 +91,16 @@ proptest! {
                 .then(snapshot_is_except_revision("stable"));
         }
 
-        test.when(call("retry", refresh_wallet()))
+        let result = test.when(call("retry", refresh_wallet()))
             .then(update("retry").completed())
             .then(
                 snapshot()
                     .account_phase(ResourcePhase::Ready)
                     .activity_phase(ResourcePhase::Ready),
             )
-            .run();
+            .run_result();
+        if let Err(failure) = result {
+            prop_assert!(false, "{failure}");
+        }
     }
 }

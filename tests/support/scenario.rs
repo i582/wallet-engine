@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use futures::executor::block_on;
+use similar::{ChangeTag, TextDiff};
 use ton::block_tlb::{
     SEND_MODE_CARRY_ALL_BALANCE, SEND_MODE_IGNORE_ERRORS, SEND_MODE_PAY_FEES_SEPARATELY,
 };
@@ -32,6 +33,30 @@ pub(crate) const EXACT_AMOUNT_SEND_MODE: u8 =
 pub(crate) const ALL_BALANCE_SEND_MODE: u8 = SEND_MODE_CARRY_ALL_BALANCE | SEND_MODE_IGNORE_ERRORS;
 const TEST_RECORD_ID: &str = "scenario-wallet";
 const TEST_SECRET_REF: &str = "wallet:scenario-wallet:mnemonic";
+
+fn snapshot_diff(
+    expected: &wallet_engine::WalletSnapshot,
+    actual: &wallet_engine::WalletSnapshot,
+) -> Result<String, serde_json::Error> {
+    let expected = serde_json::to_string_pretty(expected)?;
+    let actual = serde_json::to_string_pretty(actual)?;
+    let diff = TextDiff::from_lines(&expected, &actual);
+    let mut rendered = String::new();
+
+    for hunk in diff.unified_diff().context_radius(3).iter_hunks() {
+        for change in hunk.iter_changes() {
+            let sign = match change.tag() {
+                ChangeTag::Delete => "-",
+                ChangeTag::Insert => "+",
+                ChangeTag::Equal => " ",
+            };
+            rendered.push_str(sign);
+            rendered.push_str(change.value());
+        }
+    }
+
+    Ok(rendered)
+}
 
 fn step_timeout() -> Duration {
     std::env::var("WALLET_ENGINE_SCENARIO_TIMEOUT_SECS")
@@ -1246,11 +1271,13 @@ impl Scenario {
     }
 
     pub(crate) fn run(self) {
-        if let Err(failure) = ScenarioRunner::new(&self.name, &self.steps)
-            .and_then(|mut runner| runner.run(self.steps))
-        {
+        if let Err(failure) = self.run_result() {
             panic!("{failure}");
         }
+    }
+
+    pub(crate) fn run_result(self) -> Result<(), String> {
+        ScenarioRunner::new(&self.name, &self.steps).and_then(|mut runner| runner.run(self.steps))
     }
 }
 
@@ -2126,8 +2153,10 @@ impl ScenarioRunner {
                 if &actual == expected {
                     Ok(())
                 } else {
+                    let diff = snapshot_diff(expected, &actual)
+                        .map_err(|error| format!("failed to diff snapshot `{name}`: {error}"))?;
                     Err(format!(
-                        "expected snapshot `{name}` to remain unchanged except for revision\nexpected: {expected:#?}\nactual: {actual:#?}"
+                        "expected snapshot `{name}` to remain unchanged except for revision\nsnapshot diff:\n{diff}"
                     ))
                 }
             }
