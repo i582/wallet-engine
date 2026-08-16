@@ -6,7 +6,7 @@ import WalletEngineFFI
 /// Rust owns request construction and response parsing. The host owns transport,
 /// credentials, redirect rejection, and byte limits.
 nonisolated struct AppleWalletHTTPPolicy: Sendable {
-    private enum Limits {
+    fileprivate enum Limits {
         static let maximumRequestBodyBytes = 256 * 1024
         static let maximumRequestHeaders = 32
         static let maximumResponseHeaders = 64
@@ -50,12 +50,6 @@ nonisolated struct AppleWalletHTTPPolicy: Sendable {
         }
         guard request.headers.count <= Limits.maximumRequestHeaders else {
             throw Self.failure(.policyViolation, "Too many request headers")
-        }
-        guard request.maxResponseBodyBytes > 0,
-              request.maxResponseBodyBytes <= Limits.maximumResponseBodyBytes,
-              request.maxResponseHeaderBytes > 0,
-              request.maxResponseHeaderBytes <= Limits.maximumResponseHeaderBytes else {
-            throw Self.failure(.policyViolation, "Invalid response size limit")
         }
         guard request.timeoutMs > 0,
               request.timeoutMs <= Limits.maximumRequestTimeoutMs else {
@@ -108,13 +102,7 @@ nonisolated struct AppleWalletHTTPPolicy: Sendable {
         return urlRequest
     }
 
-    func responseHeaders(
-        _ response: HTTPURLResponse,
-        limit: UInt64
-    ) throws -> [HttpHeader] {
-        guard limit > 0, limit <= Limits.maximumResponseHeaderBytes else {
-            throw Self.failure(.policyViolation, "Invalid response header limit")
-        }
+    func responseHeaders(_ response: HTTPURLResponse) throws -> [HttpHeader] {
         guard response.allHeaderFields.count <= Limits.maximumResponseHeaders else {
             throw Self.failure(.responseTooLarge, "Too many response headers")
         }
@@ -127,10 +115,10 @@ nonisolated struct AppleWalletHTTPPolicy: Sendable {
             let name = String(describing: rawName)
             let value = String(describing: rawValue)
             totalBytes += name.utf8.count + value.utf8.count
-            guard totalBytes <= Int(limit) else {
+            guard totalBytes <= Limits.maximumResponseHeaderBytes else {
                 throw Self.failure(
                     .responseTooLarge,
-                    "Response headers exceed the declared limit"
+                    "Response headers exceed the host limit"
                 )
             }
             try Self.validateHeader(name: name, value: value)
@@ -312,14 +300,8 @@ actor AppleWalletHTTPHost: WalletHttpHost {
                 throw failure(.policyViolation, "HTTP status is outside UInt16")
             }
 
-            let headers = try policy.responseHeaders(
-                response,
-                limit: request.maxResponseHeaderBytes
-            )
-            let body = try await collect(
-                bytes,
-                limit: request.maxResponseBodyBytes
-            )
+            let headers = try policy.responseHeaders(response)
+            let body = try await collect(bytes)
             return HttpResponse(
                 status: status,
                 headers: headers,
@@ -374,12 +356,9 @@ actor AppleWalletHTTPHost: WalletHttpHost {
     }
 
     private nonisolated static func collect(
-        _ bytes: URLSession.AsyncBytes,
-        limit: UInt64
+        _ bytes: URLSession.AsyncBytes
     ) async throws -> Data {
-        guard let integerLimit = Int(exactly: limit) else {
-            throw failure(.responseTooLarge, "Response body limit is invalid")
-        }
+        let integerLimit = AppleWalletHTTPPolicy.Limits.maximumResponseBodyBytes
         var body = Data()
         body.reserveCapacity(min(integerLimit, 64 * 1024))
 
@@ -388,7 +367,7 @@ actor AppleWalletHTTPHost: WalletHttpHost {
             guard body.count < integerLimit else {
                 throw failure(
                     .responseTooLarge,
-                    "Response body exceeds the declared limit"
+                    "Response body exceeds the host limit"
                 )
             }
             body.append(byte)

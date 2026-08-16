@@ -74,10 +74,10 @@ class AndroidWalletHttpHost : WalletHttpHost {
             if (status in 300..399) {
                 throw hostError(HttpHostErrorKind.POLICY_VIOLATION, "HTTP redirects are not allowed")
             }
-            val headers = boundedHeaders(connection, request.maxResponseHeaderBytes)
+            val headers = boundedHeaders(connection)
             val input = if (status in 200..299) connection.inputStream else connection.errorStream
             val body = input?.use { stream ->
-                val limit = request.maxResponseBodyBytes.coerceAtMost(Int.MAX_VALUE.toULong()).toInt()
+                val limit = MAX_RESPONSE_BODY_BYTES
                 val output = ByteArrayOutputStream(minOf(limit, DEFAULT_BUFFER_SIZE))
                 val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                 var total = 0
@@ -163,17 +163,14 @@ class AndroidWalletHttpHost : WalletHttpHost {
         return url
     }
 
-    private fun boundedHeaders(
-        connection: HttpURLConnection,
-        maximumBytes: ULong,
-    ): List<HttpHeader> {
-        var size = 0UL
+    private fun boundedHeaders(connection: HttpURLConnection): List<HttpHeader> {
+        var size = 0
         return buildList {
             connection.headerFields.forEach { (name, values) ->
                 if (name == null) return@forEach
                 values.orEmpty().forEach { value ->
-                    size += (name.length + value.length + 4).toULong()
-                    if (size > maximumBytes) {
+                    size += name.length + value.length + 4
+                    if (size > MAX_RESPONSE_HEADER_BYTES) {
                         throw hostError(
                             HttpHostErrorKind.RESPONSE_TOO_LARGE,
                             "Response headers exceeded their limit",
@@ -191,6 +188,8 @@ class AndroidWalletHttpHost : WalletHttpHost {
     private companion object {
         const val TESTNET_HOST = "testnet.toncenter.com"
         const val MAX_TIMEOUT_MILLIS = 5 * 60 * 1000
+        const val MAX_RESPONSE_HEADER_BYTES = 64 * 1024
+        const val MAX_RESPONSE_BODY_BYTES = 4 * 1024 * 1024
         const val MAX_EARLY_CANCELLATIONS = 256
         val deadlineScheduler = Executors.newSingleThreadScheduledExecutor { task ->
             Thread(task, "wallet-engine-http-deadline").apply { isDaemon = true }

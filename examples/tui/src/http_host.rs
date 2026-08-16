@@ -16,6 +16,8 @@ use wallet_engine::{
 
 const MAX_REQUEST_BODY_BYTES: usize = 256 * 1024;
 const MAX_RESPONSE_HEADERS: usize = 64;
+const MAX_RESPONSE_HEADER_BYTES: usize = 64 * 1024;
+const MAX_RESPONSE_BODY_BYTES: usize = 4 * 1024 * 1024;
 const MAX_REQUEST_TIMEOUT_MS: u64 = 5 * 60 * 1000;
 
 #[derive(Default)]
@@ -184,7 +186,7 @@ impl ReqwestHttpHost {
             .iter()
             .map(|header| header.name.len() + header.value.len())
             .sum::<usize>();
-        if header_bytes as u64 > request.max_response_header_bytes {
+        if header_bytes > MAX_RESPONSE_HEADER_BYTES {
             return Err(host_error(
                 HttpHostErrorKind::ResponseTooLarge,
                 "response headers are too large",
@@ -202,7 +204,7 @@ impl ReqwestHttpHost {
                 break;
             };
             let chunk = chunk.map_err(map_reqwest_error)?;
-            if body.len().saturating_add(chunk.len()) as u64 > request.max_response_body_bytes {
+            if body.len().saturating_add(chunk.len()) > MAX_RESPONSE_BODY_BYTES {
                 return Err(host_error(
                     HttpHostErrorKind::ResponseTooLarge,
                     "response body is too large",

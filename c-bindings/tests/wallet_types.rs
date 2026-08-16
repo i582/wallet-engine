@@ -2,7 +2,7 @@
 
 use wallet_engine::{
     CreateWalletRequest, CreatedWallet, Network, ProtectedSecretHostErrorKind, ProtectedSecretRef,
-    ProtectedSecretStore, RecoveryPhrase, WalletDescriptor, WalletLifecycleError,
+    ProtectedSecretStore, RecoveryPhrase, TonAddressString, WalletDescriptor, WalletLifecycleError,
 };
 use wallet_engine_c::{
     WALLET_ENGINE_NETWORK_MAINNET, WALLET_ENGINE_NETWORK_TESTNET,
@@ -82,10 +82,11 @@ fn protected_secret_store_view_borrows_the_core_request() {
 
 #[test]
 fn created_wallet_view_borrows_descriptor_and_words_for_the_callback() {
+    const ADDRESS: &str = "0:1111111111111111111111111111111111111111111111111111111111111111";
     let wallet = CreatedWallet {
         descriptor: WalletDescriptor {
             record_id: "wallet-1".to_owned(),
-            address: "UQExampleAddress".to_owned(),
+            address: TonAddressString::try_from(ADDRESS).expect("valid TON address"),
             public_key: vec![7; 32],
             network: Network::Testnet,
             secret_ref: ProtectedSecretRef {
@@ -110,7 +111,7 @@ fn created_wallet_view_borrows_descriptor_and_words_for_the_callback() {
         // SAFETY: All nested views are valid for this callback invocation.
         let secret_ref = unsafe { view.descriptor.secret_ref.value.try_to_string() };
         assert_eq!(record_id.as_deref(), Ok("wallet-1"));
-        assert_eq!(address.as_deref(), Ok("UQExampleAddress"));
+        assert_eq!(address.as_deref(), Ok(ADDRESS));
         assert_eq!(public_key.as_deref(), Ok([7; 32].as_slice()));
         assert_eq!(view.descriptor.network, WALLET_ENGINE_NETWORK_TESTNET);
         assert_eq!(secret_ref.as_deref(), Ok("wallet:wallet-1:mnemonic"));

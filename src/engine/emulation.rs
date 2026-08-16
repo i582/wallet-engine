@@ -1,4 +1,4 @@
-//! Toncenter Emulate API request construction and bounded response parsing.
+//! Toncenter Emulate API request construction and response parsing.
 
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -10,14 +10,12 @@ use ton::ton_core::types::TonAddress;
 
 use crate::domain::bounded_diagnostic;
 use crate::{
-    DomainError, ErrorCategory, ErrorCode, HttpHeader, HttpMethod, HttpRequest, HttpRequestId,
-    RetryAdvice, SendEmulation, SendEmulationAction, WalletClientConfig, WalletClientError,
+    Base64Hash, DomainError, ErrorCategory, ErrorCode, HttpHeader, HttpMethod, HttpRequest,
+    HttpRequestId, RetryAdvice, SendEmulation, SendEmulationAction, WalletClientConfig,
+    WalletClientError,
 };
 
 use super::http::build_toncenter_url;
-
-const MAX_RESPONSE_BODY_BYTES: u64 = 4 * 1024 * 1024;
-const MAX_RESPONSE_HEADER_BYTES: u64 = 64 * 1024;
 
 #[derive(Debug)]
 pub(super) struct EvaluatedEmulation {
@@ -59,8 +57,6 @@ pub(super) fn build_emulation_request(
         ],
         body,
         timeout_ms: config.providers.request_timeout_ms,
-        max_response_header_bytes: MAX_RESPONSE_HEADER_BYTES,
-        max_response_body_bytes: MAX_RESPONSE_BODY_BYTES,
     })
 }
 
@@ -70,12 +66,15 @@ pub(super) fn parse_emulation(
 ) -> Result<EvaluatedEmulation, DomainError> {
     let response: EmulateTraceResponse =
         serde_json::from_slice(body).map_err(|error| invalid_response(error.to_string()))?;
+
     let wallet = response
         .transactions
         .get(&response.trace.tx_hash)
         .ok_or_else(|| invalid_response("emulation trace root transaction is missing"))?;
+
     let wallet_address = TonAddress::from_str(&wallet.account)
         .map_err(|error| invalid_response(format!("invalid emulated wallet address: {error}")))?;
+
     if &wallet_address != expected_source {
         return Err(invalid_response(
             "emulation trace root belongs to another account",
@@ -91,14 +90,17 @@ pub(super) fn parse_emulation(
                 parse_nanograms(&transaction.total_fees, "trace transaction fees")
                     .map(|fees| total + fees)
             })?;
-    let transaction_count = u64::try_from(response.transactions.len())
-        .map_err(|_| invalid_response("emulation transaction count does not fit u64"))?;
+
+    let transaction_count = response.transactions.len() as u64;
+
     let actions = response
         .actions
         .into_iter()
         .map(parse_action)
         .collect::<Result<Vec<_>, _>>()?;
+
     let wallet_succeeded = transaction_succeeded(wallet, true);
+
     let trace_succeeded = response
         .transactions
         .values()
@@ -150,22 +152,24 @@ fn parse_action(action: RawEmulationAction) -> Result<SendEmulationAction, Domai
                 })
         })
         .collect::<Result<Vec<_>, _>>()?;
+
     let transaction_hashes = action
         .transactions
         .into_iter()
         .map(|hash| {
-            crate::Base64Hash::try_from(hash).map_err(|error| {
+            Base64Hash::try_from(hash).map_err(|error| {
                 invalid_response(format!(
                     "invalid emulation action transaction hash: {error}"
                 ))
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
+
     let details_json = serde_json::to_string(&action.details)
         .map_err(|error| invalid_response(format!("invalid emulation action details: {error}")))?;
 
     Ok(SendEmulationAction {
-        action_id: crate::Base64Hash::try_from(action.action_id)
+        action_id: Base64Hash::try_from(action.action_id)
             .map_err(|error| invalid_response(format!("invalid emulation action id: {error}")))?,
         kind: action.kind,
         succeeded: action.success,

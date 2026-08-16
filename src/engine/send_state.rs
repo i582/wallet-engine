@@ -2,13 +2,11 @@
 
 use crate::domain::bounded_diagnostic;
 use crate::wallet::send::{SendWorkflow, SendWorkflowError};
-use crate::{
-    HttpHostError, HttpRequest, HttpRequestId, HttpResponse, SendPhase, SendSnapshot,
-    WalletClientError,
-};
+use crate::{DomainError, HttpRequest, HttpRequestId, SendPhase, SendSnapshot, WalletClientError};
 use zeroize::Zeroizing;
 
 use super::WalletClient;
+use super::http::process_response;
 use super::state::OperationFamily;
 
 pub(super) struct SensitiveBytes(Zeroizing<Vec<u8>>);
@@ -209,11 +207,15 @@ impl WalletClient {
         Ok(())
     }
 
+    /// Executes a send-owned HTTP request and returns its engine-checked body.
+    ///
+    /// Tracking is finished before response processing so a rejected response
+    /// cannot leave its request ID registered as active.
     pub(super) async fn execute_tracked_send_request(
         &self,
         generation: u64,
         request: &HttpRequest,
-    ) -> Result<Result<HttpResponse, HttpHostError>, WalletClientError> {
+    ) -> Result<Result<Vec<u8>, DomainError>, WalletClientError> {
         self.start_send_http_request(generation, request.id)?;
 
         // Do not hold the state lock while the foreign host performs I/O.
@@ -221,7 +223,7 @@ impl WalletClient {
 
         self.finish_send_http_request(generation, request.id)?;
 
-        Ok(result)
+        Ok(process_response(request, result))
     }
 
     fn finish_send_http_request(

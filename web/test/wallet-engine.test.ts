@@ -69,13 +69,12 @@ describe("BrowserHttpHost", () => {
     expect(fetchCount).toBe(0)
   })
 
-  test("aborts a response that exceeds the Rust limit", async () => {
+  test("aborts a response that exceeds the browser host limit", async () => {
     const host = new BrowserHttpHost("https://testnet.toncenter.com", {
-      fetch: mockFetch(async () => new Response(new Uint8Array(32))),
+      fetch: mockFetch(async () => new Response(new Uint8Array(4 * 1024 * 1024 + 1))),
     })
-    const request: HttpRequest = {...httpRequest(9), maxResponseBodyBytes: 8}
 
-    await expect(host.executeHttp(request)).rejects.toMatchObject({
+    await expect(host.executeHttp(httpRequest(9))).rejects.toMatchObject({
       kind: "responseTooLarge",
     })
   })
@@ -191,8 +190,6 @@ function httpRequest(id: number, overrides: Partial<HttpRequest> = {}): HttpRequ
     headers: [],
     body: [],
     timeoutMs: 15_000,
-    maxResponseHeaderBytes: 64 * 1024,
-    maxResponseBodyBytes: 4 * 1024 * 1024,
     ...overrides,
   }
 }

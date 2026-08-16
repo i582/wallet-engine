@@ -5,16 +5,16 @@ use crate::wallet::send::{
     PendingSendRecord, SendResolution, pending_send_record, terminal_send_resolution,
 };
 use crate::{
-    HttpHostError, HttpRequest, HttpResponse, JournalRecord, PendingReason, WalletClientConfig,
-    WalletClientError,
+    DomainError, HttpRequest, JournalRecord, PendingReason, WalletClientConfig, WalletClientError,
 };
 
 use super::WalletClient;
-use super::http::evaluate_response;
+use super::http::process_response;
 use super::resolution_http::{
     build_executed_by_message_request, build_pending_transactions_request,
     build_wallet_state_request, parse_executed_message, parse_pending_message, parse_wallet_seqno,
 };
+use super::state::OperationFamily;
 
 pub(super) struct ResolutionRequests {
     executed: HttpRequest,
@@ -64,7 +64,7 @@ impl WalletClient {
         &self,
         generation: u64,
         request: &HttpRequest,
-    ) -> Result<Result<HttpResponse, HttpHostError>, WalletClientError> {
+    ) -> Result<Result<Vec<u8>, DomainError>, WalletClientError> {
         self.execute_resolution_request(ResolutionOwner::Standalone(generation), request)
             .await
     }
@@ -77,7 +77,7 @@ impl WalletClient {
         snapshot: Option<crate::SendSnapshot>,
     ) -> Result<crate::SendSnapshot, WalletClientError> {
         let mut state = self.lock()?;
-        if !state.is_current(super::state::OperationFamily::Resolution, generation) {
+        if !state.is_current(OperationFamily::Resolution, generation) {
             return Err(WalletClientError::StateUnavailable);
         }
         state.active_resolution = None;
@@ -154,16 +154,13 @@ impl WalletClient {
         // particular, our own successful message also increments wallet seqno,
         // so looking at seqno before the message hash would mislabel a confirmed
         // transfer as Replaced.
-        let executed_response = self
+        let executed = self
             .execute_resolution_request(owner, &requests.executed)
-            .await?;
-        if let Some(executed) = evaluate_response(
-            &requests.executed,
-            executed_response,
-            parse_executed_message,
-        )
-        .map_err(|error| self.resolution_failed_error(owner, error.developer_message))?
-        {
+            .await?
+            .and_then(|body| parse_executed_message(&body))
+            .map_err(|error| self.resolution_failed_error(owner, error.developer_message))?;
+
+        if let Some(executed) = executed {
             return self
                 .persist_send_resolution(
                     owner,
@@ -183,14 +180,15 @@ impl WalletClient {
         let pending_response = self
             .execute_resolution_request(owner, &requests.pending)
             .await?;
-        let (is_pending, pending_observed) =
-            match evaluate_response(&requests.pending, pending_response, |body| {
-                parse_pending_message(body, &pending.message_hash)
-            }) {
-                Ok(is_pending) => (is_pending, true),
-                Err(error) if matches!(error.provider_status, Some(404 | 405)) => (false, true),
-                Err(_) => (false, false),
-            };
+
+        let (is_pending, pending_observed) = match pending_response
+            .and_then(|body| parse_pending_message(&body, &pending.message_hash))
+        {
+            Ok(is_pending) => (is_pending, true),
+            Err(error) if matches!(error.provider_status, Some(404 | 405)) => (false, true),
+            Err(_) => (false, false),
+        };
+
         if is_pending {
             return Ok(ResolvedPending {
                 resolution: SendResolution::StillPending(PendingReason::InMempool),
@@ -198,27 +196,23 @@ impl WalletClient {
             });
         }
 
-        let wallet_response = self
+        let indexed_seqno = self
             .execute_resolution_request(owner, &requests.wallet_state)
-            .await?;
-        let indexed_seqno =
-            evaluate_response(&requests.wallet_state, wallet_response, parse_wallet_seqno)
-                .map_err(|error| self.resolution_failed_error(owner, error.developer_message))?;
+            .await?
+            .and_then(|body| parse_wallet_seqno(&body))
+            .map_err(|error| self.resolution_failed_error(owner, error.developer_message))?;
 
         if indexed_seqno > pending.seqno {
             // The transaction and wallet-state requests are separate DB snapshots.
             // Recheck after observing the increment so a commit between the first
             // two reads cannot be misclassified as a replacement.
-            let recheck_response = self
+            let executed = self
                 .execute_resolution_request(owner, &requests.executed_recheck)
-                .await?;
-            if let Some(executed) = evaluate_response(
-                &requests.executed_recheck,
-                recheck_response,
-                parse_executed_message,
-            )
-            .map_err(|error| self.resolution_failed_error(owner, error.developer_message))?
-            {
+                .await?
+                .and_then(|body| parse_executed_message(&body))
+                .map_err(|error| self.resolution_failed_error(owner, error.developer_message))?;
+
+            if let Some(executed) = executed {
                 return self
                     .persist_send_resolution(
                         owner,
@@ -322,13 +316,16 @@ impl WalletClient {
             .resolution_failed_error(owner, "send journal remained contended during resolution"))
     }
 
-    /// Dispatches HTTP through the owning operation's tracker so cancellation
-    /// and stale-generation checks remain correct in both entry paths.
+    /// Dispatches HTTP through the owning operation's tracker and returns its
+    /// engine-checked body.
+    ///
+    /// Cancellation and stale-generation checks remain correct in both entry
+    /// paths, and response processing starts only after tracking is finished.
     async fn execute_resolution_request(
         &self,
         owner: ResolutionOwner,
         request: &HttpRequest,
-    ) -> Result<Result<HttpResponse, HttpHostError>, WalletClientError> {
+    ) -> Result<Result<Vec<u8>, DomainError>, WalletClientError> {
         match owner {
             ResolutionOwner::Send(generation) => {
                 self.execute_tracked_send_request(generation, request).await
@@ -337,7 +334,7 @@ impl WalletClient {
                 self.start_resolution_http_request(generation, request.id)?;
                 let result = self.http_host.execute_http(request.clone()).await;
                 self.finish_resolution_http_request(generation, request.id)?;
-                Ok(result)
+                Ok(process_response(request, result))
             }
         }
     }
@@ -383,7 +380,7 @@ impl WalletClient {
             ResolutionOwner::Send(generation) => self.ensure_current_send(generation),
             ResolutionOwner::Standalone(generation) => {
                 let state = self.lock()?;
-                if state.is_current(super::state::OperationFamily::Resolution, generation) {
+                if state.is_current(OperationFamily::Resolution, generation) {
                     Ok(())
                 } else {
                     Err(WalletClientError::StateUnavailable)
@@ -418,7 +415,7 @@ impl WalletClient {
             ResolutionOwner::Standalone(generation) => {
                 let diagnostic = bounded_diagnostic(message.into());
                 if let Ok(mut state) = self.lock()
-                    && state.is_current(super::state::OperationFamily::Resolution, generation)
+                    && state.is_current(OperationFamily::Resolution, generation)
                 {
                     state.active_resolution = None;
                 }

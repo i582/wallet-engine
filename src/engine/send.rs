@@ -1,6 +1,6 @@
 //! V5R1 transfer orchestration.
 use super::client::WalletClient;
-use super::http::{build_toncenter_v2_request, evaluate_response};
+use super::http::build_toncenter_v2_request;
 use super::send_http::{
     SendBocResponse, build_send_boc_request, build_seqno_request, is_explicit_send_rejection,
     parse_send_response, parse_seqno,
@@ -8,7 +8,6 @@ use super::send_http::{
 use super::send_state::SensitiveBytes;
 use super::state::{OperationFamily, ensure_running};
 
-use crate::domain::bounded_diagnostic;
 use crate::wallet::send::{FreshSendAccount, SendDirective, SendWorkflow};
 use crate::wallet::transfer::{derive_source, prepare_transfer};
 use crate::{AccountStatus, SendAmount, SendPhase, SendRequest, SendResult, WalletClientError};
@@ -119,7 +118,9 @@ impl WalletClient {
             .load_journal(journal_key)
             .await
             .map_err(|error| self.send_failed_error(generation, error.to_string()))?;
+
         self.ensure_current_send(generation)?;
+
         let pending = journal_record
             .as_ref()
             .map(|record| pending_send_record(record, &config.record_id, &expected_source))
@@ -129,10 +130,10 @@ impl WalletClient {
 
         // Fetch current account status before authorization. A stale cached status can produce
         // an invalid seqno or incorrectly include StateInit in the external message.
-        let account_response = self
+        let account = self
             .execute_tracked_send_request(generation, &account_request)
-            .await?;
-        let account = evaluate_response(&account_request, account_response, parse_account)
+            .await?
+            .and_then(|body| parse_account(&body))
             .map_err(|error| self.send_failed_error(generation, error.developer_message))?;
 
         let provider_time = account.sync_utime;
@@ -188,11 +189,9 @@ impl WalletClient {
         // Active wallets require a fresh seqno for replay protection. A wallet that is not yet
         // deployed starts at seqno zero; the workflow rejects unsupported account states later.
         let seqno = if account.status == AccountStatus::Active {
-            let seqno_response = self
-                .execute_tracked_send_request(generation, &seqno_request)
-                .await?;
-
-            evaluate_response(&seqno_request, seqno_response, parse_seqno)
+            self.execute_tracked_send_request(generation, &seqno_request)
+                .await?
+                .and_then(|body| parse_seqno(&body))
                 .map_err(|error| self.send_failed_error(generation, error.developer_message))?
         } else {
             0
@@ -322,18 +321,13 @@ impl WalletClient {
             .execute_tracked_send_request(generation, &submit_request)
             .await?;
 
-        let final_directive = match submit_result {
-            Ok(response) => {
-                match evaluate_response(&submit_request, Ok(response), parse_send_response) {
-                    Ok(SendBocResponse::Accepted) => workflow.submission_succeeded(None),
-                    Ok(SendBocResponse::Rejected(message)) => workflow.submission_rejected(message),
-                    Err(error) if is_explicit_send_rejection(&error) => {
-                        workflow.submission_rejected(error.developer_message)
-                    }
-                    Err(error) => workflow.submission_unknown(error.developer_message),
-                }
+        let final_directive = match submit_result.and_then(|body| parse_send_response(&body)) {
+            Ok(SendBocResponse::Accepted) => workflow.submission_succeeded(None),
+            Ok(SendBocResponse::Rejected(message)) => workflow.submission_rejected(message),
+            Err(error) if is_explicit_send_rejection(&error) => {
+                workflow.submission_rejected(error.developer_message)
             }
-            Err(error) => workflow.submission_unknown(bounded_diagnostic(error.to_string())),
+            Err(error) => workflow.submission_unknown(error.developer_message),
         }
         .map_err(|error| self.submission_unknown_error(generation, error.to_string()))?;
         let SendDirective::PersistJournal(mutation) = final_directive else {

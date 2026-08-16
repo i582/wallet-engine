@@ -1,7 +1,7 @@
 //! Public single-shot recovery of the durable outgoing-send journal.
 
 use super::WalletClient;
-use super::http::{build_toncenter_v2_request, evaluate_response};
+use super::http::build_toncenter_v2_request;
 use super::provider::parse_account;
 use super::resolution::ResolutionRequests;
 use super::state::ensure_running;
@@ -77,10 +77,10 @@ impl WalletClient {
         // Expiration uses provider synchronization time, never device time. A
         // wrong local clock must not unlock the wallet for a replacement while
         // the original signed message can still be accepted on-chain.
-        let account_response = self
+        let account = self
             .execute_tracked_standalone_resolution_request(generation, &account_request)
-            .await?;
-        let account = evaluate_response(&account_request, account_response, parse_account)
+            .await?
+            .and_then(|body| parse_account(&body))
             .map_err(|error| {
                 self.fail_standalone_resolution(generation, error.developer_message)
             })?;

@@ -9,7 +9,7 @@ use crate::{
 
 use super::WalletClient;
 use super::http::build_toncenter_v2_request;
-use super::http::evaluate_response;
+use super::http::process_response;
 use super::provider::{ActivityPage, ActivityPageCursor, activity_record_order, parse_activity};
 use super::state::{OperationFamily, State, ensure_running, update};
 
@@ -51,11 +51,8 @@ impl WalletClient {
             (generation, request)
         };
 
-        let result = evaluate_response(
-            &request,
-            self.http_host.execute_http(request.clone()).await,
-            |body| parse_activity(body, PAGE_SIZE),
-        );
+        let result = process_response(&request, self.http_host.execute_http(request.clone()).await)
+            .and_then(|body| parse_activity(&body, PAGE_SIZE));
 
         let mut state = self.lock()?;
         if !state.is_current(OperationFamily::Pagination, generation) {

@@ -113,9 +113,9 @@ export class BrowserHttpHost {
       timeout,
     ])
     const responseHeaders = collectHeaders(response.headers, this.toncenterApiKey)
-    enforceHeaderLimit(responseHeaders, request.maxResponseHeaderBytes)
+    enforceHeaderLimit(responseHeaders, MAX_RESPONSE_HEADER_BYTES)
     const body = await Promise.race([
-      collectBody(response, request.maxResponseBodyBytes, controller),
+      collectBody(response, MAX_RESPONSE_BODY_BYTES, controller),
       timeout,
     ])
     return {
@@ -143,14 +143,6 @@ export class BrowserHttpHost {
       request.timeoutMs > MAX_REQUEST_TIMEOUT_MS
     ) {
       throw hostFailure("policyViolation", "The request timeout is invalid")
-    }
-    if (
-      request.maxResponseBodyBytes <= 0 ||
-      request.maxResponseBodyBytes > MAX_RESPONSE_BODY_BYTES ||
-      request.maxResponseHeaderBytes <= 0 ||
-      request.maxResponseHeaderBytes > MAX_RESPONSE_HEADER_BYTES
-    ) {
-      throw hostFailure("policyViolation", "The response limit is invalid")
     }
   }
 }

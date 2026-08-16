@@ -41,8 +41,6 @@ export interface HttpRequest {
   readonly headers: HttpHeader[]
   readonly body: number[]
   readonly timeoutMs: number
-  readonly maxResponseHeaderBytes: number
-  readonly maxResponseBodyBytes: number
 }
 
 export interface HttpResponse {

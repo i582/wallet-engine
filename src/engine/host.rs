@@ -8,15 +8,15 @@ use crate::{
     ProtectedSecretHostError, ProtectedSecretRead, ProtectedSecretRef, ProtectedSecretStore,
 };
 
-/// Executes bounded HTTP work for the engine.
+/// Executes HTTP work for the engine.
 ///
-/// The host must enforce the request timeout and each response limit while it
-/// connects and reads the response. It must reject redirects and return the
-/// observed URL in `final_url`.
+/// The host must enforce the request timeout while it connects and reads the
+/// response. It owns any local response limits, must reject redirects, and must
+/// return the observed URL in `final_url`.
 #[uniffi::export(foreign)]
 #[async_trait]
 pub trait WalletHttpHost: Send + Sync {
-    /// Executes one complete HTTP request and returns a bounded response.
+    /// Executes one complete HTTP request and returns an accepted response.
     ///
     /// The host can add its Toncenter credential according to the actual URL
     /// and its local security policy. It must return

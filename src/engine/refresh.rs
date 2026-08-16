@@ -11,7 +11,7 @@ use super::WalletClient;
 use super::activity::{
     PAGE_SIZE, apply_refreshed_activity_page, build_refresh_requests, mark_loading_cancelled,
 };
-use super::http::evaluate_response;
+use super::http::process_response;
 use super::provider::{ActivityPage, parse_account, parse_activity};
 use super::state::{OperationFamily, ensure_running, update};
 
@@ -71,12 +71,11 @@ impl WalletClient {
         )
         .await;
 
-        let account = evaluate_response(&requests.0, account, parse_account);
+        let account = process_response(&requests.0, account).and_then(|body| parse_account(&body));
         self.publish_refresh_component(generation, RefreshValue::Account(account))?;
 
-        let activity = evaluate_response(&requests.1, activity, |body| {
-            parse_activity(body, PAGE_SIZE)
-        });
+        let activity = process_response(&requests.1, activity)
+            .and_then(|body| parse_activity(&body, PAGE_SIZE));
         self.publish_refresh_component(generation, RefreshValue::Activity(activity))?;
 
         let mut state = self.lock()?;

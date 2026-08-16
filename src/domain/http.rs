@@ -1,4 +1,4 @@
-//! Bounded HTTP requests and host transport errors.
+//! HTTP requests and host transport errors.
 
 /// An HTTP method that the host must execute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Enum)]
@@ -32,7 +32,7 @@ pub struct HttpHeader {
     pub value: String,
 }
 
-/// A complete, bounded HTTP request for the embedding language.
+/// A complete HTTP request for the embedding language.
 ///
 /// The host can add its Toncenter credential according to the actual request
 /// URL and its local security policy. Redirects are forbidden.
@@ -55,21 +55,17 @@ pub struct HttpRequest {
     /// headers, and response-body reads. Expiry is reported as
     /// [`HttpHostErrorKind::Timeout`].
     pub timeout_ms: u64,
-    /// The maximum total response-header size accepted by Rust.
-    pub max_response_header_bytes: u64,
-    /// The maximum response-body size accepted by Rust.
-    pub max_response_body_bytes: u64,
 }
 
-/// The complete bounded HTTP response returned by the host.
+/// The complete HTTP response returned by the host.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct HttpResponse {
     /// The HTTP status code.
     pub status: u16,
-    /// The response headers that fit within the requested limit.
+    /// The response headers accepted by the host.
     pub headers: Vec<HttpHeader>,
-    /// The response body that fits within the requested limit.
+    /// The response body accepted by the host.
     pub body: Vec<u8>,
     /// The final response URL reported by the host. It must equal the request URL
     /// because the engine does not permit redirects.
@@ -92,7 +88,7 @@ pub enum HttpHostErrorKind {
     Tls,
     /// The request violated a host security policy.
     PolicyViolation,
-    /// The response exceeded a limit in [`HttpRequest`].
+    /// The response exceeded a limit imposed by the host.
     ResponseTooLarge,
     /// The host cancelled the request.
     Cancelled,

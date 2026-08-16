@@ -4,13 +4,13 @@ use crate::domain::bounded_diagnostic;
 use crate::wallet::send::FreshSendAccount;
 use crate::wallet::transfer::prepare_transfer_emulation;
 use crate::{
-    AccountStatus, HttpHostError, HttpRequest, HttpRequestId, HttpResponse, SendAmount,
-    SendPreview, SendPreviewRequest, WalletClientError,
+    AccountStatus, DomainError, HttpRequest, HttpRequestId, SendAmount, SendPreview,
+    SendPreviewRequest, WalletClientError,
 };
 
 use super::WalletClient;
 use super::emulation::{build_emulation_request, is_message_not_accepted, parse_emulation};
-use super::http::{build_toncenter_v2_request, evaluate_response};
+use super::http::{build_toncenter_v2_request, process_response};
 use super::provider::parse_account;
 use super::send_http::{build_seqno_request, parse_seqno};
 use super::state::{OperationFamily, ensure_running};
@@ -73,10 +73,10 @@ impl WalletClient {
             )
         };
 
-        let account_response = self
+        let account = self
             .execute_tracked_preview_request(generation, &account_request)
-            .await?;
-        let account = evaluate_response(&account_request, account_response, parse_account)
+            .await?
+            .and_then(|body| parse_account(&body))
             .map_err(|error| {
                 self.preview_error(
                     generation,
@@ -101,19 +101,18 @@ impl WalletClient {
         }
 
         let seqno = match account.status {
-            AccountStatus::Active => {
-                let response = self
-                    .execute_tracked_preview_request(generation, &seqno_request)
-                    .await?;
-                evaluate_response(&seqno_request, response, parse_seqno).map_err(|error| {
+            AccountStatus::Active => self
+                .execute_tracked_preview_request(generation, &seqno_request)
+                .await?
+                .and_then(|body| parse_seqno(&body))
+                .map_err(|error| {
                     self.preview_error(
                         generation,
                         WalletClientError::SendFailed {
                             diagnostic: bounded_diagnostic(error.developer_message),
                         },
                     )
-                })?
-            }
+                })?,
             AccountStatus::Nonexistent | AccountStatus::Uninitialized => 0,
             status @ (AccountStatus::Frozen | AccountStatus::Unknown) => {
                 return Err(self.preview_error(
@@ -168,22 +167,21 @@ impl WalletClient {
                     )
                 },
             )?;
-        let emulation_response = self
+
+        let evaluated = self
             .execute_tracked_preview_request(generation, &emulation_request)
-            .await?;
-        let evaluated = evaluate_response(&emulation_request, emulation_response, |body| {
-            parse_emulation(body, &expected_source)
-        })
-        .map_err(|error| {
-            let not_accepted = is_message_not_accepted(&error);
-            let diagnostic = bounded_diagnostic(error.developer_message);
-            let public = if not_accepted {
-                WalletClientError::EmulationMessageNotAccepted { diagnostic }
-            } else {
-                WalletClientError::EmulationFailed { diagnostic }
-            };
-            self.preview_error(generation, public)
-        })?;
+            .await?
+            .and_then(|body| parse_emulation(&body, &expected_source))
+            .map_err(|error| {
+                let not_accepted = is_message_not_accepted(&error);
+                let diagnostic = bounded_diagnostic(error.developer_message);
+                let public = if not_accepted {
+                    WalletClientError::EmulationMessageNotAccepted { diagnostic }
+                } else {
+                    WalletClientError::EmulationFailed { diagnostic }
+                };
+                self.preview_error(generation, public)
+            })?;
 
         if !evaluated.wallet_succeeded {
             return Err(self.preview_error(
@@ -280,15 +278,19 @@ impl WalletClient {
         Ok(())
     }
 
+    /// Executes a preview-owned HTTP request and returns its engine-checked body.
+    ///
+    /// Tracking is finished before response processing so every completed host
+    /// callback releases its request ID, including rejected responses.
     async fn execute_tracked_preview_request(
         &self,
         generation: u64,
         request: &HttpRequest,
-    ) -> Result<Result<HttpResponse, HttpHostError>, WalletClientError> {
+    ) -> Result<Result<Vec<u8>, DomainError>, WalletClientError> {
         self.start_preview_http_request(generation, request.id)?;
         let result = self.http_host.execute_http(request.clone()).await;
         self.finish_preview_http_request(generation, request.id)?;
-        Ok(result)
+        Ok(process_response(request, result))
     }
 
     fn finish_preview_http_request(

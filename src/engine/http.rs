@@ -11,43 +11,32 @@ use crate::{
 use super::provider::response_error;
 use crate::domain::bounded_diagnostic;
 
-const MAX_RESPONSE_BODY_BYTES: u64 = 4 * 1024 * 1024;
-const MAX_RESPONSE_HEADER_BYTES: u64 = 64 * 1024;
-
-pub(super) fn evaluate_response<T>(
+/// Maps host and provider failures, verifies the response origin, and returns the body.
+pub(super) fn process_response(
     request: &HttpRequest,
     result: Result<HttpResponse, HttpHostError>,
-    parse: impl FnOnce(&[u8]) -> Result<T, DomainError>,
-) -> Result<T, DomainError> {
-    if let Ok(response) = &result
-        && response.final_url != request.url
-    {
+) -> Result<Vec<u8>, DomainError> {
+    let response = match result {
+        Ok(response) => response,
+        Err(HttpHostError::Failed { kind, diagnostic }) => {
+            return Err(host_error(kind, &diagnostic));
+        }
+    };
+
+    // Native transports commonly follow redirects by default. Reject a truthful
+    // host report when the response came from anywhere but the requested endpoint.
+    if response.final_url != request.url {
         return Err(host_error(
             HttpHostErrorKind::PolicyViolation,
             "HTTP redirect or mismatched final URL",
         ));
     }
 
-    if let Ok(response) = &result {
-        if response.body.len() as u64 > request.max_response_body_bytes {
-            return Err(host_error(
-                HttpHostErrorKind::ResponseTooLarge,
-                "HTTP response exceeded the requested limit",
-            ));
-        }
-
-        let header_bytes = response.headers.iter().fold(0_u64, |size, header| {
-            size.saturating_add((header.name.len() + header.value.len()) as u64)
-        });
-        if header_bytes > request.max_response_header_bytes {
-            return Err(host_error(
-                HttpHostErrorKind::ResponseTooLarge,
-                "HTTP response headers exceeded the requested limit",
-            ));
-        }
+    if let Some(error) = response_error(response.status, &response.headers, &response.body) {
+        return Err(error);
     }
 
-    evaluate(result, parse)
+    Ok(response.body)
 }
 
 pub(super) fn build_toncenter_v2_request(
@@ -67,12 +56,10 @@ pub(super) fn build_toncenter_v2_request(
         }],
         body: Vec::new(),
         timeout_ms: config.providers.request_timeout_ms,
-        max_response_header_bytes: MAX_RESPONSE_HEADER_BYTES,
-        max_response_body_bytes: MAX_RESPONSE_BODY_BYTES,
     })
 }
 
-/// Builds a bounded GET request for a Toncenter v3 endpoint.
+/// Builds a GET request for a Toncenter v3 endpoint.
 ///
 /// The caller supplies only the endpoint suffix. Keeping `/api/v3` here lets
 /// one configured deployment base serve both the existing v2 reads and the v3
@@ -94,8 +81,6 @@ pub(super) fn build_toncenter_v3_request(
         }],
         body: Vec::new(),
         timeout_ms: config.providers.request_timeout_ms,
-        max_response_header_bytes: MAX_RESPONSE_HEADER_BYTES,
-        max_response_body_bytes: MAX_RESPONSE_BODY_BYTES,
     })
 }
 
@@ -110,24 +95,6 @@ pub(super) fn build_toncenter_url(
     query: &[(&str, &str)],
 ) -> Result<String, WalletClientError> {
     build_provider_url(&config.providers.toncenter_base_url, path, query)
-}
-
-fn evaluate<T>(
-    result: Result<HttpResponse, HttpHostError>,
-    parse: impl FnOnce(&[u8]) -> Result<T, DomainError>,
-) -> Result<T, DomainError> {
-    let response = match result {
-        Ok(response) => response,
-        Err(HttpHostError::Failed { kind, diagnostic }) => {
-            return Err(host_error(kind, &diagnostic));
-        }
-    };
-
-    if let Some(error) = response_error(response.status, &response.headers, &response.body) {
-        return Err(error);
-    }
-
-    parse(&response.body)
 }
 
 fn host_error(kind: HttpHostErrorKind, message: &str) -> DomainError {
@@ -202,8 +169,6 @@ mod tests {
             headers: Vec::new(),
             body: Vec::new(),
             timeout_ms: 15_000,
-            max_response_header_bytes: 32,
-            max_response_body_bytes: 16,
         }
     }
 
@@ -216,16 +181,13 @@ mod tests {
         }
     }
 
-    fn parse_text(body: &[u8]) -> Result<String, DomainError> {
-        Ok(String::from_utf8_lossy(body).into_owned())
-    }
-
     #[test]
-    fn accepts_a_bounded_response_and_invokes_the_parser() {
+    fn returns_the_body_of_a_successful_response() {
         let request = request();
-        let parsed = evaluate_response(&request, Ok(response(&request, b"wallet")), parse_text);
+        let body = process_response(&request, Ok(response(&request, b"wallet")))
+            .expect("a successful response must expose its body");
 
-        assert_eq!(parsed, Ok("wallet".to_owned()));
+        assert_eq!(body, b"wallet");
     }
 
     #[test]
@@ -234,7 +196,7 @@ mod tests {
         let mut redirected = response(&request, b"ignored");
         redirected.final_url = "https://attacker.example/response".to_owned();
 
-        let error = evaluate_response(&request, Ok(redirected), parse_text)
+        let error = process_response(&request, Ok(redirected))
             .expect_err("a changed final URL must be rejected");
 
         assert_eq!(error.code, ErrorCode::HostPolicyViolation);
@@ -245,39 +207,6 @@ mod tests {
             error.developer_message,
             "HTTP redirect or mismatched final URL"
         );
-    }
-
-    #[test]
-    fn rejects_a_body_above_the_request_limit() {
-        let mut request = request();
-        request.max_response_body_bytes = 3;
-
-        let error = evaluate_response(&request, Ok(response(&request, b"four")), parse_text)
-            .expect_err("an oversized body must be rejected");
-
-        assert_response_too_large(error, "HTTP response exceeded the requested limit");
-    }
-
-    #[test]
-    fn rejects_headers_above_the_combined_request_limit() {
-        let mut request = request();
-        request.max_response_header_bytes = 5;
-        let mut oversized = response(&request, b"ok");
-        oversized.headers = vec![
-            HttpHeader {
-                name: "A".to_owned(),
-                value: "123".to_owned(),
-            },
-            HttpHeader {
-                name: "B".to_owned(),
-                value: "45".to_owned(),
-            },
-        ];
-
-        let error = evaluate_response(&request, Ok(oversized), parse_text)
-            .expect_err("the combined header size must be enforced");
-
-        assert_response_too_large(error, "HTTP response headers exceeded the requested limit");
     }
 
     #[test]
@@ -341,13 +270,12 @@ mod tests {
 
         for (kind, code, category, retry) in cases {
             let request = request();
-            let error = evaluate_response(
+            let error = process_response(
                 &request,
                 Err(HttpHostError::Failed {
                     kind,
                     diagnostic: format!("{kind:?} diagnostic"),
                 }),
-                parse_text,
             )
             .expect_err("a host error must not reach the parser");
 
@@ -362,12 +290,11 @@ mod tests {
 
     #[test]
     fn forwards_provider_rejections_before_parsing() {
-        let mut request = request();
-        request.max_response_body_bytes = 64;
+        let request = request();
         let mut rejected = response(&request, br#"{"error":"denied"}"#);
         rejected.status = 403;
 
-        let error = evaluate_response(&request, Ok(rejected), parse_text)
+        let error = process_response(&request, Ok(rejected))
             .expect_err("a provider rejection must not reach the parser");
 
         assert_eq!(error.code, ErrorCode::HttpRejected);
@@ -417,8 +344,6 @@ mod tests {
         );
         assert!(request.body.is_empty());
         assert_eq!(request.timeout_ms, 12_345);
-        assert_eq!(request.max_response_header_bytes, MAX_RESPONSE_HEADER_BYTES);
-        assert_eq!(request.max_response_body_bytes, MAX_RESPONSE_BODY_BYTES);
     }
 
     #[test]
@@ -444,13 +369,5 @@ mod tests {
             build_toncenter_v2_request(&config, HttpRequestId { value: 1 }, "resource", &[],),
             Err(WalletClientError::InvalidProviderBaseUrl)
         );
-    }
-
-    fn assert_response_too_large(error: DomainError, diagnostic: &str) {
-        assert_eq!(error.code, ErrorCode::ResponseTooLarge);
-        assert_eq!(error.category, ErrorCategory::HostPolicy);
-        assert_eq!(error.retry, RetryAdvice::None);
-        assert_eq!(error.host_kind, Some(HttpHostErrorKind::ResponseTooLarge));
-        assert_eq!(error.developer_message, diagnostic);
     }
 }
