@@ -32,8 +32,8 @@ mod wallet;
 pub use domain::*;
 pub use engine::{WalletClient, WalletHttpHost, WalletPlatformHost};
 pub use types::{
-    Base64Hash, Base64HashError, NonEmptyString, NonEmptyStringError, TonAddressString,
-    TonAddressStringError, UnsignedDecimalString, UnsignedDecimalStringError,
+    Base64Hash, Base64HashError, Boc, BocError, NonEmptyString, NonEmptyStringError,
+    TonAddressString, TonAddressStringError, UnsignedDecimalString, UnsignedDecimalStringError,
 };
 pub use wallet::*;
 

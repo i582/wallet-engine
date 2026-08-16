@@ -3,16 +3,16 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use base64::Engine as _;
 use num_bigint::BigUint;
 use serde::Deserialize;
 use ton::ton_core::types::TonAddress;
 
 use crate::domain::bounded_diagnostic;
+use crate::types::Boc;
 use crate::{
     Base64Hash, DomainError, ErrorCategory, ErrorCode, HttpHeader, HttpMethod, HttpRequest,
-    HttpRequestId, RetryAdvice, SendEmulation, SendEmulationAction, WalletClientConfig,
-    WalletClientError,
+    HttpRequestId, NonEmptyString, RetryAdvice, SendEmulation, SendEmulationAction,
+    TonAddressString, WalletClientConfig, WalletClientError,
 };
 
 use super::http::build_toncenter_url;
@@ -28,10 +28,10 @@ pub(super) struct EvaluatedEmulation {
 pub(super) fn build_emulation_request(
     config: &WalletClientConfig,
     id: HttpRequestId,
-    signed_boc: &[u8],
+    signed_boc: &Boc,
 ) -> Result<HttpRequest, WalletClientError> {
     let body = serde_json::to_vec(&serde_json::json!({
-        "boc": base64::engine::general_purpose::STANDARD.encode(signed_boc),
+        "boc": signed_boc,
         "ignore_chksig": true,
         "include_code_data": false,
         "include_address_book": false,
@@ -62,7 +62,7 @@ pub(super) fn build_emulation_request(
 
 pub(super) fn parse_emulation(
     body: &[u8],
-    expected_source: &TonAddress,
+    expected_source: &TonAddressString,
 ) -> Result<EvaluatedEmulation, DomainError> {
     let response: EmulateTraceResponse =
         serde_json::from_slice(body).map_err(|error| invalid_response(error.to_string()))?;
@@ -75,7 +75,7 @@ pub(super) fn parse_emulation(
     let wallet_address = TonAddress::from_str(&wallet.account)
         .map_err(|error| invalid_response(format!("invalid emulated wallet address: {error}")))?;
 
-    if &wallet_address != expected_source {
+    if &wallet_address != expected_source.as_address() {
         return Err(invalid_response(
             "emulation trace root belongs to another account",
         ));
@@ -137,19 +137,13 @@ pub(super) fn is_message_not_accepted(error: &DomainError) -> bool {
 }
 
 fn parse_action(action: RawEmulationAction) -> Result<SendEmulationAction, DomainError> {
-    if action.kind.trim().is_empty() {
-        return Err(invalid_response("emulation action type is empty"));
-    }
-
     let accounts = action
         .accounts
         .into_iter()
         .map(|account| {
-            TonAddress::from_str(&account)
-                .map(|_| account)
-                .map_err(|error| {
-                    invalid_response(format!("invalid emulation action account: {error}"))
-                })
+            TonAddressString::try_from(account).map_err(|error| {
+                invalid_response(format!("invalid emulation action account: {error}"))
+            })
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -171,7 +165,8 @@ fn parse_action(action: RawEmulationAction) -> Result<SendEmulationAction, Domai
     Ok(SendEmulationAction {
         action_id: Base64Hash::try_from(action.action_id)
             .map_err(|error| invalid_response(format!("invalid emulation action id: {error}")))?,
-        kind: action.kind,
+        kind: NonEmptyString::try_from(action.kind)
+            .map_err(|_| invalid_response("emulation action type is empty"))?,
         succeeded: action.success,
         accounts,
         transaction_hashes,
@@ -272,15 +267,20 @@ struct EmulatedActionPhase {
 
 #[cfg(test)]
 mod tests {
+    use base64::Engine as _;
+
     use super::*;
+    use crate::types::Boc;
     use crate::{Network, ProviderConfig, UnsignedDecimalString};
+    use ton::ton_core::cell::TonCell;
 
     const ADDRESS: &str = "0:1111111111111111111111111111111111111111111111111111111111111111";
 
     #[test]
     fn builds_the_emulate_trace_request_from_the_provider_base() {
         let config = config("https://provider.example/custom/");
-        let request = build_emulation_request(&config, HttpRequestId { value: 9 }, b"boc")
+        let boc = Boc::try_from(TonCell::EMPTY_BOC.to_vec()).expect("valid BOC fixture");
+        let request = build_emulation_request(&config, HttpRequestId { value: 9 }, &boc)
             .expect("emulation request must build");
         let body: serde_json::Value =
             serde_json::from_slice(&request.body).expect("request body must be JSON");
@@ -290,14 +290,14 @@ mod tests {
             request.url,
             "https://provider.example/custom/api/emulate/v1/emulateTrace"
         );
-        assert_eq!(body["boc"], "Ym9j");
+        assert_eq!(body["boc"], boc.to_base64());
         assert_eq!(body["ignore_chksig"], true);
         assert_eq!(body["with_actions"], true);
     }
 
     #[test]
     fn parses_fees_and_detects_a_failed_child_transaction() {
-        let source = TonAddress::from_str(ADDRESS).expect("test address must parse");
+        let source = TonAddressString::try_from(ADDRESS).expect("test address must parse");
         let parsed = parse_emulation(
             serde_json::to_vec(&serde_json::json!({
                 "mc_block_seqno": 17,
@@ -332,7 +332,7 @@ mod tests {
 
     #[test]
     fn returns_validated_high_level_actions() {
-        let source = TonAddress::from_str(ADDRESS).expect("test address must parse");
+        let source = TonAddressString::try_from(ADDRESS).expect("test address must parse");
         let action_id = base64::engine::general_purpose::STANDARD.encode([3_u8; 32]);
         let transaction_hash = base64::engine::general_purpose::STANDARD.encode([4_u8; 32]);
         let parsed = parse_emulation(
@@ -360,9 +360,9 @@ mod tests {
 
         assert_eq!(parsed.summary.actions.len(), 1);
         let action = &parsed.summary.actions[0];
-        assert_eq!(action.kind, "ton_transfer");
+        assert_eq!(action.kind.as_str(), "ton_transfer");
         assert!(action.succeeded);
-        assert_eq!(action.accounts, [ADDRESS]);
+        assert_eq!(action.accounts[0].as_str(), ADDRESS);
         assert_eq!(action.action_id.as_str(), action_id);
         assert_eq!(action.transaction_hashes[0].as_str(), transaction_hash);
         assert_eq!(
@@ -374,7 +374,7 @@ mod tests {
 
     #[test]
     fn nonzero_compute_and_action_codes_reject_even_inconsistent_success_flags() {
-        let source = TonAddress::from_str(ADDRESS).expect("test address must parse");
+        let source = TonAddressString::try_from(ADDRESS).expect("test address must parse");
 
         for (compute_exit_code, action_result_code) in [(33, 0), (0, 34)] {
             let parsed = parse_emulation(
@@ -406,7 +406,7 @@ mod tests {
 
     #[test]
     fn tvm_alternative_success_exit_code_is_accepted() {
-        let source = TonAddress::from_str(ADDRESS).expect("test address must parse");
+        let source = TonAddressString::try_from(ADDRESS).expect("test address must parse");
         let parsed = parse_emulation(
             serde_json::to_vec(&serde_json::json!({
                 "mc_block_seqno": 17,
@@ -442,7 +442,7 @@ mod tests {
 
     #[test]
     fn rejects_a_trace_root_for_another_wallet() {
-        let source = TonAddress::from_str(ADDRESS).expect("test address must parse");
+        let source = TonAddressString::try_from(ADDRESS).expect("test address must parse");
         let other = "0:2222222222222222222222222222222222222222222222222222222222222222";
         let body = serde_json::to_vec(&serde_json::json!({
             "mc_block_seqno": 17,
@@ -485,8 +485,8 @@ mod tests {
 
     fn config(base: &str) -> WalletClientConfig {
         WalletClientConfig {
-            record_id: crate::NonEmptyString::try_from("record").expect("valid record identifier"),
-            address: crate::TonAddressString::try_from(ADDRESS).expect("valid TON address"),
+            record_id: NonEmptyString::try_from("record").expect("valid record identifier"),
+            address: TonAddressString::try_from(ADDRESS).expect("valid TON address"),
             public_key: vec![0; 32],
             local_secret_ref: None,
             network: Network::Testnet,

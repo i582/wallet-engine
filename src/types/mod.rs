@@ -8,9 +8,8 @@ mod non_empty_string;
 
 pub use address::{TonAddressString, TonAddressStringError};
 pub use base64_hash::{Base64Hash, Base64HashError};
+pub use boc::{Boc, BocError};
 pub use decimal_string::{UnsignedDecimalString, UnsignedDecimalStringError};
 pub use non_empty_string::{NonEmptyString, NonEmptyStringError};
 
 pub(crate) use address::TonAddressExt;
-pub(crate) use address::raw_serde as raw_address_serde;
-pub(crate) use boc::{Boc, BocError};

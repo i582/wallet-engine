@@ -5,9 +5,6 @@
 //! ambiguous submission result.
 
 use serde::{Deserialize, Serialize};
-#[cfg(test)]
-use std::str::FromStr;
-use ton::ton_core::types::TonAddress;
 
 use crate::domain::{
     AccountStatus, JournalCompareExchange, JournalCompareExchangeResult, JournalKey, JournalRecord,
@@ -15,7 +12,7 @@ use crate::domain::{
     SendPhase, SendRequest, SendSnapshot, bounded_diagnostic,
 };
 use crate::types::Boc;
-use crate::{Base64Hash, SendAmount, UnsignedDecimalString};
+use crate::{Base64Hash, NonEmptyString, SendAmount, TonAddressString, UnsignedDecimalString};
 
 const JOURNAL_SCHEMA_VERSION: u32 = 2;
 const FIRST_JOURNAL_VERSION: u64 = 1;
@@ -50,16 +47,16 @@ impl FreshSendAccount {
 pub(crate) struct PreparedTransfer {
     /// The caller identity for this send attempt.
     /// It links the prepared message to the immutable [`SendRequest`].
-    pub operation_id: String,
+    pub operation_id: NonEmptyString,
 
     /// The application record that owns the source wallet and journal slot.
-    pub record_id: String,
+    pub record_id: NonEmptyString,
 
     /// The configured source address after the mnemonic-derived wallet matches it.
-    pub source: TonAddress,
+    pub source: TonAddressString,
 
     /// The validated destination TON address from the request.
-    pub destination: TonAddress,
+    pub destination: TonAddressString,
 
     /// The exact-value or whole-balance policy encoded into the wallet action.
     pub amount: SendAmount,
@@ -201,8 +198,6 @@ pub(crate) enum SendDirective {
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum SendWorkflowError {
-    #[error("invalid send request: {0}")]
-    InvalidRequest(String),
     #[error("invalid send transition from {from:?}: {event}")]
     InvalidTransition {
         from: SendStage,
@@ -220,24 +215,19 @@ pub(crate) enum SendWorkflowError {
     InvalidJournal(String),
 }
 
-/// No secret material is ever serialized into this record.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct DurableSendRecord {
     /// The durable JSON schema version.
     /// A reader rejects unknown versions before it uses any other field.
     schema_version: u32,
     /// The caller identity of the send attempt.
-    operation_id: String,
+    operation_id: NonEmptyString,
     /// The application record that owns the wallet-wide send slot.
-    record_id: String,
-    /// The source TON address.
-    /// Serde stores it as raw `workchain:hex` and accepts friendly values.
-    #[serde(with = "crate::types::raw_address_serde")]
-    source: TonAddress,
-    /// The destination TON address.
-    /// Serde stores it as raw `workchain:hex` and accepts friendly values.
-    #[serde(with = "crate::types::raw_address_serde")]
-    destination: TonAddress,
+    record_id: NonEmptyString,
+    /// The validated source TON address.
+    source: TonAddressString,
+    /// The validated destination TON address.
+    destination: TonAddressString,
     /// The exact-value or whole-balance policy stored with the signed message.
     amount: SendAmount,
     /// The optional plaintext comment stored with the signed message.
@@ -274,9 +264,9 @@ struct DurableSendRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PendingSendRecord {
     pub(crate) journal_version: u64,
-    pub(crate) operation_id: String,
-    pub(crate) record_id: String,
-    pub(crate) source: TonAddress,
+    pub(crate) operation_id: NonEmptyString,
+    pub(crate) record_id: NonEmptyString,
+    pub(crate) source: TonAddressString,
     pub(crate) seqno: u32,
     pub(crate) valid_until: u64,
     pub(crate) message_hash: Base64Hash,
@@ -372,7 +362,7 @@ impl PendingSendRecord {
 
         Ok(Some(JournalCompareExchange {
             key: JournalKey {
-                record_id: self.record_id.clone(),
+                record_id: self.record_id.to_string(),
                 slot: SEND_SLOT.to_owned(),
             },
             expected_version: Some(self.journal_version),
@@ -389,11 +379,11 @@ impl PendingSendRecord {
 /// stage still blocks replacement signing.
 pub(crate) fn pending_send_record(
     record: &JournalRecord,
-    record_id: &str,
-    source: &TonAddress,
+    record_id: &NonEmptyString,
+    source: &TonAddressString,
 ) -> Result<Option<PendingSendRecord>, SendWorkflowError> {
     let durable = decode_durable_record(record)?;
-    if durable.record_id != record_id || &durable.source != source {
+    if &durable.record_id != record_id || &durable.source != source {
         return Err(SendWorkflowError::InvalidJournal(
             "record belongs to another wallet".to_owned(),
         ));
@@ -420,11 +410,11 @@ pub(crate) fn pending_send_record(
 /// transaction evidence for `Confirmed` records.
 pub(crate) fn terminal_send_resolution(
     record: &JournalRecord,
-    record_id: &str,
-    source: &TonAddress,
+    record_id: &NonEmptyString,
+    source: &TonAddressString,
 ) -> Result<Option<SendResolution>, SendWorkflowError> {
     let durable = decode_durable_record(record)?;
-    if durable.record_id != record_id || &durable.source != source {
+    if &durable.record_id != record_id || &durable.source != source {
         return Err(SendWorkflowError::InvalidJournal(
             "record belongs to another wallet".to_owned(),
         ));
@@ -453,11 +443,11 @@ pub(crate) fn terminal_send_resolution(
 /// already terminal and no provider request is necessary.
 pub(crate) fn send_snapshot_from_journal(
     record: &JournalRecord,
-    record_id: &str,
-    source: &TonAddress,
+    record_id: &NonEmptyString,
+    source: &TonAddressString,
 ) -> Result<SendSnapshot, SendWorkflowError> {
     let durable = decode_durable_record(record)?;
-    if durable.record_id != record_id || &durable.source != source {
+    if &durable.record_id != record_id || &durable.source != source {
         return Err(SendWorkflowError::InvalidJournal(
             "record belongs to another wallet".to_owned(),
         ));
@@ -501,11 +491,11 @@ pub(crate) fn send_snapshot_from_journal(
 #[derive(Debug, Clone)]
 pub(crate) struct SendWorkflow {
     /// The application record that owns the source wallet and shared send journal slot.
-    record_id: String,
+    record_id: NonEmptyString,
 
     /// The expected wallet address from the client configuration.
     /// Secret authorization succeeds only when mnemonic derivation produces this address.
-    source: TonAddress,
+    source: TonAddressString,
 
     /// The immutable caller intent for this operation.
     request: SendRequest,
@@ -539,8 +529,8 @@ pub(crate) struct SendWorkflow {
 
 impl SendWorkflow {
     pub(crate) const fn new(
-        record_id: String,
-        source: TonAddress,
+        record_id: NonEmptyString,
+        source: TonAddressString,
         request: SendRequest,
         local_secret_ref: ProtectedSecretRef,
     ) -> Self {
@@ -560,7 +550,7 @@ impl SendWorkflow {
 
     pub(crate) fn snapshot(&self) -> SendSnapshot {
         SendSnapshot {
-            operation_id: Some(self.request.operation_id.to_string()),
+            operation_id: Some(self.request.operation_id.clone()),
             phase: self.stage.public_phase(),
             error_message: self.diagnostic.clone(),
             resolution: None,
@@ -569,7 +559,6 @@ impl SendWorkflow {
 
     pub(crate) fn begin(&mut self) -> Result<SendDirective, SendWorkflowError> {
         self.expect(SendStage::Validating, "begin")?;
-        validate_request(&self.record_id, &self.request)?;
 
         self.stage = SendStage::LoadingJournal;
 
@@ -806,7 +795,7 @@ impl SendWorkflow {
 
     fn journal_key(&self) -> JournalKey {
         JournalKey {
-            record_id: self.record_id.clone(),
+            record_id: self.record_id.to_string(),
             slot: SEND_SLOT.to_owned(),
         }
     }
@@ -833,10 +822,10 @@ impl SendWorkflow {
             .fresh_account
             .as_ref()
             .ok_or(SendWorkflowError::PreparedTransferMismatch)?;
-        if prepared.operation_id != self.request.operation_id.as_str()
+        if prepared.operation_id != self.request.operation_id
             || prepared.record_id != self.record_id
             || prepared.source != self.source
-            || &prepared.destination != self.request.destination.as_address()
+            || prepared.destination != self.request.destination
             || prepared.amount != self.request.amount
             || prepared.comment != self.request.comment
             || prepared.seqno != account.seqno
@@ -865,22 +854,6 @@ impl SendWorkflow {
     }
 }
 
-fn validate_request(record_id: &str, request: &SendRequest) -> Result<(), SendWorkflowError> {
-    if record_id.trim().is_empty() {
-        return Err(SendWorkflowError::InvalidRequest(
-            "wallet record identity is empty".to_owned(),
-        ));
-    }
-
-    if request.operation_id.as_str().len() > 128 {
-        return Err(SendWorkflowError::InvalidRequest(
-            "operation identifier is invalid".to_owned(),
-        ));
-    }
-
-    Ok(())
-}
-
 fn decode_durable_record(record: &JournalRecord) -> Result<DurableSendRecord, SendWorkflowError> {
     if record.version == 0 {
         return Err(SendWorkflowError::InvalidJournal(
@@ -894,12 +867,6 @@ fn decode_durable_record(record: &JournalRecord) -> Result<DurableSendRecord, Se
     if durable.schema_version != JOURNAL_SCHEMA_VERSION {
         return Err(SendWorkflowError::InvalidJournal(
             "unsupported schema version".to_owned(),
-        ));
-    }
-
-    if durable.operation_id.trim().is_empty() || durable.record_id.trim().is_empty() {
-        return Err(SendWorkflowError::InvalidJournal(
-            "record fields are invalid".to_owned(),
         ));
     }
 
@@ -939,29 +906,19 @@ mod tests {
     const RAW_OTHER: &str = "0:3333333333333333333333333333333333333333333333333333333333333333";
 
     #[test]
-    fn workflow_rejects_an_invalid_record_and_oversized_operation() {
-        let cases = [
-            ("", request(), "wallet record identity is empty"),
-            (
-                "record",
-                SendRequest {
-                    operation_id: NonEmptyString::try_from("x".repeat(129))
-                        .expect("long operation remains non-empty"),
-                    ..request()
-                },
-                "operation identifier is invalid",
-            ),
-        ];
+    fn workflow_accepts_a_long_nonempty_operation_identifier() {
+        let request = SendRequest {
+            operation_id: NonEmptyString::try_from("x".repeat(1_024))
+                .expect("long operation remains non-empty"),
+            ..request()
+        };
+        let mut workflow =
+            SendWorkflow::new(non_empty("record"), source(), request, local_secret_ref());
 
-        for (record_id, request, diagnostic) in cases {
-            let mut workflow =
-                SendWorkflow::new(record_id.to_owned(), source(), request, local_secret_ref());
-            assert_eq!(
-                workflow.begin(),
-                Err(SendWorkflowError::InvalidRequest(diagnostic.to_owned()))
-            );
-            assert_eq!(workflow.snapshot().phase, SendPhase::Validating);
-        }
+        assert!(matches!(
+            workflow.begin(),
+            Ok(SendDirective::LoadJournal(_))
+        ));
     }
 
     #[test]
@@ -983,11 +940,11 @@ mod tests {
             },
             JournalRecord {
                 version: 1,
-                payload: durable_payload_with(|record| record.operation_id.clear()),
+                payload: durable_payload_with_json_field("operation_id", ""),
             },
             JournalRecord {
                 version: 1,
-                payload: durable_payload_with(|record| record.record_id = "other".to_owned()),
+                payload: durable_payload_with(|record| record.record_id = non_empty("other")),
             },
         ];
 
@@ -1036,7 +993,7 @@ mod tests {
             version: 4,
             payload: durable_payload(SendStage::SubmissionUnknown),
         };
-        let pending = pending_send_record(&journal, "record", &source())
+        let pending = pending_send_record(&journal, &non_empty("record"), &source())
             .expect("durable record is valid")
             .expect("unknown submission needs resolution");
         let transaction_hash =
@@ -1053,7 +1010,7 @@ mod tests {
         assert_eq!(mutation.expected_version, Some(4));
         assert_eq!(mutation.replacement.version, 5);
         assert_eq!(
-            terminal_send_resolution(&mutation.replacement, "record", &source()),
+            terminal_send_resolution(&mutation.replacement, &non_empty("record"), &source()),
             Ok(Some(SendResolution::Confirmed {
                 transaction_hash,
                 transaction_lt: UnsignedDecimalString::try_from("42")
@@ -1184,8 +1141,8 @@ mod tests {
         type TransferMutation = Box<dyn FnOnce(&mut PreparedTransfer)>;
 
         let mismatches: Vec<TransferMutation> = vec![
-            Box::new(|prepared| prepared.operation_id = "other-operation".to_owned()),
-            Box::new(|prepared| prepared.record_id = "other-record".to_owned()),
+            Box::new(|prepared| prepared.operation_id = non_empty("other-operation")),
+            Box::new(|prepared| prepared.record_id = non_empty("other-record")),
             Box::new(|prepared| prepared.source = other_address()),
             Box::new(|prepared| prepared.destination = other_address()),
             Box::new(|prepared| {
@@ -1221,7 +1178,7 @@ mod tests {
     }
 
     fn workflow() -> SendWorkflow {
-        SendWorkflow::new("record".to_owned(), source(), request(), local_secret_ref())
+        SendWorkflow::new(non_empty("record"), source(), request(), local_secret_ref())
     }
 
     fn request() -> SendRequest {
@@ -1240,16 +1197,16 @@ mod tests {
         }
     }
 
-    fn source() -> TonAddress {
-        TonAddress::from_str(RAW_SOURCE).expect("test source address is valid")
+    fn source() -> TonAddressString {
+        TonAddressString::try_from(RAW_SOURCE).expect("test source address is valid")
     }
 
-    fn destination() -> TonAddress {
-        TonAddress::from_str(RAW_DESTINATION).expect("test destination address is valid")
+    fn destination() -> TonAddressString {
+        TonAddressString::try_from(RAW_DESTINATION).expect("test destination address is valid")
     }
 
-    fn other_address() -> TonAddress {
-        TonAddress::from_str(RAW_OTHER).expect("test alternate address is valid")
+    fn other_address() -> TonAddressString {
+        TonAddressString::try_from(RAW_OTHER).expect("test alternate address is valid")
     }
 
     fn fresh_account() -> FreshSendAccount {
@@ -1261,8 +1218,8 @@ mod tests {
 
     fn prepared_transfer() -> PreparedTransfer {
         PreparedTransfer {
-            operation_id: "operation".to_owned(),
-            record_id: "record".to_owned(),
+            operation_id: non_empty("operation"),
+            record_id: non_empty("record"),
             source: source(),
             destination: destination(),
             amount: SendAmount::exact("1").expect("valid exact amount"),
@@ -1337,6 +1294,18 @@ mod tests {
         };
         mutate(&mut record);
         serde_json::to_vec(&record).expect("durable record fixture serializes")
+    }
+
+    fn durable_payload_with_json_field(field: &str, value: &str) -> Vec<u8> {
+        let mut payload: serde_json::Value =
+            serde_json::from_slice(&durable_payload(SendStage::Submitted))
+                .expect("durable fixture is JSON");
+        payload[field] = serde_json::Value::String(value.to_owned());
+        serde_json::to_vec(&payload).expect("durable JSON fixture serializes")
+    }
+
+    fn non_empty(value: &str) -> NonEmptyString {
+        NonEmptyString::try_from(value).expect("test string is non-empty")
     }
 
     fn applied() -> JournalCompareExchangeResult {

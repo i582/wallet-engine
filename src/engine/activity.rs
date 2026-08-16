@@ -331,7 +331,7 @@ mod tests {
         State {
             snapshot: WalletSnapshot {
                 revision: 0,
-                record_id: config.record_id.to_string(),
+                record_id: config.record_id.clone(),
                 address: config.address.clone(),
                 network: config.network,
                 account: None,

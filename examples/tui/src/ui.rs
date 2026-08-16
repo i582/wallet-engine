@@ -397,7 +397,8 @@ fn render_activity_pane(frame: &mut Frame<'_>, area: Rect, snapshot: Option<&Wal
                 )),
                 Cell::from(
                     item.counterparty
-                        .as_deref()
+                        .as_ref()
+                        .map(wallet_engine::TonAddressString::as_str)
                         .map_or_else(|| "—".to_owned(), |value| compact(value, 18)),
                 ),
                 Cell::from(item.timestamp.to_string()),

@@ -10,10 +10,9 @@ use std::str::FromStr;
 use ton::ton_core::types::TonAddress;
 
 use crate::domain::bounded_diagnostic;
-use crate::types::TonAddressExt as _;
 use crate::{
     AccountSnapshot, AccountStatus, ActivityCursor, ActivityDirection, ActivityItem, Base64Hash,
-    DomainError, ErrorCategory, ErrorCode, HttpHeader, Network, RetryAdvice,
+    DomainError, ErrorCategory, ErrorCode, HttpHeader, Network, RetryAdvice, TonAddressString,
 };
 
 #[derive(Debug, Deserialize)]
@@ -115,7 +114,7 @@ impl ActivityRecord {
             counterparty: self
                 .counterparty
                 .as_ref()
-                .map(|address| address.to_user_friendly(network)),
+                .map(|address| TonAddressString::from_address(address, network)),
         }
     }
 }

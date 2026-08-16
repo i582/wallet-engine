@@ -30,7 +30,7 @@ impl WalletClient {
                 .ok_or(WalletClientError::IdentifierExhausted)?;
             let generation = state.resolution_generation;
             let config = state.config.clone();
-            let source = config.address.as_address().clone();
+            let source = config.address.clone();
             let account_request = build_toncenter_v2_request(
                 &config,
                 state.allocate_request_id()?,

@@ -1,6 +1,6 @@
 //! Account state and paginated wallet activity.
 
-use crate::{Base64Hash, UnsignedDecimalString};
+use crate::{Base64Hash, TonAddressString, UnsignedDecimalString};
 
 /// The lifecycle state of a TON account.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Enum)]
@@ -57,7 +57,7 @@ pub struct ActivityItem {
     /// The exact transferred value, in nanograms.
     pub amount_nanograms: UnsignedDecimalString,
     /// The source or destination address, if the provider supplies it.
-    pub counterparty: Option<String>,
+    pub counterparty: Option<TonAddressString>,
 }
 
 /// The provider cursor for the next older activity page.

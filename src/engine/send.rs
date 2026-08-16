@@ -65,7 +65,7 @@ impl WalletClient {
                 .ok_or(WalletClientError::IdentifierExhausted)?;
             let generation = state.send_generation;
             let config = state.config.clone();
-            let expected_source = config.address.as_address().clone();
+            let expected_source = config.address.clone();
 
             let account_request = build_toncenter_v2_request(
                 &config,
@@ -82,7 +82,7 @@ impl WalletClient {
             ];
             let submit_request_id = state.allocate_request_id()?;
             let mut workflow = SendWorkflow::new(
-                config.record_id.to_string(),
+                config.record_id.clone(),
                 expected_source.clone(),
                 request.clone(),
                 local_secret_ref,
@@ -239,7 +239,7 @@ impl WalletClient {
             }
         })?;
 
-        if source != expected_source {
+        if &source != expected_source.as_address() {
             return Err(self.send_failed_error(
                 generation,
                 "protected mnemonic does not belong to this wallet",
@@ -269,16 +269,18 @@ impl WalletClient {
         })?;
 
         let submit_request =
-            build_send_boc_request(&config, submit_request_id, prepared.signed_boc.as_bytes())
-                .map_err(|_| {
-                    self.send_failed_error(generation, "failed to construct submission")
-                })?;
+            build_send_boc_request(&config, submit_request_id, &prepared.signed_boc).map_err(
+                |_| self.send_failed_error(generation, "failed to construct submission"),
+            )?;
+
         let directive = workflow
             .transfer_prepared(prepared)
             .map_err(|error| self.send_failed_error(generation, error.to_string()))?;
+
         let SendDirective::PersistJournal(mutation) = directive else {
             return Err(self.send_failed_error(generation, "invalid send persistence transition"));
         };
+
         self.publish_send_workflow(generation, &workflow)?;
 
         // Start the irreversible boundary before awaiting durable CAS. After this point cancel
@@ -363,7 +365,7 @@ impl WalletClient {
             }
         }
         Ok(SendResult {
-            operation_id: request.operation_id.into_string(),
+            operation_id: request.operation_id,
             message_hash,
             phase,
         })

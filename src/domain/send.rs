@@ -1,7 +1,8 @@
 //! Public transfer requests, phases, snapshots, and results.
 
 use crate::{
-    Base64Hash, NonEmptyString, TonAddressString, UnsignedDecimalString, UnsignedDecimalStringError,
+    Base64Hash, Boc, NonEmptyString, TonAddressString, UnsignedDecimalString,
+    UnsignedDecimalStringError,
 };
 
 /// The transfer value policy applied by the wallet contract.
@@ -76,7 +77,7 @@ pub struct SendPreview {
     /// The complete fake-signed external message submitted for emulation.
     /// The value is a standard padded Base64-encoded BOC. Clients can pass it
     /// to an independent emulator or explorer without reconstructing the message.
-    pub message_boc_base64: String,
+    pub message_boc_base64: Boc,
     /// The bounded Toncenter emulation summary shown before authorization.
     pub emulation: SendEmulation,
 }
@@ -148,7 +149,7 @@ pub struct ResolutionInfo {
 #[serde(rename_all = "camelCase")]
 pub struct SendSnapshot {
     /// The active or last operation identifier, if a send started.
-    pub operation_id: Option<String>,
+    pub operation_id: Option<NonEmptyString>,
     /// The current public phase.
     pub phase: SendPhase,
     /// A sanitized diagnostic for failed or unknown submission states.
@@ -191,11 +192,11 @@ pub struct SendEmulationAction {
     /// The validated action identifier in standard padded Base64.
     pub action_id: Base64Hash,
     /// Toncenter's action kind, for example `ton_transfer` or `call_contract`.
-    pub kind: String,
+    pub kind: NonEmptyString,
     /// Whether Toncenter considers the complete high-level action successful.
     pub succeeded: bool,
-    /// Raw TON account addresses involved in the action.
-    pub accounts: Vec<String>,
+    /// Validated TON account addresses involved in the action.
+    pub accounts: Vec<TonAddressString>,
     /// Validated transaction hashes associated with the action.
     pub transaction_hashes: Vec<Base64Hash>,
     /// Action-specific details serialized as a JSON object.
@@ -207,7 +208,7 @@ pub struct SendEmulationAction {
 #[serde(rename_all = "camelCase")]
 pub struct SendResult {
     /// The application operation identifier.
-    pub operation_id: String,
+    pub operation_id: NonEmptyString,
     /// The normalized signed external-message hash in standard padded Base64.
     pub message_hash: Base64Hash,
     /// The terminal phase. This can be [`SendPhase::SubmissionUnknown`].

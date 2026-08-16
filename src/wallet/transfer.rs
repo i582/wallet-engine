@@ -20,7 +20,10 @@ use ton::ton_core::types::tlb_core::{MsgAddressExt, TLBCoins, TLBEitherRef};
 use ton::ton_wallet::{WALLET_V5R1_ID_DEFAULT, WALLET_V5R1_ID_DEFAULT_TESTNET, WalletVersion};
 
 use crate::types::{Boc, BocError};
-use crate::{Base64Hash, Base64HashError, Network, SendAmount, SendPreviewRequest, SendRequest};
+use crate::{
+    Base64Hash, Base64HashError, Network, NonEmptyString, SendAmount, SendPreviewRequest,
+    SendRequest, TonAddressString,
+};
 
 use super::crypto::{WalletCryptoError, derive_v5r1_public_state, derive_v5r1_wallet};
 use super::send::{FreshSendAccount, PreparedTransfer};
@@ -58,8 +61,8 @@ pub(crate) enum TransferError {
 
 pub(crate) fn prepare_transfer(
     mnemonic_bytes: &[u8],
-    record_id: &str,
-    source: &TonAddress,
+    record_id: &NonEmptyString,
+    source: &TonAddressString,
     network: Network,
     request: &SendRequest,
     account: &FreshSendAccount,
@@ -67,10 +70,13 @@ pub(crate) fn prepare_transfer(
 ) -> Result<PreparedTransfer, TransferError> {
     let mnemonic = std::str::from_utf8(mnemonic_bytes).map_err(TransferError::MnemonicEncoding)?;
     let wallet = derive_v5r1_wallet(mnemonic, network).map_err(TransferError::WalletDerivation)?;
-    let destination = request.destination.as_address().clone();
+    let destination = request.destination.clone();
 
-    let (internal, send_mode) =
-        build_internal_message(&destination, &request.amount, request.comment.as_deref())?;
+    let (internal, send_mode) = build_internal_message(
+        destination.as_address(),
+        &request.amount,
+        request.comment.as_deref(),
+    )?;
 
     // Provider and journal timestamps remain u64. Narrow only at the protocol
     // boundary because wallet V5 serializes valid_until as uint32.
@@ -98,8 +104,8 @@ pub(crate) fn prepare_transfer(
         .map_err(TransferError::InvalidBoc)?;
 
     Ok(PreparedTransfer {
-        operation_id: request.operation_id.to_string(),
-        record_id: record_id.to_owned(),
+        operation_id: request.operation_id.clone(),
+        record_id: record_id.clone(),
         source: source.clone(),
         destination,
         amount: request.amount.clone(),
@@ -118,7 +124,7 @@ pub(crate) fn prepare_transfer(
 /// An uninitialized wallet also receives its deterministic `StateInit`, derived
 /// from the persisted public key. The mnemonic is never needed for this step.
 pub(crate) fn prepare_transfer_emulation(
-    source: &TonAddress,
+    source: &TonAddressString,
     public_key: &[u8],
     network: Network,
     request: &SendPreviewRequest,
@@ -160,7 +166,7 @@ pub(crate) fn prepare_transfer_emulation(
     let signed = signed.build().map_err(TransferError::InternalMessage)?;
     let info = CommonMsgInfo::ExtIn(CommonMsgInfoExtIn {
         src: MsgAddressExt::NONE,
-        dst: source.to_msg_address_int(),
+        dst: source.as_address().to_msg_address_int(),
         import_fee: TLBCoins::ZERO,
     });
 
@@ -168,7 +174,7 @@ pub(crate) fn prepare_transfer_emulation(
     if account.needs_state_init() {
         let (derived_source, state_init) = derive_v5r1_public_state(public_key, network)
             .map_err(TransferError::WalletDerivation)?;
-        if &derived_source != source {
+        if &derived_source != source.as_address() {
             return Err(TransferError::PublicKeyMismatch);
         }
         external.init = Some(TLBEitherRef::new(state_init));

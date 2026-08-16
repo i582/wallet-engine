@@ -3,6 +3,7 @@
 use serde_json::Value;
 
 use crate::domain::bounded_diagnostic;
+use crate::types::Boc;
 use crate::{
     DomainError, ErrorCategory, ErrorCode, HttpHeader, HttpMethod, HttpRequest, HttpRequestId,
     RetryAdvice, WalletClientConfig, WalletClientError,
@@ -34,13 +35,9 @@ pub(super) fn build_seqno_request(
 pub(super) fn build_send_boc_request(
     config: &WalletClientConfig,
     id: HttpRequestId,
-    boc: &[u8],
+    boc: &Boc,
 ) -> Result<HttpRequest, WalletClientError> {
-    use base64::Engine as _;
-
-    let encoded = base64::engine::general_purpose::STANDARD.encode(boc);
-
-    build_json_rpc_request(config, id, "sendBoc", serde_json::json!({ "boc": encoded }))
+    build_json_rpc_request(config, id, "sendBoc", serde_json::json!({ "boc": boc }))
 }
 
 pub(super) fn parse_seqno(body: &[u8]) -> Result<u32, DomainError> {
@@ -151,8 +148,30 @@ fn invalid_json(message: impl Into<String>) -> DomainError {
 
 #[cfg(test)]
 mod tests {
-    use super::{SendBocResponse, is_explicit_send_rejection, parse_send_response, parse_seqno};
-    use crate::{DomainError, ErrorCategory, ErrorCode, RetryAdvice};
+    use ton::ton_core::cell::TonCell;
+
+    use super::{
+        SendBocResponse, build_send_boc_request, is_explicit_send_rejection, parse_send_response,
+        parse_seqno,
+    };
+    use crate::{
+        Boc, DomainError, ErrorCategory, ErrorCode, HttpRequestId, Network, NonEmptyString,
+        ProviderConfig, RetryAdvice, TonAddressString, WalletClientConfig,
+    };
+
+    const ADDRESS: &str = "0:1111111111111111111111111111111111111111111111111111111111111111";
+
+    #[test]
+    fn builds_send_boc_from_the_validated_boc() {
+        let boc = Boc::try_from(TonCell::EMPTY_BOC.to_vec()).expect("valid BOC fixture");
+        let request = build_send_boc_request(&config(), HttpRequestId { value: 7 }, &boc)
+            .expect("sendBoc request must build");
+        let body: serde_json::Value =
+            serde_json::from_slice(&request.body).expect("request body must be JSON");
+
+        assert_eq!(body["method"], "sendBoc");
+        assert_eq!(body["params"]["boc"], boc.to_base64());
+    }
 
     #[test]
     fn parses_supported_seqno_stack_shapes_and_radices() {
@@ -227,6 +246,22 @@ mod tests {
             provider_status: Some(status),
             retry_after_ms: None,
             host_kind: None,
+        }
+    }
+
+    fn config() -> WalletClientConfig {
+        WalletClientConfig {
+            record_id: NonEmptyString::try_from("record").expect("valid record identifier"),
+            address: TonAddressString::try_from(ADDRESS).expect("valid TON address"),
+            public_key: vec![0; 32],
+            local_secret_ref: None,
+            network: Network::Testnet,
+            send_validity_seconds: 300,
+            resolution_margin_seconds: 60,
+            providers: ProviderConfig {
+                toncenter_base_url: "https://provider.example".to_owned(),
+                request_timeout_ms: 15_000,
+            },
         }
     }
 }

@@ -51,7 +51,7 @@ impl WalletClient {
                 .ok_or(WalletClientError::IdentifierExhausted)?;
             let generation = state.preview_generation;
             let config = state.config.clone();
-            let expected_source = config.address.as_address().clone();
+            let expected_source = config.address.clone();
             let account_request = build_toncenter_v2_request(
                 &config,
                 state.allocate_request_id()?,
@@ -155,18 +155,16 @@ impl WalletClient {
                 },
             )
         })?;
-        let message_boc_base64 = boc.to_base64();
-        let emulation_request =
-            build_emulation_request(&config, emulation_request_id, boc.as_bytes()).map_err(
-                |error| {
-                    self.preview_error(
-                        generation,
-                        WalletClientError::EmulationFailed {
-                            diagnostic: bounded_diagnostic(error.to_string()),
-                        },
-                    )
-                },
-            )?;
+
+        let emulation_request = build_emulation_request(&config, emulation_request_id, &boc)
+            .map_err(|error| {
+                self.preview_error(
+                    generation,
+                    WalletClientError::EmulationFailed {
+                        diagnostic: bounded_diagnostic(error.to_string()),
+                    },
+                )
+            })?;
 
         let evaluated = self
             .execute_tracked_preview_request(generation, &emulation_request)
@@ -215,7 +213,7 @@ impl WalletClient {
             amount: request.amount,
             comment: request.comment,
             valid_until,
-            message_boc_base64,
+            message_boc_base64: boc,
             emulation: evaluated.summary,
         };
         self.finish_preview(generation)?;

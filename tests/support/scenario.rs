@@ -1819,7 +1819,7 @@ impl ScenarioRunner {
                     Some(OperationResult::Preview(Ok(preview)))
                         if preview.emulation.transaction_count > 0
                             && STANDARD
-                                .decode(&preview.message_boc_base64)
+                                .decode(preview.message_boc_base64.to_base64())
                                 .ok()
                                 .is_some_and(|bytes| TonCell::from_boc(bytes).is_ok()) =>
                     {
@@ -1835,7 +1835,7 @@ impl ScenarioRunner {
                 match self.results.get(&operation) {
                     Some(OperationResult::Preview(Ok(preview)))
                         if preview.emulation.actions.iter().any(|action| {
-                            action.kind == kind
+                            action.kind.as_str() == kind
                                 && action.succeeded
                                 && !action.accounts.is_empty()
                                 && !action.transaction_hashes.is_empty()
