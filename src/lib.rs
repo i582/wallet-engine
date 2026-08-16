@@ -24,6 +24,20 @@
 //! Host callbacks can therefore call unrelated application code without a
 //! wallet-state lock cycle. Streaming updates remain outside this crate.
 
+#![cfg_attr(
+    test,
+    allow(
+        unused_results,
+        clippy::arithmetic_side_effects,
+        clippy::as_conversions,
+        clippy::indexing_slicing,
+        clippy::iter_over_hash_type,
+        clippy::panic,
+        clippy::pedantic,
+        reason = "unit-test fixtures may use concise assertions and deliberately discard setup results"
+    )
+)]
+
 mod domain;
 mod engine;
 mod types;

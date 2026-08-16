@@ -45,7 +45,8 @@ impl TryFrom<Vec<u8>> for Boc {
     type Error = BocError;
 
     fn try_from(bytes: Vec<u8>) -> Result<Self, Self::Error> {
-        TonCell::from_boc(bytes.clone()).map_err(|error| BocError(BocErrorKind::Ton(error)))?;
+        let _ =
+            TonCell::from_boc(bytes.clone()).map_err(|error| BocError(BocErrorKind::Ton(error)))?;
         Ok(Self(bytes))
     }
 }

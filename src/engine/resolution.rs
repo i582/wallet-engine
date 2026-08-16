@@ -2,7 +2,8 @@
 
 use crate::domain::bounded_diagnostic;
 use crate::wallet::send::{
-    PendingSendRecord, SendResolution, pending_send_record, terminal_send_resolution,
+    PendingSendRecord, SendResolution, SendWorkflowError, pending_send_record,
+    terminal_send_resolution,
 };
 use crate::{
     DomainError, HttpRequest, JournalRecord, PendingReason, WalletClientConfig, WalletClientError,
@@ -260,7 +261,7 @@ impl WalletClient {
         for _ in 0..3 {
             let mutation = pending
                 .terminal_mutation(&resolution)
-                .map_err(|error| self.resolution_workflow_error(owner, error))?
+                .map_err(|error| self.resolution_workflow_error(owner, &error))?
                 .ok_or_else(|| {
                     self.resolution_failed_error(owner, "pending resolution was not terminal")
                 })?;
@@ -284,7 +285,7 @@ impl WalletClient {
             })?;
             if let Some(current_resolution) =
                 terminal_send_resolution(&current, &pending.record_id, &pending.source)
-                    .map_err(|error| self.resolution_workflow_error(owner, error))?
+                    .map_err(|error| self.resolution_workflow_error(owner, &error))?
             {
                 return Ok(ResolvedPending {
                     resolution: current_resolution,
@@ -294,7 +295,7 @@ impl WalletClient {
 
             let current_pending =
                 pending_send_record(&current, &pending.record_id, &pending.source)
-                    .map_err(|error| self.resolution_workflow_error(owner, error))?
+                    .map_err(|error| self.resolution_workflow_error(owner, &error))?
                     .ok_or_else(|| {
                         self.resolution_failed_error(
                             owner,
@@ -394,7 +395,7 @@ impl WalletClient {
     fn resolution_workflow_error(
         &self,
         owner: ResolutionOwner,
-        error: crate::wallet::send::SendWorkflowError,
+        error: &SendWorkflowError,
     ) -> WalletClientError {
         match owner {
             ResolutionOwner::Send(generation) => self.send_workflow_error(generation, error),

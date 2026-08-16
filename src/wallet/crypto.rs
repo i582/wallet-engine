@@ -51,7 +51,7 @@ impl Deref for SensitiveWallet {
 
 impl SensitiveMnemonic {
     fn from_generated_words(words: &[&str]) -> Self {
-        let mut bytes = Vec::with_capacity(words.iter().map(|word| word.len()).sum::<usize>() + 23);
+        let mut bytes = Vec::new();
 
         for (index, word) in words.iter().enumerate() {
             if index != 0 {
@@ -123,14 +123,25 @@ pub(crate) fn generate_mnemonic() -> Result<SensitiveMnemonic, WalletCryptoError
         getrandom::fill(entropy.as_mut()).map_err(|_| WalletCryptoError::RandomGeneration)?;
 
         let words = entropy
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|bytes| {
-                let value = u16::from_be_bytes([bytes[0], bytes[1]]);
-                wordlist[usize::from(value & 0x07ff)]
+                let index = usize::from(u16::from_be_bytes(*bytes) & 0x07ff);
+                #[allow(
+                    clippy::indexing_slicing,
+                    reason = "the 11-bit index is always within the validated 2048-word list"
+                )]
+                let word = wordlist[index];
+                word
             })
             .collect::<Vec<_>>();
 
-        debug_assert_eq!(words.len(), MNEMONIC_WORD_COUNT);
+        debug_assert_eq!(
+            words.len(),
+            MNEMONIC_WORD_COUNT,
+            "entropy must produce the configured mnemonic word count"
+        );
 
         let candidate = SensitiveMnemonic::from_generated_words(&words);
         if Mnemonic::new(words, None).is_ok() {

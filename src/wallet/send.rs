@@ -435,7 +435,19 @@ pub(crate) fn terminal_send_resolution(
         })),
         SendStage::Replaced => Ok(Some(SendResolution::Replaced)),
         SendStage::Expired => Ok(Some(SendResolution::Expired)),
-        _ => Ok(None),
+        SendStage::Validating
+        | SendStage::LoadingJournal
+        | SendStage::FetchingFreshAccount
+        | SendStage::Authorizing
+        | SendStage::Preparing
+        | SendStage::PersistingPrepared
+        | SendStage::ReadyToSubmit
+        | SendStage::Submitting
+        | SendStage::SubmissionUnknown
+        | SendStage::Submitted
+        | SendStage::Superseded
+        | SendStage::Failed
+        | SendStage::Cancelled => Ok(None),
     }
 }
 
@@ -468,14 +480,23 @@ pub(crate) fn send_snapshot_from_journal(
             can_force_retry: false,
             retry_after_hint_ms: None,
         }),
-        stage if !stage.permits_replacement() => Some(ResolutionInfo {
+        SendStage::Validating
+        | SendStage::LoadingJournal
+        | SendStage::FetchingFreshAccount
+        | SendStage::Authorizing
+        | SendStage::Preparing
+        | SendStage::PersistingPrepared
+        | SendStage::ReadyToSubmit
+        | SendStage::Submitting
+        | SendStage::SubmissionUnknown
+        | SendStage::Submitted => Some(ResolutionInfo {
             transaction_hash: None,
             transaction_lt: None,
             pending_reason: Some(PendingReason::AwaitingWindow),
             can_force_retry: false,
             retry_after_hint_ms: Some(4_000),
         }),
-        _ => None,
+        SendStage::Failed | SendStage::Cancelled => None,
     };
 
     Ok(SendSnapshot {
@@ -593,7 +614,18 @@ impl SendWorkflow {
                     | SendStage::Superseded
                     | SendStage::Failed
                     | SendStage::Cancelled => Some(record.version),
-                    _ => return Err(SendWorkflowError::PreviousSubmissionUnresolved),
+                    SendStage::Validating
+                    | SendStage::LoadingJournal
+                    | SendStage::FetchingFreshAccount
+                    | SendStage::Authorizing
+                    | SendStage::Preparing
+                    | SendStage::PersistingPrepared
+                    | SendStage::ReadyToSubmit
+                    | SendStage::Submitting
+                    | SendStage::SubmissionUnknown
+                    | SendStage::Submitted => {
+                        return Err(SendWorkflowError::PreviousSubmissionUnresolved);
+                    }
                 }
             }
         };
@@ -664,7 +696,7 @@ impl SendWorkflow {
 
     pub(crate) fn journal_persisted(
         &mut self,
-        result: JournalCompareExchangeResult,
+        result: &JournalCompareExchangeResult,
     ) -> Result<SendDirective, SendWorkflowError> {
         if !result.applied {
             self.fail("Another send operation changed the journal");
@@ -686,7 +718,17 @@ impl SendWorkflow {
             | SendStage::Submitted
             | SendStage::Failed
             | SendStage::Cancelled => Ok(SendDirective::Finished),
-            stage => Err(SendWorkflowError::InvalidTransition {
+            stage @ (SendStage::Validating
+            | SendStage::LoadingJournal
+            | SendStage::FetchingFreshAccount
+            | SendStage::Authorizing
+            | SendStage::Preparing
+            | SendStage::ReadyToSubmit
+            | SendStage::Submitting
+            | SendStage::Confirmed
+            | SendStage::Replaced
+            | SendStage::Expired
+            | SendStage::Superseded) => Err(SendWorkflowError::InvalidTransition {
                 from: stage,
                 event: "journal_persisted",
             }),
@@ -1094,7 +1136,7 @@ mod tests {
         ));
         assert_eq!(prepared.snapshot().phase, SendPhase::Cancelled);
         assert_eq!(
-            prepared.journal_persisted(applied()),
+            prepared.journal_persisted(&applied()),
             Ok(SendDirective::Finished)
         );
     }
@@ -1109,7 +1151,7 @@ mod tests {
             Ok(SendDirective::PersistJournal(_))
         ));
         assert_eq!(
-            workflow.journal_persisted(applied()),
+            workflow.journal_persisted(&applied()),
             Ok(SendDirective::Finished)
         );
         assert_eq!(workflow.snapshot().phase, SendPhase::Submitted);
@@ -1127,7 +1169,7 @@ mod tests {
             })
         ));
         assert!(matches!(
-            workflow.journal_persisted(applied()),
+            workflow.journal_persisted(&applied()),
             Err(SendWorkflowError::InvalidTransition {
                 from: SendStage::Validating,
                 event: "journal_persisted"
@@ -1261,7 +1303,7 @@ mod tests {
             Ok(SendDirective::PersistJournal(_))
         ));
         assert!(matches!(
-            workflow.journal_persisted(applied()),
+            workflow.journal_persisted(&applied()),
             Ok(SendDirective::Submit { .. })
         ));
         workflow

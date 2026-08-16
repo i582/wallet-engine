@@ -91,7 +91,7 @@ impl WalletClient {
     pub(super) fn send_workflow_error(
         &self,
         generation: u64,
-        error: SendWorkflowError,
+        error: &SendWorkflowError,
     ) -> WalletClientError {
         let diagnostic = bounded_diagnostic(error.to_string());
         let public_error = match error {
@@ -100,9 +100,11 @@ impl WalletClient {
                 WalletClientError::PreviousSubmissionUnresolved
             }
             SendWorkflowError::AccountUnavailable { status } => {
-                WalletClientError::SendAccountUnavailable { status }
+                WalletClientError::SendAccountUnavailable { status: *status }
             }
-            _ => WalletClientError::SendFailed {
+            SendWorkflowError::InvalidTransition { .. }
+            | SendWorkflowError::PreparedTransferMismatch
+            | SendWorkflowError::InvalidJournal(_) => WalletClientError::SendFailed {
                 diagnostic: diagnostic.clone(),
             },
         };

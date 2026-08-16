@@ -180,7 +180,9 @@ fn parse_u32(value: &Value, field: &str) -> Result<u32, DomainError> {
         Value::String(value) => value
             .parse::<u32>()
             .map_err(|_| invalid_response(format!("invalid {field}"))),
-        _ => Err(invalid_response(format!("invalid {field}"))),
+        Value::Null | Value::Bool(_) | Value::Array(_) | Value::Object(_) => {
+            Err(invalid_response(format!("invalid {field}")))
+        }
     }
 }
 
@@ -196,7 +198,9 @@ fn parse_u64_string(value: &Value, field: &str) -> Result<UnsignedDecimalString,
             .parse::<u64>()
             .map(UnsignedDecimalString::from)
             .map_err(|_| invalid_response(format!("invalid {field}"))),
-        _ => Err(invalid_response(format!("invalid {field}"))),
+        Value::Null | Value::Bool(_) | Value::Array(_) | Value::Object(_) => {
+            Err(invalid_response(format!("invalid {field}")))
+        }
     }
 }
 

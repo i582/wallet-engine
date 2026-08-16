@@ -134,7 +134,7 @@ pub(super) fn apply_activity_page(state: &mut State, page: ActivityPage) -> u64 
         .collect();
 
     for item in page.items {
-        by_id.insert(item.id.clone(), item);
+        let _ = by_id.insert(item.id.clone(), item);
     }
 
     state.activity = by_id.into_values().collect();
@@ -164,7 +164,7 @@ pub(super) fn apply_refreshed_activity_page(state: &mut State, page: ActivityPag
         .map(|item| (item.id.clone(), item))
         .collect();
     for item in page.items {
-        by_id.insert(item.id.clone(), item);
+        let _ = by_id.insert(item.id.clone(), item);
     }
     state.activity = by_id.into_values().collect();
     state.activity.sort_by(activity_record_order);

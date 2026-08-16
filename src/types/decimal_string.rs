@@ -124,7 +124,12 @@ impl Add<&UnsignedDecimalString> for &UnsignedDecimalString {
     type Output = UnsignedDecimalString;
 
     fn add(self, rhs: &UnsignedDecimalString) -> Self::Output {
-        UnsignedDecimalString(&self.0 + &rhs.0)
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "BigUint addition cannot overflow"
+        )]
+        let sum = &self.0 + &rhs.0;
+        UnsignedDecimalString(sum)
     }
 }
 

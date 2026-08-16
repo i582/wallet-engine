@@ -87,10 +87,20 @@ pub(super) fn parse_emulation(
             .transactions
             .values()
             .try_fold(BigUint::default(), |total, transaction| {
-                parse_nanograms(&transaction.total_fees, "trace transaction fees")
-                    .map(|fees| total + fees)
+                parse_nanograms(&transaction.total_fees, "trace transaction fees").map(|fees| {
+                    #[allow(
+                        clippy::arithmetic_side_effects,
+                        reason = "BigUint addition cannot overflow"
+                    )]
+                    let total = total + fees;
+                    total
+                })
             })?;
 
+    #[allow(
+        clippy::as_conversions,
+        reason = "usize fits into u64 on every supported Rust target"
+    )]
     let transaction_count = response.transactions.len() as u64;
 
     let actions = response

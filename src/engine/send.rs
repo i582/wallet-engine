@@ -125,7 +125,7 @@ impl WalletClient {
             .as_ref()
             .map(|record| pending_send_record(record, &config.record_id, &expected_source))
             .transpose()
-            .map_err(|error| self.send_workflow_error(generation, error))?
+            .map_err(|error| self.send_workflow_error(generation, &error))?
             .flatten();
 
         // Fetch current account status before authorization. A stale cached status can produce
@@ -166,7 +166,7 @@ impl WalletClient {
 
         let directive = workflow
             .journal_loaded(journal_record)
-            .map_err(|error| self.send_workflow_error(generation, error))?;
+            .map_err(|error| self.send_workflow_error(generation, &error))?;
         let SendDirective::FetchFreshAccount = directive else {
             return Err(self.send_failed_error(generation, "invalid send journal transition"));
         };
@@ -212,7 +212,7 @@ impl WalletClient {
 
         let directive = workflow
             .fresh_account_loaded(fresh.clone())
-            .map_err(|error| self.send_workflow_error(generation, error))?;
+            .map_err(|error| self.send_workflow_error(generation, &error))?;
         let SendDirective::ReadProtectedSecret(secret_request) = directive else {
             return Err(self.send_failed_error(generation, "invalid secret-read transition"));
         };
@@ -295,11 +295,11 @@ impl WalletClient {
         self.ensure_current_send(generation)?;
 
         let journal_applied = journal.applied;
-        let directive = workflow.journal_persisted(journal).map_err(|error| {
+        let directive = workflow.journal_persisted(&journal).map_err(|error| {
             if journal_applied {
                 self.submission_unknown_error(generation, error.to_string())
             } else {
-                self.send_workflow_error(generation, error)
+                self.send_workflow_error(generation, &error)
             }
         })?;
 
@@ -348,8 +348,8 @@ impl WalletClient {
             }
         };
         self.ensure_current_send(generation)?;
-        workflow
-            .journal_persisted(journal)
+        let _ = workflow
+            .journal_persisted(&journal)
             .map_err(|error| self.submission_unknown_error(generation, error.to_string()))?;
         let phase = workflow.snapshot().phase;
 

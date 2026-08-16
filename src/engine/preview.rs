@@ -196,7 +196,12 @@ impl WalletClient {
             // Exact sends must leave a positive remainder after the emulated
             // wallet fee. Use `SendAmount::All` when the intent is to drain
             // the wallet with carry-all-balance mode instead.
-            if nanograms + &evaluated.summary.wallet_fees_nanograms >= available {
+            #[allow(
+                clippy::arithmetic_side_effects,
+                reason = "UnsignedDecimalString uses arbitrary-precision BigUint addition"
+            )]
+            let required = nanograms + &evaluated.summary.wallet_fees_nanograms;
+            if required >= available {
                 return Err(self.preview_error(
                     generation,
                     WalletClientError::InsufficientBalanceForFees {

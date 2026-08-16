@@ -24,7 +24,7 @@ pub(super) fn build_seqno_request(
         config,
         id,
         "runGetMethod",
-        serde_json::json!({
+        &serde_json::json!({
             "address": config.address,
             "method": "seqno",
             "stack": []
@@ -37,7 +37,7 @@ pub(super) fn build_send_boc_request(
     id: HttpRequestId,
     boc: &Boc,
 ) -> Result<HttpRequest, WalletClientError> {
-    build_json_rpc_request(config, id, "sendBoc", serde_json::json!({ "boc": boc }))
+    build_json_rpc_request(config, id, "sendBoc", &serde_json::json!({ "boc": boc }))
 }
 
 pub(super) fn parse_seqno(body: &[u8]) -> Result<u32, DomainError> {
@@ -53,8 +53,10 @@ pub(super) fn parse_seqno(body: &[u8]) -> Result<u32, DomainError> {
         .ok_or_else(|| invalid_json("missing seqno stack"))?;
     let encoded = first
         .as_array()
-        .filter(|items| items.len() == 2 && items[0].as_str() == Some("num"))
-        .and_then(|items| items[1].as_str())
+        .and_then(|items| match items.as_slice() {
+            [kind, value] if kind.as_str() == Some("num") => value.as_str(),
+            _ => None,
+        })
         .or_else(|| {
             (first.get("type").and_then(Value::as_str) == Some("num"))
                 .then(|| first.get("value").and_then(Value::as_str))
@@ -100,7 +102,7 @@ fn build_json_rpc_request(
     config: &WalletClientConfig,
     id: HttpRequestId,
     method: &str,
-    params: Value,
+    params: &Value,
 ) -> Result<HttpRequest, WalletClientError> {
     let body = serde_json::to_vec(&serde_json::json!({
         "jsonrpc": "2.0",

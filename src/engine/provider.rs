@@ -254,7 +254,7 @@ pub(crate) fn parse_activity(body: &[u8], page_size: u32) -> Result<ActivityPage
     Ok(ActivityPage {
         items,
         cursor,
-        has_more: raw_count >= page_size as usize,
+        has_more: usize::try_from(page_size).is_ok_and(|page_size| raw_count >= page_size),
     })
 }
 
@@ -440,7 +440,9 @@ fn parse_unsigned_decimal(value: &Value, field: &str) -> Result<BigUint, DomainE
                 .parse()
                 .map_err(|_| invalid_response(format!("{field} is not an unsigned decimal")));
         }
-        _ => return Err(invalid_response(format!("{field} is not a decimal value"))),
+        Value::Null | Value::Bool(_) | Value::Array(_) | Value::Object(_) => {
+            return Err(invalid_response(format!("{field} is not a decimal value")));
+        }
     };
 
     value

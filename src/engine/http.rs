@@ -142,15 +142,16 @@ fn build_provider_url(
         let mut segments = url
             .path_segments_mut()
             .map_err(|_| WalletClientError::InvalidProviderBaseUrl)?;
-        segments.pop_if_empty();
+        let _ = segments.pop_if_empty();
         for segment in path {
-            segments.push(segment);
+            let _ = segments.push(segment);
         }
     }
 
     url.set_query(None);
     if !query.is_empty() {
-        url.query_pairs_mut().extend_pairs(query.iter().copied());
+        let mut query_pairs = url.query_pairs_mut();
+        let _ = query_pairs.extend_pairs(query.iter().copied());
     }
 
     Ok(url.into())
