@@ -18,6 +18,8 @@ access and platform security services.
 
 ## Choose your platform
 
+![Wallet Engine on iOS, web, Android, and C++](readme-platforms.png)
+
 ### Swift
 
 Generate the Swift source and its C module:
