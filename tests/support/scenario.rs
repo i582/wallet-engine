@@ -381,6 +381,14 @@ pub(crate) fn remember_revision(name: impl Into<String>) -> Expectation {
     Expectation::RememberRevision(name.into())
 }
 
+pub(crate) fn remember_snapshot(name: impl Into<String>) -> Expectation {
+    Expectation::RememberSnapshot(name.into())
+}
+
+pub(crate) fn snapshot_is_except_revision(name: impl Into<String>) -> Expectation {
+    Expectation::SnapshotIsExceptRevision(name.into())
+}
+
 pub(crate) fn revision_is(name: impl Into<String>) -> Expectation {
     Expectation::RevisionIs(name.into())
 }
@@ -984,6 +992,8 @@ pub(crate) enum Expectation {
     ActivityIs(Vec<String>),
     RequestWasCancelled(String),
     RememberRevision(String),
+    RememberSnapshot(String),
+    SnapshotIsExceptRevision(String),
     RevisionIs(String),
     ReturnedSnapshotRevisionIs {
         operation: String,
@@ -1271,6 +1281,7 @@ struct ScenarioRunner {
     activity_cursors: HashMap<String, ActivityCursor>,
     named_activity: HashMap<String, HashSet<String>>,
     named_revisions: HashMap<String, u64>,
+    named_snapshots: HashMap<String, wallet_engine::WalletSnapshot>,
 }
 
 #[derive(Debug)]
@@ -1450,6 +1461,7 @@ impl ScenarioRunner {
             activity_cursors: HashMap::new(),
             named_activity: HashMap::new(),
             named_revisions: HashMap::new(),
+            named_snapshots: HashMap::new(),
         })
     }
 
@@ -2098,6 +2110,26 @@ impl ScenarioRunner {
                     .revision;
                 self.named_revisions.insert(name, revision);
                 Ok(())
+            }
+            Expectation::RememberSnapshot(name) => {
+                let snapshot = self.client.snapshot().map_err(|error| error.to_string())?;
+                self.named_snapshots.insert(name, snapshot);
+                Ok(())
+            }
+            Expectation::SnapshotIsExceptRevision(name) => {
+                let expected = self
+                    .named_snapshots
+                    .get(&name)
+                    .ok_or_else(|| format!("snapshot `{name}` was not remembered"))?;
+                let mut actual = self.client.snapshot().map_err(|error| error.to_string())?;
+                actual.revision = expected.revision;
+                if &actual == expected {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "expected snapshot `{name}` to remain unchanged except for revision\nexpected: {expected:#?}\nactual: {actual:#?}"
+                    ))
+                }
             }
             Expectation::RevisionIs(name) => {
                 let expected = self

@@ -6,15 +6,15 @@ use super::support::*;
 
 #[derive(Clone, Copy, Debug)]
 struct RefreshScheduleStep {
-    account_completes_first: bool,
+    release_account_first: bool,
     one_response_completes_before_cancel: bool,
 }
 
 fn refresh_schedule() -> impl Strategy<Value = Vec<RefreshScheduleStep>> {
     prop::collection::vec(
         (any::<bool>(), any::<bool>()).prop_map(
-            |(account_completes_first, one_response_completes_before_cancel)| RefreshScheduleStep {
-                account_completes_first,
+            |(release_account_first, one_response_completes_before_cancel)| RefreshScheduleStep {
+                release_account_first,
                 one_response_completes_before_cancel,
             },
         ),
@@ -33,10 +33,21 @@ proptest! {
 
     #[test]
     #[ignore = "run explicitly with `just proptest-rust`"]
-    fn cancelled_refreshes_ignore_generated_late_response_schedules(
+    fn cancelled_refreshes_restore_stable_snapshot_across_generated_schedules(
         schedule in refresh_schedule(),
     ) {
-        let mut test = scenario("cancelled refresh ignores generated late response schedules");
+        let mut test = scenario("cancelled refresh restores stable data across late schedules")
+            .given(wallet().active().balance(grams(10)).seqno(7))
+            .given(activity_pages(&[3, 3]))
+            .when(call("baseline", refresh_wallet()))
+            .then(update("baseline").completed())
+            .then(
+                snapshot()
+                    .account_phase(ResourcePhase::Ready)
+                    .activity_count(3)
+                    .activity_phase(ResourcePhase::Ready),
+            )
+            .then(remember_snapshot("stable"));
 
         for (index, step) in schedule.into_iter().enumerate() {
             let refresh = format!("refresh-{index}");
@@ -44,7 +55,7 @@ proptest! {
             let account = format!("account-{index}");
             let activity = format!("activity-{index}");
             let after_cancel = format!("after-cancel-{index}");
-            let (first, second) = if step.account_completes_first {
+            let (first, second) = if step.release_account_first {
                 (&account, &activity)
             } else {
                 (&activity, &account)
@@ -67,12 +78,7 @@ proptest! {
                 .then(request_was_cancelled(account.clone()))
                 .then(request_was_cancelled(activity.clone()))
                 .then(remember_revision(after_cancel.clone()))
-                .then(
-                    snapshot()
-                        .account_phase(ResourcePhase::Idle)
-                        .activity_count(0)
-                        .activity_phase(ResourcePhase::Idle),
-                );
+                .then(snapshot_is_except_revision("stable"));
 
             if !step.one_response_completes_before_cancel {
                 test = test.when(release_request(first));
@@ -82,12 +88,7 @@ proptest! {
                 .when(release_request(second))
                 .then(update(refresh).superseded())
                 .then(revision_is(after_cancel))
-                .then(
-                    snapshot()
-                        .account_phase(ResourcePhase::Idle)
-                        .activity_count(0)
-                        .activity_phase(ResourcePhase::Idle),
-                );
+                .then(snapshot_is_except_revision("stable"));
         }
 
         test.when(call("retry", refresh_wallet()))
