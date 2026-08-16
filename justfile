@@ -167,6 +167,8 @@ example-c-build: bindings-c build-c
 example-c-run: example-c-build
     ./target/c-example/wallet_engine_c_example
 
+c-check: test-c-abi-rust test-c example-c-build
+
 example-tui-run:
     cargo run --locked --manifest-path examples/tui/Cargo.toml
 
@@ -207,6 +209,10 @@ example-android-check: bindings-kotlin build-android
 
 example-android-install: example-android-build
     examples/android/gradlew -p examples/android :app:installDebug --no-configuration-cache
+
+kotlin-check: example-android-check
+
+bindings-check: c-check kotlin-check swift-check web-check
 
 check-deny:
     cargo deny check
