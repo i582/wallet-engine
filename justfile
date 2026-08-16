@@ -53,11 +53,15 @@ test-rust:
 test-c-abi-rust:
     cargo nextest run --locked --manifest-path c-bindings/Cargo.toml {{ NEXTEST_CONFIG_ARGS }} {{ NEXTEST_PROFILE_ARGS }}
 
-miri: miri-c-bindings
+miri: miri-rust miri-c-bindings
 
 miri-setup:
     rustup toolchain install {{ MIRI_TOOLCHAIN }} --profile minimal --component miri --component rust-src
     cargo +{{ MIRI_TOOLCHAIN }} miri setup
+
+# Tree Borrows avoids Miri failures in `bitvec` and `wyz`, used by `ton_core`.
+miri-rust:
+    env MIRIFLAGS=-Zmiri-tree-borrows rustup run {{ MIRI_TOOLCHAIN }} cargo miri nextest run --locked --lib {{ NEXTEST_CONFIG_ARGS }} {{ NEXTEST_PROFILE_ARGS }}
 
 miri-c-bindings:
     rustup run {{ MIRI_TOOLCHAIN }} cargo miri nextest run --locked --manifest-path c-bindings/Cargo.toml {{ NEXTEST_CONFIG_ARGS }} {{ NEXTEST_PROFILE_ARGS }}
