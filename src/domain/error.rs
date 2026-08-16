@@ -242,7 +242,7 @@ pub enum WalletClientError {
         /// A bounded developer-facing explanation that contains no secret material.
         diagnostic: String,
     },
-    /// Toncenter could not emulate the signed transfer before submission.
+    /// Toncenter could not execute or decode the fake-signed preview emulation.
     #[error("transfer emulation failed: {diagnostic}")]
     EmulationFailed {
         /// A bounded provider or transport diagnostic that contains no secret material.
