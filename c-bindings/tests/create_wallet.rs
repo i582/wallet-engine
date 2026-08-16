@@ -386,6 +386,10 @@ fn create_wallet_rejects_invalid_boundary_arguments_before_starting() {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "the process-global Tokio runtime keeps worker threads alive under Miri"
+)]
 fn invalid_record_id_is_reported_as_a_domain_error() {
     let (sender, receiver) = channel();
     let context = TestContext::new(sender);
@@ -480,16 +484,28 @@ fn run_success_case(store: WalletEngineStoreProtectedSecretFn, network: WalletEn
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "wallet generation and key derivation are prohibitively slow under Miri"
+)]
 fn created_wallet_is_delivered_after_synchronous_host_completion() {
     run_success_case(Some(store_success), WALLET_ENGINE_NETWORK_MAINNET);
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "wallet generation and key derivation are prohibitively slow under Miri"
+)]
 fn created_wallet_is_delivered_after_asynchronous_host_completion() {
     run_success_case(Some(store_async_success), WALLET_ENGINE_NETWORK_TESTNET);
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "wallet generation and key derivation are prohibitively slow under Miri"
+)]
 fn protected_storage_failure_is_reported_as_a_domain_error() {
     for host_error_kind in [
         WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_NOT_FOUND,

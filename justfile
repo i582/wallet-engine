@@ -1,5 +1,6 @@
 NEXTEST_PROFILE_ARGS := if env_var_or_default("CI", "") != "" { "-P ci" } else { "" }
 NEXTEST_CONFIG_ARGS := "--config-file .config/nextest.toml"
+MIRI_TOOLCHAIN := env_var_or_default("MIRI_TOOLCHAIN", "nightly")
 
 all: check
 
@@ -51,6 +52,15 @@ test-rust:
 
 test-c-abi-rust:
     cargo nextest run --locked --manifest-path c-bindings/Cargo.toml {{ NEXTEST_CONFIG_ARGS }} {{ NEXTEST_PROFILE_ARGS }}
+
+miri: miri-c-bindings
+
+miri-setup:
+    rustup toolchain install {{ MIRI_TOOLCHAIN }} --profile minimal --component miri --component rust-src
+    cargo +{{ MIRI_TOOLCHAIN }} miri setup
+
+miri-c-bindings:
+    rustup run {{ MIRI_TOOLCHAIN }} cargo miri nextest run --locked --manifest-path c-bindings/Cargo.toml {{ NEXTEST_CONFIG_ARGS }} {{ NEXTEST_PROFILE_ARGS }}
 
 test: test-c test-cpp test-rust test-c-abi-rust
 
