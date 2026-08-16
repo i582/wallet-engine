@@ -6,13 +6,13 @@ use std::{
     sync::Arc,
 };
 
-use futures::executor::block_on;
+use futures::FutureExt;
 use wallet_engine::WalletLifecycle as CoreWalletLifecycle;
 
 use crate::{
     WalletEngineAbiStatus, WalletEngineCreateWalletRequest, WalletEngineCreatedWalletView,
     WalletEnginePlatformHostAdapter, WalletEnginePlatformHostCallbacks,
-    WalletEngineWalletLifecycleErrorView, with_created_wallet_view,
+    WalletEngineWalletLifecycleErrorView, runtime::runtime, with_created_wallet_view,
 };
 
 /// Receives the result of an asynchronous wallet-creation operation.
@@ -139,7 +139,7 @@ pub unsafe extern "C" fn wallet_engine_lifecycle_free(lifecycle: *mut WalletEngi
     })));
 }
 
-/// Starts creation of a wallet on a worker thread.
+/// Starts creation of a wallet on the shared asynchronous runtime.
 ///
 /// Returns an ABI status describing argument validation and task startup. An
 /// `OK` return guarantees that `completion` will be called exactly once. Domain
@@ -198,10 +198,14 @@ unsafe fn lifecycle_create_wallet(
         callback: completion,
     };
 
-    drop(std::thread::spawn(move || {
-        let outcome = catch_unwind(AssertUnwindSafe(|| {
-            run_create_wallet(lifecycle, request, completion);
-        }));
+    let runtime = match runtime() {
+        Ok(runtime) => runtime,
+        Err(status) => return status,
+    };
+    drop(runtime.spawn(async move {
+        let outcome = AssertUnwindSafe(run_create_wallet(lifecycle, request, completion))
+            .catch_unwind()
+            .await;
         if outcome.is_err() {
             // SAFETY: Null result pointers represent a caught boundary panic
             // and are valid for this callback invocation.
@@ -218,12 +222,12 @@ unsafe fn lifecycle_create_wallet(
     WalletEngineAbiStatus::Ok
 }
 
-fn run_create_wallet(
+async fn run_create_wallet(
     lifecycle: Arc<CoreWalletLifecycle>,
     request: wallet_engine::CreateWalletRequest,
     completion: CreateWalletCompletion,
 ) {
-    match block_on(lifecycle.create_wallet(request)) {
+    match lifecycle.create_wallet(request).await {
         Ok(wallet) => with_created_wallet_view(&wallet, |view| {
             // SAFETY: `view` and all nested views remain live for this callback
             // invocation.

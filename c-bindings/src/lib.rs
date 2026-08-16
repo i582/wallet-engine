@@ -12,6 +12,7 @@ mod abi;
 mod host;
 #[allow(unsafe_code)]
 mod lifecycle;
+mod runtime;
 mod types;
 
 pub use abi::{
