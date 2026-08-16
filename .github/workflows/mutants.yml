@@ -19,7 +19,7 @@ env:
 jobs:
   mutants:
     name: Mutants shard ${{ matrix.shard }}/4
-    runs-on: ubicloud-standard-8-ubuntu-2204
+    runs-on: ubicloud-standard-8-ubuntu-2404
     timeout-minutes: 180
 
     permissions:
