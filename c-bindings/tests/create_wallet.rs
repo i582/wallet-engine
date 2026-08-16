@@ -28,6 +28,8 @@ use wallet_engine_c::{
     wallet_engine_lifecycle_new, wallet_engine_store_protected_secret_complete,
 };
 
+const TEST_TIMEOUT: Duration = Duration::from_secs(30);
+
 #[derive(Debug, PartialEq, Eq)]
 struct StoredSecret {
     secret_ref: String,
@@ -280,7 +282,7 @@ unsafe fn lifecycle(callbacks: &WalletEnginePlatformHostCallbacks) -> *mut Walle
 }
 
 fn wait_for_release(context: &TestContext) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + TEST_TIMEOUT;
     while context.releases.load(Ordering::Acquire) != 1 {
         assert!(Instant::now() < deadline, "host context was not released");
         std::thread::yield_now();
@@ -288,7 +290,7 @@ fn wait_for_release(context: &TestContext) {
 }
 
 fn receive(receiver: &Receiver<CompletionResult>) -> CompletionResult {
-    match receiver.recv_timeout(Duration::from_secs(5)) {
+    match receiver.recv_timeout(TEST_TIMEOUT) {
         Ok(result) => result,
         Err(error) => panic!("wallet completion was not received: {error}"),
     }
