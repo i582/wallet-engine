@@ -224,20 +224,3 @@ and non-empty validation stays in the Rust custom-type lift implementation.
 Async Rust methods remain asynchronous. The C facade will drive UniFFI
 `poll`/`complete`/`free`; it will not use `block_on` or turn an async operation
 into a blocking C call.
-
-## Implementation order
-
-The generated header and facade stay compilable after every slice:
-
-1. Builtin integer, boolean, string, and byte representations — implemented.
-2. Primitive/bool wire codecs and string/bytes lower/lift — implemented.
-3. Flat non-error enums — implemented.
-4. Options over implemented builtins and flat enums — implemented.
-5. Sequences.
-6. Records and nested combinations.
-7. Error and payload enums.
-8. Object handles and synchronous methods.
-9. Async methods and operation runtime.
-10. Foreign callback interfaces.
-11. Packaging and export hygiene.
-12. C++ compatibility, only after the C ABI is complete and stable.

@@ -1,11 +1,8 @@
 use std::fmt::Write as _;
 
 use crate::{
-    enum_map::FlatEnum,
-    model::BindingsModel,
-    optional_map::{OptionalType, OptionalWireSize},
-    template,
-    type_map::BuiltinType,
+    enum_map::FlatEnum, model::BindingsModel, optional_map::OptionalType, template,
+    type_map::BuiltinType, type_registry::NestedWireSize,
 };
 
 const BASE: &str = include_str!("../../templates/codecs/base.c.tmpl");
@@ -123,10 +120,10 @@ fn render_flat_enum(enum_: &FlatEnum) -> String {
 
 fn render_optional(optional: &OptionalType) -> String {
     let some_wire_size = match optional.inner_wire_size() {
-        OptionalWireSize::Fixed(inner_size) => {
+        NestedWireSize::Fixed(inner_size) => {
             format!("        wire_size = {}u;\n", inner_size + 1)
         }
-        OptionalWireSize::LengthPrefixedView => String::from(
+        NestedWireSize::LengthPrefixedView => String::from(
             r"        if ((value.value.len != 0u && value.value.data == NULL)
             || value.value.len > (size_t)INT32_MAX
             || value.value.len > SIZE_MAX - 5u) {

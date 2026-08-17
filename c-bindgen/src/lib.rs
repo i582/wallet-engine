@@ -9,6 +9,7 @@ mod optional_map;
 mod render;
 mod template;
 mod type_map;
+mod type_registry;
 
 use anyhow::Result;
 

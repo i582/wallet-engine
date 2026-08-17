@@ -3,9 +3,10 @@ use serde::Serialize;
 use uniffi_bindgen::ComponentInterface;
 
 use crate::{
-    enum_map::{FlatEnum, collect_flat_enums},
+    enum_map::FlatEnum,
     optional_map::{OptionalType, collect_optional_types},
-    type_map::{BuiltinType, collect_builtin_types},
+    type_map::BuiltinType,
+    type_registry::TypeRegistry,
 };
 
 pub(super) const MANIFEST_SCHEMA_VERSION: u32 = 5;
@@ -17,8 +18,7 @@ const EXPECTED_NAMESPACE: &str = "wallet_engine";
 pub(super) struct BindingsModel {
     abi_version: u32,
     uniffi_contract_version: u32,
-    builtin_types: Vec<BuiltinType>,
-    flat_enums: Vec<FlatEnum>,
+    type_registry: TypeRegistry,
     optional_types: Vec<OptionalType>,
     private_ffi: PrivateFfi,
     manifest: Manifest,
@@ -117,11 +117,14 @@ impl BindingsModel {
             );
         }
 
-        let builtin_types = collect_builtin_types(component);
-        let flat_enums = collect_flat_enums(component)?;
-        let optional_types = collect_optional_types(component, &flat_enums)?;
-        let manifest =
-            Manifest::from_components(components, &builtin_types, &flat_enums, &optional_types);
+        let type_registry = TypeRegistry::collect(component)?;
+        let optional_types = collect_optional_types(component, &type_registry)?;
+        let manifest = Manifest::from_components(
+            components,
+            type_registry.builtin_types(),
+            type_registry.flat_enums(),
+            &optional_types,
+        );
         let private_ffi = PrivateFfi {
             rustbuffer_alloc: component.ffi_rustbuffer_alloc().name().to_owned(),
             rustbuffer_free: component.ffi_rustbuffer_free().name().to_owned(),
@@ -130,8 +133,7 @@ impl BindingsModel {
         Ok(Self {
             abi_version: EXPERIMENTAL_ABI_VERSION,
             uniffi_contract_version: component.uniffi_contract_version(),
-            builtin_types,
-            flat_enums,
+            type_registry,
             optional_types,
             private_ffi,
             manifest,
@@ -147,7 +149,7 @@ impl BindingsModel {
     }
 
     pub(super) fn has_builtin_type(&self, builtin: BuiltinType) -> bool {
-        self.builtin_types.contains(&builtin)
+        self.type_registry.has_builtin_type(builtin)
     }
 
     /// `Option<T>` uses the private `u8` codec for its `UniFFI` 0/1 presence tag,
@@ -158,14 +160,12 @@ impl BindingsModel {
             || self.has_optional_types()
     }
 
-    pub(super) const fn has_wire_types(&self) -> bool {
-        !self.builtin_types.is_empty()
-            || !self.flat_enums.is_empty()
-            || !self.optional_types.is_empty()
+    pub(super) fn has_wire_types(&self) -> bool {
+        !self.type_registry.is_empty() || !self.optional_types.is_empty()
     }
 
     pub(super) const fn has_flat_enums(&self) -> bool {
-        !self.flat_enums.is_empty()
+        self.type_registry.has_flat_enums()
     }
 
     pub(super) fn needs_rustbuffer_runtime(&self) -> bool {
@@ -176,7 +176,7 @@ impl BindingsModel {
     }
 
     pub(super) fn flat_enums(&self) -> &[FlatEnum] {
-        &self.flat_enums
+        self.type_registry.flat_enums()
     }
 
     pub(super) const fn has_optional_types(&self) -> bool {
