@@ -53,6 +53,7 @@ clippy:
 
 test-rust:
     cargo nextest run --locked {{ NEXTEST_PROFILE_ARGS }}
+    cargo nextest run --locked --manifest-path c-bindgen/Cargo.toml {{ NEXTEST_CONFIG_ARGS }} {{ NEXTEST_PROFILE_ARGS }}
     cargo nextest run --locked --manifest-path xtask/Cargo.toml {{ NEXTEST_CONFIG_ARGS }} {{ NEXTEST_PROFILE_ARGS }}
     cargo test --locked --doc
 

@@ -2,7 +2,9 @@ use anyhow::{Result, bail};
 use serde::Serialize;
 use uniffi_bindgen::ComponentInterface;
 
-pub(super) const MANIFEST_SCHEMA_VERSION: u32 = 2;
+use crate::type_map::{BuiltinType, collect_builtin_types};
+
+pub(super) const MANIFEST_SCHEMA_VERSION: u32 = 3;
 const EXPERIMENTAL_ABI_VERSION: u32 = 0;
 const EXPECTED_CRATE_NAME: &str = "wallet_engine";
 const EXPECTED_NAMESPACE: &str = "wallet_engine";
@@ -11,6 +13,7 @@ const EXPECTED_NAMESPACE: &str = "wallet_engine";
 pub(super) struct BindingsModel {
     abi_version: u32,
     uniffi_contract_version: u32,
+    builtin_types: Vec<BuiltinType>,
     manifest: Manifest,
 }
 
@@ -25,8 +28,15 @@ pub(super) struct Manifest {
 struct GenerationManifest {
     phase: &'static str,
     artifacts: [&'static str; 3],
+    rendered_builtin_types: Vec<BuiltinTypeManifest>,
     rendered_semantic_operation_count: usize,
     pending_semantic_operation_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct BuiltinTypeManifest {
+    rust: &'static str,
+    c: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -65,10 +75,14 @@ impl BindingsModel {
             );
         }
 
+        let builtin_types = collect_builtin_types(component);
+        let manifest = Manifest::from_components(components, &builtin_types);
+
         Ok(Self {
             abi_version: EXPERIMENTAL_ABI_VERSION,
             uniffi_contract_version: component.uniffi_contract_version(),
-            manifest: Manifest::from_components(components),
+            builtin_types,
+            manifest,
         })
     }
 
@@ -80,13 +94,17 @@ impl BindingsModel {
         self.uniffi_contract_version
     }
 
+    pub(super) fn has_builtin_type(&self, builtin: BuiltinType) -> bool {
+        self.builtin_types.contains(&builtin)
+    }
+
     pub(super) const fn manifest(&self) -> &Manifest {
         &self.manifest
     }
 }
 
 impl Manifest {
-    fn from_components(components: &[ComponentInterface]) -> Self {
+    fn from_components(components: &[ComponentInterface], builtin_types: &[BuiltinType]) -> Self {
         let component_manifests = components
             .iter()
             .map(ComponentManifest::from_component)
@@ -99,16 +117,30 @@ impl Manifest {
         Self {
             schema_version: MANIFEST_SCHEMA_VERSION,
             generation: GenerationManifest {
-                phase: "skeleton",
+                phase: "builtin_types",
                 artifacts: [
                     "wallet_engine.h",
                     "wallet_engine.c",
                     "wallet_engine.c-api.json",
                 ],
+                rendered_builtin_types: builtin_types
+                    .iter()
+                    .copied()
+                    .map(BuiltinTypeManifest::from)
+                    .collect(),
                 rendered_semantic_operation_count: 0,
                 pending_semantic_operation_count,
             },
             components: component_manifests,
+        }
+    }
+}
+
+impl From<BuiltinType> for BuiltinTypeManifest {
+    fn from(value: BuiltinType) -> Self {
+        Self {
+            rust: value.rust_name(),
+            c: value.c_name(),
         }
     }
 }
@@ -187,6 +219,7 @@ mod tests {
 
         assert_eq!(manifest.schema_version, MANIFEST_SCHEMA_VERSION);
         assert_eq!(manifest.generation.rendered_semantic_operation_count, 0);
+        assert!(manifest.generation.rendered_builtin_types.is_empty());
         assert_eq!(manifest.components.len(), 1);
         assert_eq!(manifest.components[0].crate_name, "wallet_engine");
         Ok(())

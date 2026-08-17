@@ -4,6 +4,7 @@ mod cli;
 mod loader;
 mod model;
 mod render;
+mod type_map;
 
 use anyhow::Result;
 
