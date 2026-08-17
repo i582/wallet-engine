@@ -17,6 +17,7 @@ mod session;
 mod session_state;
 mod signing;
 mod value;
+mod wallet_state;
 
 pub use bridge::BridgeMessage;
 pub use connect::{
@@ -54,6 +55,10 @@ pub use signing::{
 pub use value::{
     Base64Value, ClientId, DecimalString, HttpsUrl, NetworkId, NonEmptyVec, TraceId, Uint64String,
     ValueError,
+};
+pub use wallet_state::{
+    AccountVerificationError, StandardWalletState, StandardWalletVersion, WalletStateError,
+    WalletStateInit,
 };
 
 /// TON Connect transport protocol version implemented by this crate.

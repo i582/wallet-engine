@@ -4,9 +4,10 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use serde_json::Value;
 
 use crate::{
-    Base64Value, Ed25519PublicKey, Ed25519Signature, HttpsUrl, NetworkId, NonEmptyVec,
-    RawAccountAddress, SignatureDomain, SigningError, Uint64String, WalletResponse,
-    rpc::numeric_enum_serde, ton_proof_signing_hash, verify_signature,
+    AccountVerificationError, Ed25519PublicKey, Ed25519Signature, HttpsUrl, NetworkId, NonEmptyVec,
+    RawAccountAddress, SignatureDomain, SigningError, StandardWalletState, Uint64String,
+    WalletResponse, WalletStateError, WalletStateInit, rpc::numeric_enum_serde,
+    ton_proof_signing_hash, verify_signature,
 };
 
 /// Request for the connected wallet address and optional target network hint.
@@ -280,9 +281,9 @@ pub struct TonAddressItemReply {
     pub address: RawAccountAddress,
     /// Connected network global ID.
     pub network: NetworkId,
-    /// Base64 wallet `StateInit` `BoC`.
+    /// Canonical standard-base64 wallet `StateInit` `BoC`.
     #[serde(rename = "walletStateInit")]
-    pub wallet_state_init: Base64Value,
+    pub wallet_state_init: WalletStateInit,
     /// Untrusted wallet public key as hex without `0x`.
     #[serde(rename = "publicKey")]
     pub public_key: Ed25519PublicKey,
@@ -300,7 +301,7 @@ impl TonAddressItemReply {
     pub fn new(
         address: RawAccountAddress,
         network: NetworkId,
-        wallet_state_init: Base64Value,
+        wallet_state_init: WalletStateInit,
         public_key: Ed25519PublicKey,
     ) -> Self {
         Self {
@@ -310,6 +311,13 @@ impl TonAddressItemReply {
             wallet_state_init,
             public_key,
         }
+    }
+
+    /// Verifies that `walletStateInit` derives this address and stores the
+    /// advertised key under a recognized standard wallet data layout.
+    pub fn verify_standard_wallet(&self) -> Result<StandardWalletState, WalletStateError> {
+        self.wallet_state_init
+            .verify_standard_wallet(&self.address, &self.public_key)
     }
 }
 
@@ -411,6 +419,17 @@ impl TonProof {
             public_key,
             SignatureDomain::for_network(network)?,
         )
+    }
+
+    /// Verifies this proof using the address-bound key from a standard wallet
+    /// `StateInit`, never trusting the advertised key by itself.
+    pub fn verify_with_account(
+        &self,
+        account: &TonAddressItemReply,
+    ) -> Result<bool, AccountVerificationError> {
+        let wallet = account.verify_standard_wallet()?;
+        self.verify(&account.address, wallet.public_key(), &account.network)
+            .map_err(Into::into)
     }
 }
 

@@ -5,9 +5,9 @@ use serde_json::{Map, Value};
 use thiserror::Error;
 
 use crate::{
-    Base64Value, DecimalString, Ed25519PublicKey, Ed25519Signature, NetworkId, NonEmptyVec,
-    RawAccountAddress, SignDataSigningPayload, SignatureDomain, SigningError,
-    sign_data_signing_hash, verify_signature,
+    AccountVerificationError, Base64Value, DecimalString, Ed25519PublicKey, Ed25519Signature,
+    NetworkId, NonEmptyVec, RawAccountAddress, SignDataSigningPayload, SignatureDomain,
+    SigningError, TonAddressItemReply, sign_data_signing_hash, verify_signature,
 };
 
 /// Extra-currency identifier to non-negative elementary-unit amount.
@@ -553,6 +553,19 @@ impl SignDataResult {
             public_key,
             SignatureDomain::Empty,
         )
+    }
+
+    /// Verifies this result with the address-bound key from the connected
+    /// standard wallet rather than trusting a wallet-advertised key.
+    pub fn verify_with_account(
+        &self,
+        account: &TonAddressItemReply,
+    ) -> Result<bool, AccountVerificationError> {
+        if self.address != account.address {
+            return Err(AccountVerificationError::ResponseAddressMismatch);
+        }
+        let wallet = account.verify_standard_wallet()?;
+        self.verify(wallet.public_key()).map_err(Into::into)
     }
 }
 
