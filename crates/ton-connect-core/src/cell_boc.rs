@@ -218,8 +218,8 @@ fn validate_cells(
         if descriptor & 0x10 != 0 {
             let hash_count = usize::try_from((descriptor >> 5).count_ones())
                 .ok()
-                .and_then(|count| count.checked_add(1))
                 .ok_or(CellBocError::InvalidBoc)?;
+            let hash_count = hash_count.checked_add(1).ok_or(CellBocError::InvalidBoc)?;
             let hash_bytes = hash_count.checked_mul(34).ok_or(CellBocError::InvalidBoc)?;
             let _ = reader.take(hash_bytes).ok_or(CellBocError::InvalidBoc)?;
         }
@@ -309,6 +309,9 @@ mod tests {
         let valid = STANDARD.encode(TonCell::EMPTY_BOC);
         let parsed = serde_json::from_str::<CellBoc>(&serde_json::to_string(&valid)?)?;
         assert_eq!(parsed.as_bytes(), TonCell::EMPTY_BOC);
+        let debug = format!("{parsed:?}");
+        assert!(debug.contains("bytes: 13"));
+        assert!(!debug.contains(&valid));
 
         let invalid = STANDARD.encode([0_u8; 4]);
         assert!(serde_json::from_str::<CellBoc>(&serde_json::to_string(&invalid)?).is_err());

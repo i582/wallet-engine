@@ -267,4 +267,47 @@ mod tests {
         ));
         Ok(())
     }
+
+    #[test]
+    fn failed_session_updates_do_not_corrupt_the_persisted_snapshot()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let local = SessionCrypto::generate()?;
+        let peer = SessionCrypto::generate()?;
+        let bridge = HttpBridgeUrl::try_from("https://bridge.example/bridge")?;
+        let mut persisted = PersistedHttpSession::new(
+            &local,
+            peer.client_id(),
+            bridge,
+            WalletSessionState::pending_connect(),
+            None,
+            Some("7".to_owned()),
+        )?;
+
+        assert_eq!(
+            persisted.set_last_bridge_event_id(Some("bad\nvalue".to_owned())),
+            Err(HttpSessionError::InvalidEventId)
+        );
+        assert_eq!(persisted.last_bridge_event_id(), Some("7"));
+        persisted.set_last_bridge_event_id(Some("8".to_owned()))?;
+        assert_eq!(persisted.last_bridge_event_id(), Some("8"));
+
+        let connected = WalletSessionState::pending_connect()
+            .prepare_event(WalletEventKind::Connect)?
+            .into_state();
+        assert_eq!(
+            persisted.set_reducer(connected.clone(), None),
+            Err(HttpSessionError::InvalidAccountBinding)
+        );
+        assert_eq!(
+            persisted.reducer().phase(),
+            WalletSessionPhase::PendingConnect
+        );
+        assert_eq!(persisted.connected_address(), None);
+
+        let address = RawAccountAddress::new(0, [3_u8; 32]);
+        persisted.set_reducer(connected, Some(address))?;
+        assert_eq!(persisted.reducer().phase(), WalletSessionPhase::Connected);
+        assert_eq!(persisted.connected_address(), Some(address));
+        Ok(())
+    }
 }

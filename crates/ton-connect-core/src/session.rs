@@ -273,8 +273,12 @@ mod tests {
         assert_ne!(first.client_id(), second.client_id());
 
         let persisted = first.persisted_keypair();
+        assert_eq!(persisted.client_id(), first.client_id());
         let restored = SessionCrypto::from_persisted(&persisted)?;
         assert_eq!(restored.client_id(), first.client_id());
+        let debug = format!("{restored:?}");
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains(&hex::encode(persisted.secret_key.0)));
 
         let plaintext = b"some protocol message: { method_params: [1, 2, null] }";
         let encrypted = first.encrypt(second.client_id(), plaintext)?;
@@ -347,15 +351,12 @@ mod tests {
         if let Some(public_key) = serialized.get_mut("publicKey") {
             *public_key = serde_json::Value::String("00".repeat(32));
         }
-        let restored = serde_json::from_value::<PersistedSessionKeyPair>(serialized)
-            .map_err(|error| error.to_string())
-            .and_then(|pair| {
-                SessionCrypto::from_persisted(&pair).map_err(|error| error.to_string())
-            });
-        assert_eq!(
-            restored.err(),
-            Some(SessionKeyPairError::PublicKeyMismatch.to_string())
-        );
+        let pair = serde_json::from_value::<PersistedSessionKeyPair>(serialized)
+            .expect("valid persisted key-pair shape");
+        assert!(matches!(
+            SessionCrypto::from_persisted(&pair),
+            Err(SessionKeyPairError::PublicKeyMismatch)
+        ));
     }
 
     proptest! {

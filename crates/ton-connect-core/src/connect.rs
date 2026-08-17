@@ -690,8 +690,9 @@ impl<'de> Deserialize<'de> for TonProofDomain {
         D: Deserializer<'de>,
     {
         let raw = RawTonProofDomain::deserialize(deserializer)?;
-        let actual = u32::try_from(raw.value.len())
-            .map_err(|_| de::Error::custom("ton_proof domain exceeds uint32 length"))?;
+        let Ok(actual) = u32::try_from(raw.value.len()) else {
+            return Err(de::Error::custom("ton_proof domain exceeds uint32 length"));
+        };
         if actual != raw.length_bytes {
             return Err(de::Error::custom(
                 "ton_proof domain lengthBytes does not match UTF-8 byte length",
@@ -1119,9 +1120,71 @@ pub enum ConnectValidationError {
 
 #[cfg(test)]
 mod tests {
+    use base64::Engine as _;
     use ed25519_dalek::{Signer as _, SigningKey};
+    use ton_core::{cell::TonCell, traits::tlb::TLB as _};
 
     use super::*;
+    use crate::{EmbeddedResponseSuccess, ValueError};
+
+    fn connect_account(network: &str) -> Result<TonAddressItemReply, Box<dyn std::error::Error>> {
+        let mut state = TonCell::builder();
+        state.write_bit(false)?;
+        state.write_bit(false)?;
+        state.write_bit(true)?;
+        state.write_ref(TonCell::empty().to_owned())?;
+        state.write_bit(true)?;
+        state.write_ref(TonCell::empty().to_owned())?;
+        state.write_bit(false)?;
+        let state = WalletStateInit::from_boc(state.build()?.to_boc()?)?;
+        let address = state.derive_address(0)?;
+        Ok(TonAddressItemReply::new(
+            address,
+            NetworkId::try_from(network)?,
+            state,
+            Ed25519PublicKey::from_bytes([0_u8; 32]),
+        ))
+    }
+
+    fn device(embedded: bool) -> Result<DeviceInfo, DeviceInfoValidationError> {
+        let mut features = vec![Feature::SendTransaction(SendTransactionFeature {
+            max_messages: 1,
+            extra_currency_supported: Some(false),
+            item_types: None,
+        })];
+        if embedded {
+            features.push(Feature::EmbeddedRequest);
+        }
+        DeviceInfo::new(
+            DevicePlatform::Browser,
+            "wallet".to_owned(),
+            "1".to_owned(),
+            2,
+            features,
+        )
+    }
+
+    fn connect_request(items: Vec<ConnectItem>) -> Result<ConnectRequest, ValueError> {
+        Ok(ConnectRequest {
+            manifest_url: HttpsUrl::try_from("https://app.example/manifest.json")?,
+            items: NonEmptyVec::try_from(items)?,
+        })
+    }
+
+    fn connect_success(
+        items: Vec<ConnectItemReply>,
+        embedded: bool,
+        response: Option<EmbeddedResponse>,
+    ) -> Result<ConnectEvent, DeviceInfoValidationError> {
+        Ok(ConnectEvent::Connect {
+            id: 1,
+            payload: ConnectEventPayload {
+                items,
+                device: device(embedded)?,
+            },
+            response,
+        })
+    }
 
     #[test]
     fn connect_request_uses_canonical_item_discriminators() {
@@ -1136,6 +1199,16 @@ mod tests {
                 .and_then(|value| serde_json::to_string(&value))
                 .is_ok()
         );
+        assert!(matches!(
+            ConnectItem::from(TonAddressItem { network: None }),
+            ConnectItem::TonAddr { network: None }
+        ));
+        assert!(matches!(
+            ConnectItem::from(TonProofItem {
+                payload: "nonce".to_owned(),
+            }),
+            ConnectItem::TonProof { payload } if payload == "nonce"
+        ));
     }
 
     #[test]
@@ -1150,18 +1223,30 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(json)?
         );
 
-        let reply = ConnectItemReply::unsupported(&item, None);
+        let reply = ConnectItemReply::unsupported(&item, Some("not supported".to_owned()));
         assert!(matches!(
             reply,
             ConnectItemReply::Error(error)
                 if error.name() == "future_identity"
                     && error.code() == ConnectItemErrorCode::MethodNotSupported
+                    && error.message() == Some("not supported")
         ));
+        assert!(ConnectItem::unsupported("future_identity".to_owned(), BTreeMap::new()).is_ok());
+        assert!(ConnectItem::unsupported(String::new(), BTreeMap::new()).is_err());
+        assert!(
+            ConnectItem::unsupported(
+                "future_identity".to_owned(),
+                BTreeMap::from([("name".to_owned(), Value::String("shadow".to_owned()))]),
+            )
+            .is_err()
+        );
         Ok(())
     }
 
     #[test]
     fn known_connect_items_still_reject_unknown_fields() {
+        assert!(serde_json::from_str::<ConnectItem>(r#"{"network":"-239"}"#).is_err());
+        assert!(serde_json::from_str::<ConnectItem>(r#"{"name":""}"#).is_err());
         assert!(
             serde_json::from_str::<ConnectItem>(
                 r#"{"name":"ton_addr","network":"-239","future":true}"#
@@ -1243,6 +1328,7 @@ mod tests {
             payload: "nonce".to_owned(),
             signature: Ed25519Signature::from_bytes([0_u8; 64]),
         };
+        assert_eq!(proof.domain.length_bytes(), 17);
         let encoded = serde_json::to_string(&proof);
         assert!(
             encoded
@@ -1285,6 +1371,149 @@ mod tests {
         assert!(proof.verify(&address, &public_key)?);
         proof.payload.push_str("-changed");
         assert!(!proof.verify(&address, &public_key)?);
+        Ok(())
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keeps every connect correlation outcome in one state matrix"
+    )]
+    fn connect_response_correlation_covers_every_terminal_branch()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let account = connect_account("-239")?;
+        let request = connect_request(vec![ConnectItem::TonAddr {
+            network: Some(NetworkId::try_from("-239")?),
+        }])?;
+        let success = connect_success(
+            vec![ConnectItemReply::TonAddress(account.clone())],
+            false,
+            None,
+        )?;
+        assert_eq!(success.validate_for_connect(&request, None), Ok(()));
+
+        let connect_error = ConnectEvent::ConnectError {
+            id: 2,
+            payload: ConnectEventError {
+                code: ConnectEventErrorCode::UserDeclined,
+                message: "declined".to_owned(),
+            },
+        };
+        assert_eq!(connect_error.validate_for_connect(&request, None), Ok(()));
+        assert_eq!(
+            ConnectEvent::Disconnect {
+                id: 3,
+                payload: EmptyObject,
+            }
+            .validate_for_connect(&request, None),
+            Err(ConnectValidationError::NotAConnectResponse)
+        );
+
+        let no_address = connect_request(vec![ConnectItem::TonProof {
+            payload: "nonce".to_owned(),
+        }])?;
+        assert_eq!(
+            success.validate_for_connect(&no_address, None),
+            Err(ConnectValidationError::InvalidTonAddressRequest)
+        );
+        let duplicate_address = connect_request(vec![
+            ConnectItem::TonAddr { network: None },
+            ConnectItem::TonAddr { network: None },
+        ])?;
+        assert_eq!(
+            success.validate_for_connect(&duplicate_address, None),
+            Err(ConnectValidationError::InvalidTonAddressRequest)
+        );
+
+        let no_replies = connect_success(Vec::new(), false, None)?;
+        assert_eq!(
+            no_replies.validate_for_connect(&request, None),
+            Err(ConnectValidationError::ItemReplyMismatch)
+        );
+        let account_error = connect_success(
+            vec![ConnectItemReply::unsupported(
+                request.items.as_slice().first().ok_or("ton_addr item")?,
+                None,
+            )],
+            false,
+            None,
+        )?;
+        assert_eq!(
+            account_error.validate_for_connect(&request, None),
+            Err(ConnectValidationError::MissingTonAddressReply)
+        );
+
+        let wrong_network = connect_success(
+            vec![ConnectItemReply::TonAddress(connect_account("-3")?)],
+            false,
+            None,
+        )?;
+        assert_eq!(
+            wrong_network.validate_for_connect(&request, None),
+            Err(ConnectValidationError::NetworkMismatch)
+        );
+
+        let proof_request = connect_request(vec![
+            ConnectItem::TonAddr { network: None },
+            ConnectItem::TonProof {
+                payload: "expected".to_owned(),
+            },
+        ])?;
+        let proof = TonProof {
+            timestamp: Uint64String::from(1),
+            domain: TonProofDomain::new("app.example".to_owned())?,
+            payload: "wrong".to_owned(),
+            signature: Ed25519Signature::from_bytes([0_u8; 64]),
+        };
+        let proof_mismatch = connect_success(
+            vec![
+                ConnectItemReply::TonAddress(account.clone()),
+                ConnectItemReply::TonProof(TonProofItemReply::new(proof)),
+            ],
+            false,
+            None,
+        )?;
+        assert_eq!(
+            proof_mismatch.validate_for_connect(&proof_request, None),
+            Err(ConnectValidationError::ProofPayloadMismatch)
+        );
+
+        let embedded_request = crate::decode_embedded_request_param(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(r#"{"m":"st","ms":[{"a":"Ef8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAU","am":"1"}]}"#),
+        )?;
+        let embedded_response = EmbeddedResponse::Success(EmbeddedResponseSuccess {
+            result: crate::WalletResult::String(
+                base64::engine::general_purpose::STANDARD.encode(TonCell::EMPTY_BOC),
+            ),
+        });
+        let unexpected = connect_success(
+            vec![ConnectItemReply::TonAddress(account.clone())],
+            false,
+            Some(embedded_response.clone()),
+        )?;
+        assert_eq!(
+            unexpected.validate_for_connect(&request, None),
+            Err(ConnectValidationError::UnexpectedEmbeddedResponse)
+        );
+        let missing = connect_success(
+            vec![ConnectItemReply::TonAddress(account.clone())],
+            true,
+            None,
+        )?;
+        assert_eq!(
+            missing.validate_for_connect(&request, Some(&embedded_request)),
+            Err(ConnectValidationError::MissingEmbeddedResponse)
+        );
+        let embedded_success = connect_success(
+            vec![ConnectItemReply::TonAddress(account)],
+            true,
+            Some(embedded_response),
+        )?;
+        assert_eq!(
+            embedded_success.validate_for_connect(&request, Some(&embedded_request)),
+            Ok(())
+        );
         Ok(())
     }
 }

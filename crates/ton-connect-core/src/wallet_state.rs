@@ -568,6 +568,10 @@ mod tests {
     #[test]
     fn wire_value_requires_canonical_standard_base64() -> TestResult {
         let (state_init, _) = standard_wallet(V4R2_CODE, StandardWalletVersion::V4R2)?;
+        let encoded = state_init.as_str().to_owned();
+        assert_eq!(WalletStateInit::try_from(encoded.as_str())?, state_init);
+        assert_eq!(String::from(state_init.clone()), encoded);
+        assert!(format!("{state_init:?}").contains("boc_bytes"));
         let url_safe = URL_SAFE.encode(state_init.as_boc());
         assert_ne!(url_safe, state_init.as_str());
         assert_eq!(

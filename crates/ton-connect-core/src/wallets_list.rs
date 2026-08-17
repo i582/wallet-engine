@@ -344,6 +344,10 @@ mod tests {
             wallets.as_slice().first().map(WalletInfo::app_name),
             Some("examplewallet")
         );
+        let wallet = wallets.as_slice().first().ok_or("wallet must exist")?;
+        assert_eq!(wallet.name(), "Example Wallet");
+        assert_eq!(wallet.bridges().as_slice().len(), 2);
+        assert_eq!(wallet.features().as_slice().len(), 3);
         assert!(serde_json::from_str::<WalletsList>(&serde_json::to_string(&wallets)?).is_ok());
         Ok(())
     }
@@ -359,6 +363,13 @@ mod tests {
             ),
             &VALID.replace(r#"["ios","android"]"#, r#"["ios","ios"]"#),
             &VALID.replace(r#""maxMessages":4"#, r#""maxMessages":0"#),
+            &VALID.replace(
+                r#"        "about_url":"https://wallet.example/about","#,
+                concat!(
+                    "        \"about_url\":\"https://wallet.example/about\",\n",
+                    "        \"tondns\":\"wallet.example\","
+                ),
+            ),
         ];
         for case in cases {
             assert!(

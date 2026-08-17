@@ -494,6 +494,8 @@ mod tests {
             RawAccountAddress::from_str(&canonical).map(|value| value.to_string()),
             Ok(canonical)
         );
+        let address = RawAccountAddress::new(-1, [0xab; 32]);
+        assert_eq!(format!("{address:?}"), address.to_string());
         assert!(RawAccountAddress::from_str(&format!("00:{}", "ab".repeat(32))).is_err());
         assert_eq!(
             RawAccountAddress::from_str(&format!("0:{}", "AB".repeat(32)))
@@ -506,10 +508,28 @@ mod tests {
     fn signature_wire_type_rejects_wrong_alphabet_length_and_padding() {
         let signature = Ed25519Signature::from_bytes([0xfb; 64]);
         let encoded = signature.to_string();
+        assert_eq!(format!("{signature:?}"), "Ed25519Signature(<redacted>)");
         assert_eq!(Ed25519Signature::from_str(&encoded), Ok(signature));
         assert!(Ed25519Signature::from_str(encoded.trim_end_matches('=')).is_err());
         assert!(Ed25519Signature::from_str(&encoded.replace('+', "-")).is_err());
         assert!(Ed25519Signature::from_str("AA==").is_err());
+    }
+
+    #[test]
+    fn public_key_wire_type_has_canonical_text_and_json_forms()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let key = Ed25519PublicKey::from_bytes([0xab; 32]);
+        let encoded = "ab".repeat(32);
+        assert_eq!(key.to_string(), encoded);
+        assert_eq!(format!("{key:?}"), encoded);
+        assert_eq!(Ed25519PublicKey::from_str(&encoded)?, key);
+        assert_eq!(
+            serde_json::from_str::<Ed25519PublicKey>(&serde_json::to_string(&key)?)?,
+            key
+        );
+        assert!(Ed25519PublicKey::from_str(&encoded.to_uppercase()).is_ok());
+        assert!(Ed25519PublicKey::from_str("00").is_err());
+        Ok(())
     }
 
     #[test]

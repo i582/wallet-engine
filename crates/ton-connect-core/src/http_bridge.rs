@@ -534,6 +534,8 @@ mod tests {
     #[test]
     fn event_endpoint_supports_multiple_client_queues() -> Result<(), Box<dyn Error>> {
         let bridge = HttpBridgeUrl::try_from("https://bridge.example/bridge")?;
+        assert_eq!(bridge.to_string(), "https://bridge.example/bridge");
+        assert!(format!("{bridge:?}").contains("bridge.example"));
         let first = ClientId::from_bytes([1_u8; 32]);
         let second = ClientId::from_bytes([2_u8; 32]);
         let endpoint = bridge.events_endpoint_many(&[first, second], None, None)?;
@@ -542,8 +544,20 @@ mod tests {
             .find_map(|(name, value)| (name == "client_id").then(|| value.into_owned()));
 
         assert_eq!(client_ids, Some(format!("{first},{second}")));
+        let legacy = bridge.events_endpoint_many_with_heartbeat(
+            &[first, second],
+            Some("8"),
+            None,
+            HeartbeatMode::Legacy,
+        )?;
+        assert!(legacy.as_str().contains("last_event_id=8"));
+        assert!(legacy.as_str().contains("heartbeat=legacy"));
         assert!(matches!(
             bridge.events_endpoint_many(&[], None, None),
+            Err(HttpBridgeError::EmptySubscription)
+        ));
+        assert!(matches!(
+            bridge.events_endpoint_many_with_heartbeat(&[], None, None, HeartbeatMode::Message),
             Err(HttpBridgeError::EmptySubscription)
         ));
         Ok(())
@@ -628,6 +642,7 @@ mod tests {
 
         assert_eq!(decrypted, request);
         assert_eq!(message.event_id(), Some("9"));
+        assert_eq!(message.clone().into_message(), *message.message());
         assert!(post.url().as_str().contains("topic=disconnect"));
         assert!(matches!(
             message.decrypt::<AppRequest>(&wallet, ClientId::from_bytes([9_u8; 32])),

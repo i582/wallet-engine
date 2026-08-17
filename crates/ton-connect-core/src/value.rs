@@ -451,9 +451,24 @@ mod tests {
     #[test]
     fn client_id_requires_canonical_lowercase_hex() {
         let canonical = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        assert!(ClientId::from_str(canonical).is_ok());
+        let client = ClientId::from_str(canonical).expect("canonical client id");
+        assert_eq!(format!("{client:?}"), canonical);
         assert!(ClientId::from_str(&canonical.to_uppercase()).is_err());
         assert!(ClientId::from_str("00").is_err());
+    }
+
+    #[test]
+    fn validated_string_views_and_non_empty_conversion_are_lossless() -> Result<(), ValueError> {
+        let url = HttpsUrl::try_from("https://app.example/path")?;
+        assert_eq!(url.to_string(), "https://app.example/path");
+        assert_eq!(url.as_ref(), "https://app.example/path");
+        assert_eq!(&*url, "https://app.example/path");
+        assert_eq!(url.clone().into_string(), "https://app.example/path");
+        assert_eq!(url.parsed()?.host_str(), Some("app.example"));
+
+        let values = NonEmptyVec::try_from(vec![1_u8, 2, 3])?;
+        assert_eq!(values.into_vec(), vec![1, 2, 3]);
+        Ok(())
     }
 
     #[test]

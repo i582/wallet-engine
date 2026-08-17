@@ -493,6 +493,22 @@ mod tests {
         assert!(
             matches!((nine, ten, huge), (Ok(nine), Ok(ten), Ok(huge)) if nine < ten && ten < huge)
         );
+        let canonical = RpcRequestId::from_str("00042").expect("decimal request id");
+        assert_eq!(canonical.as_str(), "42");
+        assert_eq!(canonical.to_string(), "42");
+        assert_eq!(format!("{canonical:?}"), "42");
+    }
+
+    #[test]
+    fn request_ids_reject_every_non_decimal_shape() -> Result<(), SessionStateError> {
+        let state = connected()?;
+        for invalid in ["", "-1", "+1", "1.0", " 1", "1 ", "١"] {
+            assert_eq!(
+                state.prepare_request(&request(invalid, "unknown", Vec::new())),
+                Err(SessionStateError::InvalidRequestId)
+            );
+        }
+        Ok(())
     }
 
     #[test]
@@ -530,6 +546,11 @@ mod tests {
     {
         let accepted = connected()?.prepare_request(&request("3", "disconnect", Vec::new()))?;
         assert!(accepted.closes_session());
+        assert_eq!(accepted.request_id().as_str(), "3");
+        assert_eq!(
+            accepted.next_state().phase(),
+            WalletSessionPhase::Disconnected
+        );
         let closed = accepted.into_state();
         assert_eq!(closed.phase(), WalletSessionPhase::Disconnected);
         assert_eq!(
@@ -574,7 +595,27 @@ mod tests {
     }
 
     #[test]
+    fn wallet_event_id_exhaustion_never_wraps_to_zero() -> Result<(), Box<dyn std::error::Error>> {
+        let state = serde_json::from_value::<WalletSessionState>(serde_json::json!({
+            "phase": "connected",
+            "last_request_id": null,
+            "last_event_id": u64::MAX,
+        }))?;
+        assert_eq!(
+            state.prepare_event(WalletEventKind::Disconnect),
+            Err(SessionStateError::EventIdExhausted)
+        );
+        assert_eq!(state.last_event_id(), Some(u64::MAX));
+        assert_eq!(state.phase(), WalletSessionPhase::Connected);
+        Ok(())
+    }
+
+    #[test]
     fn persisted_state_rejects_impossible_lifecycle_combinations() {
+        assert_eq!(
+            WalletSessionState::default(),
+            WalletSessionState::pending_connect()
+        );
         let pending_with_request =
             r#"{"phase":"pending_connect","last_request_id":"1","last_event_id":null}"#;
         let connected_without_event =
@@ -590,8 +631,7 @@ mod tests {
         ) {
             values.sort_unstable();
             values.dedup();
-            let mut state = connected()
-                .map_err(|error| TestCaseError::fail(error.to_string()))?;
+            let mut state = connected().expect("connect transition is valid");
             for value in values {
                 let transition = state.prepare_request(&request(
                     &value.to_string(),
@@ -608,12 +648,16 @@ mod tests {
 
     #[test]
     fn dapp_event_cursor_rejects_replay_and_stops_after_disconnect()
-    -> Result<(), WalletEventCursorError> {
+    -> Result<(), Box<dyn std::error::Error>> {
         let cursor = WalletEventCursor::default();
         let first = cursor.prepare_event(&disconnect_event(7))?;
         assert_eq!(first.event_id(), 7);
+        assert_eq!(first.next_cursor().last_event_id(), Some(7));
         let terminated = first.into_cursor();
         assert!(terminated.is_terminated());
+        let restored =
+            serde_json::from_str::<WalletEventCursor>(&serde_json::to_string(&terminated)?)?;
+        assert_eq!(restored, terminated);
         assert_eq!(
             terminated.prepare_event(&disconnect_event(8)),
             Err(WalletEventCursorError::SessionTerminated)

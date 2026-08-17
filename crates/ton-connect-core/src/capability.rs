@@ -313,4 +313,103 @@ mod tests {
             Err(CapabilityError::EmbeddedRequestNotSupported)
         );
     }
+
+    #[test]
+    fn every_rpc_and_embedded_capability_branch_is_enforced() {
+        let raw = serde_json::json!({
+            "messages": [{ "address": FRIENDLY, "amount": "1" }]
+        });
+        let two = serde_json::json!({
+            "messages": [
+                { "address": FRIENDLY, "amount": "1" },
+                { "address": FRIENDLY, "amount": "2" }
+            ]
+        });
+        let sign_text = serde_json::json!({ "type": "text", "text": "hello" });
+        let full = device(&serde_json::json!([
+            { "name": "SendTransaction", "maxMessages": 2, "extraCurrencySupported": true, "itemTypes": ["ton", "jetton", "nft"] },
+            { "name": "SignMessage", "maxMessages": 1 },
+            { "name": "SignData", "types": ["text", "binary", "cell"] },
+            { "name": "EmbeddedRequest" }
+        ]));
+
+        assert_eq!(
+            full.validate_request(&request("sendTransaction", &two)),
+            Ok(())
+        );
+        assert_eq!(full.validate_request(&request("signMessage", &raw)), Ok(()));
+        assert_eq!(
+            full.validate_request(&request("signData", &sign_text)),
+            Ok(())
+        );
+        assert_eq!(
+            full.validate_request(&KnownAppRequest::Disconnect(crate::DisconnectRequest {
+                id: "4".to_owned(),
+            })),
+            Ok(())
+        );
+        assert!(matches!(
+            full.validate_request(&request("signMessage", &two)),
+            Err(CapabilityError::MessageLimitExceeded { .. })
+        ));
+
+        let transaction_payload = serde_json::from_value::<TransactionPayload>(raw.clone())
+            .expect("raw transaction fixture is valid");
+        let embedded_send = EmbeddedRequest::SendTransaction(transaction_payload.clone());
+        let embedded_sign = EmbeddedRequest::SignMessage(transaction_payload);
+        let embedded_data = EmbeddedRequest::SignData(crate::SignDataPayload::Text {
+            text: "hello".to_owned(),
+            network: None,
+            from: None,
+        });
+        assert_eq!(full.validate_embedded_request(&embedded_send), Ok(()));
+        assert_eq!(full.validate_embedded_request(&embedded_sign), Ok(()));
+        assert_eq!(full.validate_embedded_request(&embedded_data), Ok(()));
+
+        let embedded_only = device(&serde_json::json!([{ "name": "EmbeddedRequest" }]));
+        assert_eq!(
+            embedded_only.validate_embedded_request(&embedded_send),
+            Err(CapabilityError::MethodNotSupported("sendTransaction"))
+        );
+        assert_eq!(
+            embedded_only.validate_embedded_request(&embedded_data),
+            Err(CapabilityError::MethodNotSupported("signData"))
+        );
+
+        let legacy = device(&serde_json::json!(["SendTransaction"]));
+        assert_eq!(
+            legacy.validate_request(&request("sendTransaction", &raw)),
+            Ok(())
+        );
+        assert_eq!(
+            legacy.validate_request(&request(
+                "sendTransaction",
+                &serde_json::json!({
+                    "items": [{ "type": "ton", "address": FRIENDLY, "amount": "1" }]
+                })
+            )),
+            Err(CapabilityError::StructuredItemsNotSupported)
+        );
+        assert_eq!(
+            legacy.validate_request(&request(
+                "sendTransaction",
+                &serde_json::json!({
+                    "messages": [{ "address": FRIENDLY, "amount": "1", "extra_currency": { "1": "1" } }]
+                })
+            )),
+            Err(CapabilityError::ExtraCurrencyNotSupported)
+        );
+        assert_eq!(
+            legacy.validate_request(&request("signMessage", &raw)),
+            Err(CapabilityError::MethodNotSupported("signMessage"))
+        );
+
+        let no_sign_data = device(&serde_json::json!([{
+            "name": "SendTransaction", "maxMessages": 1
+        }]));
+        assert_eq!(
+            no_sign_data.validate_request(&request("signData", &sign_text)),
+            Err(CapabilityError::MethodNotSupported("signData"))
+        );
+    }
 }

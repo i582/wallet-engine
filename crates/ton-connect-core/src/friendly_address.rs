@@ -193,6 +193,7 @@ mod tests {
         assert_eq!(testnet.raw_address().workchain(), 0);
         assert!(!testnet.is_bounceable());
         assert!(testnet.is_test_only());
+        assert_eq!(format!("{testnet:?}"), testnet.to_string());
         let encoded = serde_json::to_string(&testnet)?;
         assert_eq!(serde_json::from_str::<FriendlyAddress>(&encoded)?, testnet);
         Ok(())

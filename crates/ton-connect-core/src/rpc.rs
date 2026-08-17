@@ -1051,12 +1051,11 @@ mod tests {
             "params":["{\"valid_until\":1764424242,\"network\":\"-239\",\"messages\":[{\"address\":\"Ef8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAU\",\"amount\":\"100000000\"}]}"],
             "id":"42"
         }"#;
-        let decoded = serde_json::from_str::<AppRequest>(json).and_then(|request| {
-            request
-                .decode()
-                .map_err(|error| serde_json::Error::io(std::io::Error::other(error)))
-        });
-        assert!(matches!(decoded, Ok(KnownAppRequest::SendTransaction(_))));
+        let request = serde_json::from_str::<AppRequest>(json).expect("valid request envelope");
+        assert!(matches!(
+            request.decode(),
+            Ok(KnownAppRequest::SendTransaction(_))
+        ));
     }
 
     #[test]
@@ -1191,9 +1190,49 @@ mod tests {
         ];
 
         for request in requests {
-            assert!(request.decode().is_ok());
+            let decoded = request.clone().decode()?;
+            let encoded = AppRequest::encode(decoded.clone())?;
+            assert_eq!(encoded.method, request.method);
+            assert_eq!(encoded.id, request.id);
+            assert_eq!(encoded.decode()?, decoded);
         }
         Ok(())
+    }
+
+    #[test]
+    fn every_rpc_method_rejects_the_wrong_parameter_count() {
+        for method in ["sendTransaction", "signMessage", "signData"] {
+            for params in [Vec::new(), vec!["{}".to_owned(), "{}".to_owned()]] {
+                let actual = params.len();
+                assert!(matches!(
+                    AppRequest {
+                        method: method.to_owned(),
+                        params,
+                        id: "1".to_owned(),
+                    }
+                    .decode(),
+                    Err(RpcError::InvalidParameterCount {
+                        method: actual_method,
+                        expected: 1,
+                        actual: actual_count,
+                    }) if actual_method == method && actual_count == actual
+                ));
+            }
+        }
+
+        assert!(matches!(
+            AppRequest {
+                method: "disconnect".to_owned(),
+                params: vec!["{}".to_owned()],
+                id: "2".to_owned(),
+            }
+            .decode(),
+            Err(RpcError::InvalidParameterCount {
+                method: "disconnect",
+                expected: 0,
+                actual: 1,
+            })
+        ));
     }
 
     #[test]
@@ -1298,6 +1337,43 @@ mod tests {
                 .payload
                 .validate_context(99, &active_network, &wrong_account),
             Err(RequestContextError::AccountMismatch)
+        );
+
+        let sign_data = serde_json::from_value::<SignDataPayload>(serde_json::json!({
+            "type": "text",
+            "text": "authorize",
+            "network": "-239",
+            "from": FRIENDLY_ADDRESS,
+        }))?;
+        assert_eq!(sign_data.data_type(), SignDataType::Text);
+        assert_eq!(
+            sign_data.validate_context(&active_network, &active_account),
+            Ok(())
+        );
+        assert_eq!(
+            sign_data.validate_context(&wrong_network, &active_account),
+            Err(RequestContextError::NetworkMismatch)
+        );
+        assert_eq!(
+            sign_data.validate_context(&active_network, &wrong_account),
+            Err(RequestContextError::AccountMismatch)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn extra_currencies_preserve_typed_identifiers_and_amounts()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let values = BTreeMap::from([
+            (7, DecimalString::try_from("11")?),
+            (u32::MAX, DecimalString::try_from("0")?),
+        ]);
+        let currencies = ExtraCurrencies::new(values.clone());
+        assert_eq!(currencies.as_map(), &values);
+        assert!(!currencies.is_empty());
+        assert_eq!(
+            serde_json::from_str::<ExtraCurrencies>(&serde_json::to_string(&currencies)?)?,
+            currencies
         );
         Ok(())
     }

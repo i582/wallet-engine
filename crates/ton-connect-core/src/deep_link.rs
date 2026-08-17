@@ -325,6 +325,7 @@ mod tests {
             .append_pair("id", CLIENT_ID)
             .append_pair("r", request)
             .append_pair("ret", "back")
+            .append_pair("future", "preserved")
             .finish();
         let parsed = ConnectLink::parse(&format!("tc://?{query}"));
         assert!(parsed.as_ref().is_ok_and(|link| link.request().is_some()));
@@ -332,6 +333,9 @@ mod tests {
             parsed.as_ref().map(ConnectLink::return_strategy),
             Ok(ReturnStrategy::Back)
         ));
+        assert!(parsed.is_ok_and(|link| {
+            link.extensions() == [("future".to_owned(), "preserved".to_owned())]
+        }));
     }
 
     /// Ported from Tonkeeper iOS `TCUrlParserTests.swift` at
@@ -380,6 +384,7 @@ mod tests {
     fn rejects_duplicate_identifiers_and_unknown_versions() {
         let duplicate = format!("tc://?id={CLIENT_ID}&id={CLIENT_ID}");
         let version = format!("tc://?id={CLIENT_ID}&v=3");
+        let invalid_return = format!("tc://?id={CLIENT_ID}&ret=relative");
         assert!(matches!(
             ConnectLink::parse(&duplicate),
             Err(ConnectLinkError::DuplicateParameter(parameter)) if parameter == "id"
@@ -387,6 +392,10 @@ mod tests {
         assert!(matches!(
             ConnectLink::parse(&version),
             Err(ConnectLinkError::UnsupportedVersion(version)) if version == "3"
+        ));
+        assert!(matches!(
+            ConnectLink::parse(&invalid_return),
+            Err(ConnectLinkError::InvalidReturnStrategy(value)) if value == "relative"
         ));
     }
 
@@ -451,11 +460,12 @@ mod tests {
             request,
             ReturnStrategy::Custom("demo-app://return/path".to_owned()),
             Some(embedded),
-            Some(trace_id),
+            Some(trace_id.clone()),
         );
 
         let encoded = link.to_url("tc://")?;
         assert_eq!(ConnectLink::parse(encoded.as_str())?, link);
+        assert_eq!(link.trace_id(), Some(&trace_id));
 
         let reduced = ConnectLink::reduced(client_id, ReturnStrategy::None, None);
         let encoded = reduced.to_url("https://wallet.example/connect")?;

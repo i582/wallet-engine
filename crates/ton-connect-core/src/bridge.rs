@@ -126,4 +126,20 @@ mod tests {
         assert!(serde_json::from_str::<BridgeMessage>(empty).is_err());
         assert!(serde_json::from_str::<BridgeMessage>(uppercase).is_err());
     }
+
+    #[test]
+    fn constructor_and_accessors_preserve_every_bridge_field()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let from = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".parse()?;
+        let message = Base64Value::try_from("AA==")?;
+        let trace = TraceId::try_from("019d85ea-ca0e-7129-8155-05c7534ef894")?;
+        let envelope = BridgeMessage::new(from, message.clone(), Some(trace.clone()))?;
+        assert_eq!(envelope.from(), from);
+        assert_eq!(envelope.message(), &message);
+        assert_eq!(envelope.trace_id(), Some(&trace));
+        assert!(envelope.extensions().is_empty());
+
+        assert!(BridgeMessage::new(from, Base64Value::try_from("")?, None).is_err());
+        Ok(())
+    }
 }

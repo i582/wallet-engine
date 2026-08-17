@@ -227,4 +227,35 @@ mod tests {
         assert!(serde_json::from_str::<AppManifest>(http).is_err());
         assert!(serde_json::from_str::<AppManifest>(svg).is_err());
     }
+
+    #[test]
+    fn constructor_and_accessors_cover_optional_manifest_metadata()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let url = HttpsUrl::try_from("https://app.example.com/path")?;
+        let icon = HttpsUrl::try_from("https://cdn.example.com/icon.png")?;
+        let terms = HttpsUrl::try_from("https://app.example.com/terms")?;
+        let privacy = HttpsUrl::try_from("https://app.example.com/privacy")?;
+        let mut extensions = BTreeMap::new();
+        let _ = extensions.insert("category".to_owned(), Value::String("defi".to_owned()));
+        let manifest = AppManifest::new(
+            url.clone(),
+            "Example".to_owned(),
+            icon.clone(),
+            Some(terms.clone()),
+            Some(privacy.clone()),
+            extensions,
+        )?;
+        assert_eq!(manifest.url(), &url);
+        assert_eq!(manifest.name(), "Example");
+        assert_eq!(manifest.icon_url(), &icon);
+        assert_eq!(manifest.terms_of_use_url(), Some(&terms));
+        assert_eq!(manifest.privacy_policy_url(), Some(&privacy));
+        assert_eq!(manifest.app_domain()?, "app.example.com");
+
+        assert_eq!(
+            AppManifest::new(url, String::new(), icon, None, None, BTreeMap::new(),),
+            Err(ManifestError::EmptyName)
+        );
+        Ok(())
+    }
 }

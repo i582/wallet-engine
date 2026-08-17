@@ -204,11 +204,13 @@ mod tests {
                 .as_ref()
                 .is_ok_and(|value| value.supports(version))
         );
-        assert!(
-            descriptor
-                .as_ref()
-                .is_ok_and(JsBridgeDescriptor::is_wallet_browser)
-        );
+        let descriptor = descriptor.expect("valid descriptor");
+        assert_eq!(descriptor.device_info().app_name, "examplewallet");
+        assert_eq!(descriptor.protocol_version(), version);
+        assert_eq!(descriptor.wallet_info(), None);
+        assert!(!descriptor.supports(0));
+        assert!(!descriptor.supports(version.saturating_add(1)));
+        assert!(descriptor.is_wallet_browser());
         assert!(matches!(
             JsBridgeDescriptor::new(device_info(version), None, version.saturating_add(1), false),
             Err(JsBridgeContractError::ProtocolVersionMismatch)
@@ -219,15 +221,16 @@ mod tests {
     fn injected_wallet_metadata_validates_identity() -> Result<(), Box<dyn std::error::Error>> {
         let image = HttpsUrl::try_from("https://wallet.example/icon.png")?;
         let about = HttpsUrl::try_from("https://wallet.example/about")?;
-        assert!(
-            InjectedWalletInfo::new(
-                "Example Wallet".to_owned(),
-                image.clone(),
-                Some("example.ton".to_owned()),
-                about.clone(),
-            )
-            .is_ok()
-        );
+        let info = InjectedWalletInfo::new(
+            "Example Wallet".to_owned(),
+            image.clone(),
+            Some("example.ton".to_owned()),
+            about.clone(),
+        )?;
+        assert_eq!(info.name(), "Example Wallet");
+        assert_eq!(info.image(), &image);
+        assert_eq!(info.tondns(), Some("example.ton"));
+        assert_eq!(info.about_url(), &about);
         assert!(matches!(
             InjectedWalletInfo::new(String::new(), image, None, about),
             Err(JsBridgeContractError::InvalidWalletInfo)
