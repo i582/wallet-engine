@@ -19,6 +19,7 @@ fmt:
     cargo fmt --all
     cargo fmt --manifest-path c-bindings/Cargo.toml
     cargo fmt --manifest-path apple-bindgen/Cargo.toml
+    cargo fmt --manifest-path c-bindgen/Cargo.toml
     cargo fmt --manifest-path kotlin-bindgen/Cargo.toml
     cargo fmt --manifest-path wasm-bindings/Cargo.toml
     cargo fmt --manifest-path xtask/Cargo.toml
@@ -27,6 +28,7 @@ fmt-check:
     cargo fmt --all --check
     cargo fmt --manifest-path c-bindings/Cargo.toml -- --check
     cargo fmt --manifest-path apple-bindgen/Cargo.toml -- --check
+    cargo fmt --manifest-path c-bindgen/Cargo.toml -- --check
     cargo fmt --manifest-path kotlin-bindgen/Cargo.toml -- --check
     cargo fmt --manifest-path wasm-bindings/Cargo.toml -- --check
     cargo fmt --manifest-path xtask/Cargo.toml -- --check
@@ -35,6 +37,7 @@ check-build:
     cargo check --locked --all-targets
     cargo check --locked --manifest-path c-bindings/Cargo.toml --all-targets
     cargo check --locked --manifest-path apple-bindgen/Cargo.toml --all-targets
+    cargo check --locked --manifest-path c-bindgen/Cargo.toml --all-targets
     cargo check --locked --manifest-path kotlin-bindgen/Cargo.toml --all-targets
     cargo check --locked --manifest-path wasm-bindings/Cargo.toml --target wasm32-unknown-unknown
     cargo check --locked --manifest-path xtask/Cargo.toml --all-targets
@@ -43,6 +46,7 @@ clippy:
     cargo clippy --locked --all-targets -- -D warnings
     cargo clippy --locked --manifest-path c-bindings/Cargo.toml --all-targets -- -D warnings
     cargo clippy --locked --manifest-path apple-bindgen/Cargo.toml --all-targets -- -D warnings
+    cargo clippy --locked --manifest-path c-bindgen/Cargo.toml --all-targets -- -D warnings
     cargo clippy --locked --manifest-path kotlin-bindgen/Cargo.toml --all-targets -- -D warnings
     cargo clippy --locked --manifest-path wasm-bindings/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
     cargo clippy --locked --manifest-path xtask/Cargo.toml --all-targets -- -D warnings
@@ -135,6 +139,9 @@ bindings-c:
 
 bindings-c-check:
     cargo xtask bindings c --check
+
+bindings-c-experimental:
+    cargo xtask bindings c-experimental
 
 build-c:
     cargo build --release --locked --manifest-path c-bindings/Cargo.toml
@@ -282,6 +289,7 @@ clean:
     cargo clean
     cargo clean --manifest-path c-bindings/Cargo.toml
     cargo clean --manifest-path apple-bindgen/Cargo.toml
+    cargo clean --manifest-path c-bindgen/Cargo.toml
     cargo clean --manifest-path kotlin-bindgen/Cargo.toml
     cargo clean --manifest-path wasm-bindings/Cargo.toml
     cargo clean --manifest-path xtask/Cargo.toml
