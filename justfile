@@ -144,6 +144,11 @@ test-c: bindings-c build-c
     cmake --build target/c-tests
     ctest --test-dir target/c-tests --output-on-failure
 
+test-c-tsan: bindings-c build-c
+    cmake -S c-bindings/tests/c -B target/c-tests-tsan -DWALLET_ENGINE_C_ENABLE_THREAD_SANITIZER=ON
+    cmake --build target/c-tests-tsan
+    ctest --test-dir target/c-tests-tsan --output-on-failure
+
 build-cpp: bindings-c
     cmake -S cpp-bindings -B target/cpp-bindings -DBUILD_TESTING=OFF
     cmake --build target/cpp-bindings

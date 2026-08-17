@@ -403,6 +403,59 @@ fn ready_result_and_host_callback_run_on_the_polling_thread() {
 }
 
 #[test]
+fn lifecycle_can_create_operations_from_multiple_threads() {
+    let context = TestContext::regular();
+    let callbacks = callbacks(&context, store_synchronously);
+    // SAFETY: The callback table remains live until all operations are freed.
+    let lifecycle = unsafe { lifecycle(&callbacks) };
+    let lifecycle_address = lifecycle.addr();
+    let start_barrier = Arc::new(Barrier::new(3));
+
+    let start_on_thread = || {
+        let barrier = Arc::clone(&start_barrier);
+        std::thread::spawn(move || {
+            barrier.wait();
+            let lifecycle = lifecycle_address as *const WalletEngineLifecycle;
+            // Empty record IDs make both operations complete without invoking
+            // the protected-storage callback.
+            // SAFETY: The parent keeps the shared lifecycle live until both
+            // start threads have joined.
+            unsafe { start_operation(lifecycle, "").addr() }
+        })
+    };
+    let first_thread = start_on_thread();
+    let second_thread = start_on_thread();
+    start_barrier.wait();
+    let first = first_thread.join().expect("first start thread panicked")
+        as *mut WalletEngineCreateWalletOperation;
+    let second = second_thread.join().expect("second start thread panicked")
+        as *mut WalletEngineCreateWalletOperation;
+
+    // SAFETY: Both start calls have returned and this test uniquely owns the
+    // lifecycle handle. Each operation retained the core lifecycle.
+    unsafe { wallet_engine_lifecycle_free(lifecycle) };
+    assert_eq!(context.releases.load(Ordering::Relaxed), 0);
+
+    // SAFETY: The two distinct operations are live and uniquely owned here.
+    assert_eq!(
+        unsafe { poll_operation(first, &context) }.1,
+        WalletEngineOperationPollState::Ready
+    );
+    // SAFETY: The two distinct operations are live and uniquely owned here.
+    assert_eq!(
+        unsafe { poll_operation(second, &context) }.1,
+        WalletEngineOperationPollState::Ready
+    );
+    // SAFETY: Polling is complete and the handles are uniquely owned.
+    unsafe {
+        wallet_engine_create_wallet_operation_free(first);
+        wallet_engine_create_wallet_operation_free(second);
+    }
+    assert_eq!(context.results.load(Ordering::Relaxed), 2);
+    assert_eq!(context.releases.load(Ordering::Relaxed), 1);
+}
+
+#[test]
 fn different_operations_can_be_polled_from_different_threads() {
     let context = TestContext::regular();
     let callbacks = callbacks(&context, store_synchronously);

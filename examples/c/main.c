@@ -1,19 +1,15 @@
 #include "wallet_engine.h"
 
-#include <stdatomic.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include <time.h>
 
 #if defined(_WIN32)
 #include <io.h>
 #include <sys/stat.h>
-#include <windows.h>
 #else
-#include <sched.h>
 #include <sys/stat.h>
 #endif
 
@@ -22,7 +18,6 @@
 #define WALLET_SECRETS_FILE "wallet_engine_secrets.tsv"
 
 typedef struct ExampleContext {
-    atomic_bool completed;
     bool succeeded;
 } ExampleContext;
 
@@ -204,44 +199,32 @@ static void create_wallet_complete(
     } else {
         fprintf(stderr, "Wallet creation failed at ABI boundary: %u\n", (unsigned)abi_status);
     }
-
-    atomic_store_explicit(&example->completed, true, memory_order_release);
 }
 
-static void yield_thread(void) {
-#if defined(_WIN32)
-    (void)SwitchToThread();
-#else
-    (void)sched_yield();
-#endif
-}
-
-static bool poll_until_completion(WalletEngineCreateWalletOperation *operation) {
-    const time_t deadline = time(NULL) + 30;
-    for (;;) {
-        WalletEngineOperationPollState state = WALLET_ENGINE_OPERATION_POLL_STATE_PENDING;
-        const WalletEngineAbiStatus status = wallet_engine_create_wallet_operation_poll(
-            operation,
-            &example_context,
-            create_wallet_complete,
-            &state
+static bool poll_creation_once(WalletEngineCreateWalletOperation *operation) {
+    WalletEngineOperationPollState state = WALLET_ENGINE_OPERATION_POLL_STATE_PENDING;
+    const WalletEngineAbiStatus status = wallet_engine_create_wallet_operation_poll(
+        operation,
+        &example_context,
+        create_wallet_complete,
+        &state
+    );
+    if (status != WALLET_ENGINE_ABI_STATUS_OK) {
+        fprintf(
+            stderr,
+            "Failed to poll wallet creation: ABI status %u\n",
+            (unsigned)status
         );
-        if (status != WALLET_ENGINE_ABI_STATUS_OK) {
-            fprintf(
-                stderr,
-                "Failed to poll wallet creation: ABI status %u\n",
-                (unsigned)status
-            );
-            return false;
-        }
-        if (state == WALLET_ENGINE_OPERATION_POLL_STATE_READY) {
-            return atomic_load_explicit(&example_context.completed, memory_order_acquire);
-        }
-        if (time(NULL) > deadline) {
-            return false;
-        }
-        yield_thread();
+        return false;
     }
+    if (state == WALLET_ENGINE_OPERATION_POLL_STATE_PENDING) {
+        fputs(
+            "The host deferred completion; schedule another poll in the client event loop\n",
+            stderr
+        );
+        return false;
+    }
+    return true;
 }
 
 static bool read_line(char *buffer, size_t capacity) {
@@ -275,7 +258,6 @@ static void create_wallet(WalletEngineLifecycle *lifecycle) {
         .network = prompt_network(),
     };
     example_context.succeeded = false;
-    atomic_store_explicit(&example_context.completed, false, memory_order_relaxed);
     WalletEngineCreateWalletOperation *operation = NULL;
     const WalletEngineAbiStatus status = wallet_engine_lifecycle_create_wallet_start(
         lifecycle,
@@ -286,7 +268,7 @@ static void create_wallet(WalletEngineLifecycle *lifecycle) {
         fprintf(stderr, "Failed to start wallet creation: ABI status %u\n", (unsigned)status);
         return;
     }
-    const bool completed = poll_until_completion(operation);
+    const bool completed = poll_creation_once(operation);
     wallet_engine_create_wallet_operation_free(operation);
     if (!completed) {
         fputs("Wallet creation did not complete\n", stderr);
@@ -336,7 +318,6 @@ static void run_menu(WalletEngineLifecycle *lifecycle) {
 }
 
 int main(void) {
-    atomic_init(&example_context.completed, false);
     puts("WARNING: this example stores recovery phrases in plaintext files.");
 
     const WalletEnginePlatformHostCallbacks callbacks = {

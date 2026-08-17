@@ -9,7 +9,6 @@ publish = false
 
 [dependencies]
 async-trait = "=0.1.89"
-futures = { version = "=0.3.31", default-features = false, features = ["std"] }
 wallet-engine = { path = ".." }
 
 [lib]

@@ -4,6 +4,12 @@ project(wallet_engine_c_tests LANGUAGES C)
 include(CTest)
 find_package(Threads REQUIRED)
 
+option(
+    WALLET_ENGINE_C_ENABLE_THREAD_SANITIZER
+    "Build native C fixtures with ThreadSanitizer"
+    OFF
+)
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
@@ -37,6 +43,17 @@ function(add_wallet_engine_c_test target source)
         )
     endif()
 
+    if(WALLET_ENGINE_C_ENABLE_THREAD_SANITIZER)
+        if(MSVC)
+            message(FATAL_ERROR "ThreadSanitizer is not supported by this C test setup on MSVC")
+        endif()
+        target_compile_options(
+            ${target}
+            PRIVATE -fsanitize=thread -fno-omit-frame-pointer
+        )
+        target_link_options(${target} PRIVATE -fsanitize=thread)
+    endif()
+
     get_filename_component(
         WALLET_ENGINE_LIBRARY_DIR
         "${WALLET_ENGINE_LIBRARY}"
@@ -52,3 +69,5 @@ endfunction()
 
 add_wallet_engine_c_test(wallet_engine_c_abi_test abi_test.c)
 add_wallet_engine_c_test(wallet_engine_c_create_wallet_test create_wallet_test.c)
+add_wallet_engine_c_test(wallet_engine_c_import_wallet_test import_wallet_test.c)
+add_wallet_engine_c_test(wallet_engine_c_thread_safety_test thread_safety_test.c)

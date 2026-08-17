@@ -2,12 +2,14 @@
 
 use std::{
     ffi::c_void,
+    future::Future,
     mem::size_of,
     panic::{AssertUnwindSafe, catch_unwind},
+    pin::Pin,
     sync::{Arc, Mutex},
+    task::{Context, Poll},
 };
 
-use futures::channel::oneshot;
 use wallet_engine::{
     JournalCompareExchange, JournalCompareExchangeResult, JournalHostError, JournalHostErrorKind,
     JournalKey, JournalRecord, ProtectedSecretHostError, ProtectedSecretHostErrorKind,
@@ -43,7 +45,8 @@ pub type WalletEngineStoreProtectedSecretFn = Option<
 
 /// Versionable callbacks supplied by the C platform host.
 ///
-/// The callbacks and `context` must be safe to use from arbitrary worker
+/// The callbacks and `context` must be safe to use from arbitrary client-owned
+/// threads that call Wallet Engine APIs. The library creates no callback
 /// threads. Set `struct_size` to `sizeof(WalletEnginePlatformHostCallbacks)`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -65,7 +68,82 @@ pub const WALLET_ENGINE_PLATFORM_HOST_CALLBACKS_SIZE: usize =
     size_of::<WalletEnginePlatformHostCallbacks>();
 
 type ProtectedSecretStoreResult = Result<(), ProtectedSecretHostError>;
-type ProtectedSecretStoreSender = oneshot::Sender<ProtectedSecretStoreResult>;
+
+struct ProtectedSecretStoreCompletionState {
+    inner: Mutex<ProtectedSecretStoreCompletionStateInner>,
+}
+
+struct ProtectedSecretStoreCompletionStateInner {
+    receiver_alive: bool,
+    completed: bool,
+    result: Option<ProtectedSecretStoreResult>,
+}
+
+impl ProtectedSecretStoreCompletionState {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            inner: Mutex::new(ProtectedSecretStoreCompletionStateInner {
+                receiver_alive: true,
+                completed: false,
+                result: None,
+            }),
+        })
+    }
+
+    fn complete(&self, result: ProtectedSecretStoreResult) -> WalletEngineAbiStatus {
+        let mut inner = match self.inner.lock() {
+            Ok(inner) => inner,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if inner.completed || !inner.receiver_alive {
+            return WalletEngineAbiStatus::InvalidArgument;
+        }
+
+        inner.completed = true;
+        inner.result = Some(result);
+        WalletEngineAbiStatus::Ok
+    }
+
+    fn cancel_if_pending(&self) {
+        let mut inner = match self.inner.lock() {
+            Ok(inner) => inner,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if inner.completed || !inner.receiver_alive {
+            return;
+        }
+
+        inner.completed = true;
+        inner.result = Some(cancelled_protected_secret_store());
+    }
+}
+
+struct ProtectedSecretStoreReceiver {
+    state: Arc<ProtectedSecretStoreCompletionState>,
+}
+
+impl Future for ProtectedSecretStoreReceiver {
+    type Output = ProtectedSecretStoreResult;
+
+    fn poll(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut inner = match self.state.inner.lock() {
+            Ok(inner) => inner,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        inner.result.take().map_or(Poll::Pending, Poll::Ready)
+    }
+}
+
+impl Drop for ProtectedSecretStoreReceiver {
+    fn drop(&mut self) {
+        let mut inner = match self.state.inner.lock() {
+            Ok(inner) => inner,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        inner.receiver_alive = false;
+        drop(inner.result.take());
+    }
+}
 
 /// Owned completion for one protected-secret store request.
 ///
@@ -73,7 +151,7 @@ type ProtectedSecretStoreSender = oneshot::Sender<ProtectedSecretStoreResult>;
 /// client-owned thread, but `free` must be externally synchronized with every
 /// other use of the same raw handle.
 pub struct WalletEngineProtectedSecretStoreCompletion {
-    sender: Mutex<Option<ProtectedSecretStoreSender>>,
+    state: Arc<ProtectedSecretStoreCompletionState>,
 }
 
 fn cancelled_protected_secret_store() -> ProtectedSecretStoreResult {
@@ -133,20 +211,7 @@ unsafe fn complete_protected_secret_store(
 
     // SAFETY: The caller guarantees a live completion handle for this call.
     let completion = unsafe { &*completion };
-    let mut sender_slot = match completion.sender.lock() {
-        Ok(sender) => sender,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    let Some(sender) = sender_slot.take() else {
-        return WalletEngineAbiStatus::InvalidArgument;
-    };
-    drop(sender_slot);
-
-    if sender.send(result).is_ok() {
-        WalletEngineAbiStatus::Ok
-    } else {
-        WalletEngineAbiStatus::InvalidArgument
-    }
+    completion.state.complete(result)
 }
 
 /// Releases a protected-secret store completion. Passing null is a no-op.
@@ -172,13 +237,7 @@ pub unsafe extern "C" fn wallet_engine_protected_secret_store_completion_free(
         // SAFETY: The caller transfers back the unique Box ownership received
         // by the host callback.
         let completion = unsafe { Box::from_raw(completion) };
-        let sender = match completion.sender.lock() {
-            Ok(mut sender) => sender.take(),
-            Err(poisoned) => poisoned.into_inner().take(),
-        };
-        if let Some(sender) = sender {
-            drop(sender.send(cancelled_protected_secret_store()));
-        }
+        completion.state.cancel_if_pending();
     })));
 }
 
@@ -286,10 +345,11 @@ impl WalletPlatformHost for WalletEnginePlatformHostAdapter {
         let Some(store) = self.inner.callbacks.store_protected_secret else {
             return Err(unsupported_protected_secret("store_protected_secret"));
         };
-        let (sender, receiver) = oneshot::channel();
-        let completion = Box::new(WalletEngineProtectedSecretStoreCompletion {
-            sender: Mutex::new(Some(sender)),
-        });
+        let state = ProtectedSecretStoreCompletionState::new();
+        let receiver = ProtectedSecretStoreReceiver {
+            state: Arc::clone(&state),
+        };
+        let completion = Box::new(WalletEngineProtectedSecretStoreCompletion { state });
         let completion = Box::into_raw(completion);
         {
             let request = WalletEngineProtectedSecretStoreView::from(&request);
@@ -301,11 +361,7 @@ impl WalletPlatformHost for WalletEnginePlatformHostAdapter {
             unsafe { store(self.inner.callbacks.context, completion, &request) };
         }
 
-        receiver.await.unwrap_or_else(|_| {
-            Err(unsupported_protected_secret(
-                "store_protected_secret completion",
-            ))
-        })
+        receiver.await
     }
 
     async fn delete_protected_secret(

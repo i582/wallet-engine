@@ -7,13 +7,12 @@ use std::{
     mem::size_of,
     pin::pin,
     sync::{
-        Mutex, MutexGuard,
+        Arc, Mutex, MutexGuard,
         atomic::{AtomicPtr, AtomicUsize, Ordering},
     },
-    task::{Context, Poll},
+    task::{Context, Poll, Wake, Waker},
 };
 
-use futures::task::noop_waker_ref;
 use wallet_engine::{
     ProtectedSecretHostError, ProtectedSecretHostErrorKind, ProtectedSecretRef,
     ProtectedSecretStore, WalletPlatformHost,
@@ -45,6 +44,21 @@ struct TestContext {
     completion_statuses: Mutex<Vec<WalletEngineAbiStatus>>,
 }
 
+#[derive(Default)]
+struct WakeCounter {
+    calls: AtomicUsize,
+}
+
+impl Wake for WakeCounter {
+    fn wake(self: Arc<Self>) {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     match mutex.lock() {
         Ok(guard) => guard,
@@ -54,7 +68,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 fn poll_once<F: Future>(future: F) -> Option<F::Output> {
     let mut future = pin!(future);
-    let mut context = Context::from_waker(noop_waker_ref());
+    let mut context = Context::from_waker(Waker::noop());
     match future.as_mut().poll(&mut context) {
         Poll::Ready(output) => Some(output),
         Poll::Pending => None,
@@ -63,7 +77,7 @@ fn poll_once<F: Future>(future: F) -> Option<F::Output> {
 
 fn run_to_completion<F: Future>(future: F) -> F::Output {
     let mut future = pin!(future);
-    let mut context = Context::from_waker(noop_waker_ref());
+    let mut context = Context::from_waker(Waker::noop());
     loop {
         match future.as_mut().poll(&mut context) {
             Poll::Ready(output) => return output,
@@ -191,14 +205,13 @@ unsafe extern "C" fn store_invalid_then_success(
     let invalid = unsafe {
         wallet_engine_protected_secret_store_completion_complete(completion, &invalid_error)
     };
-    // SAFETY: Null denotes success. The invalid attempt above did not consume
-    // the completion ID.
+    // SAFETY: Null denotes success. The invalid attempt above did not complete
+    // the handle.
     let success = unsafe {
         wallet_engine_protected_secret_store_completion_complete(completion, std::ptr::null())
     };
-    // SAFETY: The successful attempt consumed the handle's sender, so this
-    // call is expected to reject the duplicate without dereferencing the null
-    // error.
+    // SAFETY: The successful attempt completed the handle, so this call is
+    // expected to reject the duplicate without dereferencing the null error.
     let duplicate = unsafe {
         wallet_engine_protected_secret_store_completion_complete(completion, std::ptr::null())
     };
@@ -445,6 +458,31 @@ fn completion_remains_safe_after_dropping_the_host_future() {
     };
     assert_eq!(status, WalletEngineAbiStatus::InvalidArgument);
     // SAFETY: The test owns the handle and has finished using it.
+    unsafe { wallet_engine_protected_secret_store_completion_free(completion) };
+}
+
+#[test]
+fn completion_records_result_without_waking_the_operation() {
+    let context = TestContext::default();
+    let callbacks = callback_table(&context, Some(store_without_completion));
+    // SAFETY: The callback table and context remain live through this test.
+    let host = unsafe { adapter(&callbacks) };
+    let mut future = pin!(host.store_protected_secret(store_request()));
+    let wake_counter = Arc::new(WakeCounter::default());
+    let waker = Waker::from(Arc::clone(&wake_counter));
+    let mut task_context = Context::from_waker(&waker);
+
+    assert_eq!(future.as_mut().poll(&mut task_context), Poll::Pending);
+    let completion = context.captured_completion.load(Ordering::Acquire);
+    assert!(!completion.is_null());
+    // SAFETY: The callback transferred this live handle to the test.
+    let status = unsafe {
+        wallet_engine_protected_secret_store_completion_complete(completion, std::ptr::null())
+    };
+    assert_eq!(status, WalletEngineAbiStatus::Ok);
+    assert_eq!(wake_counter.calls.load(Ordering::Relaxed), 0);
+    assert_eq!(future.as_mut().poll(&mut task_context), Poll::Ready(Ok(())));
+    // SAFETY: Completion returned and this test uniquely owns the handle.
     unsafe { wallet_engine_protected_secret_store_completion_free(completion) };
 }
 
