@@ -2,11 +2,14 @@
 
 use std::{fmt, mem, num::NonZeroU32, num::NonZeroUsize};
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de, de::DeserializeOwned};
 use thiserror::Error;
 use url::Url;
 
-use crate::{BridgeMessage, ClientId, TraceId};
+use crate::{
+    Base64Value, BridgeMessage, ClientId, SessionCrypto, SessionCryptoError, TraceId, ValueError,
+};
 
 /// Validated base URL of a TON Connect HTTP bridge.
 ///
@@ -102,6 +105,26 @@ impl HttpBridgeUrl {
         endpoint
     }
 
+    /// Encrypts and serializes one plaintext protocol value into a complete
+    /// runtime-neutral `POST /message` operation.
+    pub fn prepare_post<T: Serialize>(
+        &self,
+        crypto: &SessionCrypto,
+        recipient: ClientId,
+        ttl: NonZeroU32,
+        topic: Option<&str>,
+        trace_id: Option<&TraceId>,
+        payload: &T,
+    ) -> Result<PreparedBridgePost, BridgeCodecError> {
+        let plaintext = serde_json::to_vec(payload).map_err(BridgeCodecError::Json)?;
+        let encrypted = crypto.encrypt(recipient, &plaintext)?;
+        let body = Base64Value::try_from(STANDARD.encode(encrypted))?;
+        Ok(PreparedBridgePost {
+            url: self.message_endpoint(crypto.client_id(), recipient, ttl, topic, trace_id),
+            body,
+        })
+    }
+
     fn endpoint(&self, suffix: &str) -> Url {
         let mut endpoint = self.0.clone();
         let mut path = endpoint.path().trim_end_matches('/').to_owned();
@@ -109,6 +132,27 @@ impl HttpBridgeUrl {
         path.push_str(suffix);
         endpoint.set_path(&path);
         endpoint
+    }
+}
+
+/// Fully prepared body and URL for one HTTP bridge `POST /message` call.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreparedBridgePost {
+    url: Url,
+    body: Base64Value,
+}
+
+impl PreparedBridgePost {
+    /// Returns the URL that must receive an HTTP `POST`.
+    #[must_use]
+    pub const fn url(&self) -> &Url {
+        &self.url
+    }
+
+    /// Returns the raw base64 request body, without a JSON envelope.
+    #[must_use]
+    pub const fn body(&self) -> &Base64Value {
+        &self.body
     }
 }
 
@@ -187,6 +231,41 @@ impl BridgeSseMessage {
     pub fn into_message(self) -> BridgeMessage {
         self.message
     }
+
+    /// Authenticates, decrypts, and parses this SSE message for the fixed peer.
+    ///
+    /// Checking `expected_peer` before decryption is important when one SSE
+    /// connection subscribes to several local client IDs: ciphertext from an
+    /// unrelated session must never reach that session's request reducer.
+    pub fn decrypt<T: DeserializeOwned>(
+        &self,
+        crypto: &SessionCrypto,
+        expected_peer: ClientId,
+    ) -> Result<T, BridgeCodecError> {
+        if self.message.from() != expected_peer {
+            return Err(BridgeCodecError::UnexpectedPeer);
+        }
+        let encrypted = self.message.message().decode()?;
+        let plaintext = crypto.decrypt(expected_peer, &encrypted)?;
+        serde_json::from_slice(&plaintext).map_err(BridgeCodecError::Json)
+    }
+}
+
+/// Failure while encoding or decoding an end-to-end encrypted bridge value.
+#[derive(Debug, Error)]
+pub enum BridgeCodecError {
+    /// The bridge envelope came from a client other than the session peer.
+    #[error("bridge message sender does not match the TON Connect session peer")]
+    UnexpectedPeer,
+    /// Plaintext JSON could not be encoded or decoded as the requested type.
+    #[error("invalid TON Connect bridge plaintext: {0}")]
+    Json(serde_json::Error),
+    /// Base64 wire data is malformed.
+    #[error(transparent)]
+    InvalidBase64(#[from] ValueError),
+    /// Authenticated session encryption or decryption failed.
+    #[error(transparent)]
+    Crypto(#[from] SessionCryptoError),
 }
 
 /// Incremental decoder for the `text/event-stream` returned by `/events`.
@@ -322,8 +401,6 @@ pub enum HttpBridgeError {
 mod tests {
     use std::{error::Error, num::NonZeroUsize};
 
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
-
     use super::*;
     use crate::{AppRequest, SessionCrypto};
 
@@ -430,22 +507,34 @@ mod tests {
             params: Vec::new(),
             id: "7".to_owned(),
         };
-        let plaintext = serde_json::to_vec(&request)?;
-        let encrypted = dapp.encrypt(wallet.client_id(), &plaintext)?;
+        let bridge = HttpBridgeUrl::try_from("https://bridge.example/bridge")?;
+        let ttl = NonZeroU32::new(300).ok_or("TTL must be non-zero")?;
+        let post = bridge.prepare_post(
+            &dapp,
+            wallet.client_id(),
+            ttl,
+            Some("disconnect"),
+            None,
+            &request,
+        )?;
         let envelope = serde_json::json!({
             "from": dapp.client_id().to_string(),
-            "message": STANDARD.encode(encrypted)
+            "message": post.body().as_str()
         });
         let stream = format!("id: 9\ndata: {envelope}\n\n");
         let limit = NonZeroUsize::new(4096).ok_or("limit must be non-zero")?;
         let mut decoder = BridgeSseDecoder::new(limit);
         let messages = decoder.push(stream.as_bytes())?;
         let message = messages.first().ok_or("message must be decoded")?;
-        let ciphertext = message.message().message().decode()?;
-        let decrypted = wallet.decrypt(message.message().from(), &ciphertext)?;
+        let decrypted = message.decrypt::<AppRequest>(&wallet, dapp.client_id())?;
 
-        assert_eq!(serde_json::from_slice::<AppRequest>(&decrypted)?, request);
+        assert_eq!(decrypted, request);
         assert_eq!(message.event_id(), Some("9"));
+        assert!(post.url().as_str().contains("topic=disconnect"));
+        assert!(matches!(
+            message.decrypt::<AppRequest>(&wallet, ClientId::from_bytes([9_u8; 32])),
+            Err(BridgeCodecError::UnexpectedPeer)
+        ));
         Ok(())
     }
 }

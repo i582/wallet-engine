@@ -5,9 +5,9 @@ use serde_json::Value;
 
 use crate::{
     AccountVerificationError, Ed25519PublicKey, Ed25519Signature, EmbeddedResponse, EmptyObject,
-    HttpsUrl, NetworkId, NonEmptyVec, RawAccountAddress, SignatureDomain, SigningError,
-    StandardWalletState, Uint64String, WalletStateError, WalletStateInit, rpc::numeric_enum_serde,
-    ton_proof_signing_hash, verify_signature,
+    HttpsUrl, NetworkId, NonEmptyVec, RawAccountAddress, ResponseValidationError, SignatureDomain,
+    SigningError, StandardWalletState, Uint64String, WalletStateError, WalletStateInit,
+    rpc::numeric_enum_serde, ton_proof_signing_hash, verify_signature,
 };
 
 /// Request for the connected wallet address and optional target network hint.
@@ -474,7 +474,7 @@ fn all_unique<T: Eq>(values: &[T]) -> bool {
 }
 
 /// Wallet self-description returned in a successful connect event.
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DeviceInfo {
     /// Wallet runtime platform.
@@ -487,6 +487,93 @@ pub struct DeviceInfo {
     pub max_protocol_version: u32,
     /// Runtime-authoritative capability list.
     pub features: Vec<Feature>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DeviceInfoWire {
+    platform: DevicePlatform,
+    app_name: String,
+    app_version: String,
+    max_protocol_version: u32,
+    features: Vec<Feature>,
+}
+
+impl DeviceInfo {
+    /// Creates a validated runtime wallet descriptor.
+    pub fn new(
+        platform: DevicePlatform,
+        app_name: String,
+        app_version: String,
+        max_protocol_version: u32,
+        features: Vec<Feature>,
+    ) -> Result<Self, DeviceInfoValidationError> {
+        let value = Self {
+            platform,
+            app_name,
+            app_version,
+            max_protocol_version,
+            features,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Validates identity, protocol-version, and feature-set invariants.
+    pub fn validate(&self) -> Result<(), DeviceInfoValidationError> {
+        if self.app_name.is_empty() || self.app_version.is_empty() {
+            return Err(DeviceInfoValidationError::EmptyIdentity);
+        }
+        if self.max_protocol_version < u32::from(crate::PROTOCOL_VERSION) {
+            return Err(DeviceInfoValidationError::UnsupportedProtocolVersion);
+        }
+
+        let mut names = Vec::new();
+        for feature in &self.features {
+            let name = match feature {
+                Feature::LegacySendTransaction | Feature::SendTransaction(_) => "SendTransaction",
+                Feature::SignData(_) => "SignData",
+                Feature::SignMessage(_) => "SignMessage",
+                Feature::EmbeddedRequest => "EmbeddedRequest",
+            };
+            if names.contains(&name) {
+                return Err(DeviceInfoValidationError::DuplicateFeature);
+            }
+            names.push(name);
+        }
+        Ok(())
+    }
+}
+
+impl<'de> Deserialize<'de> for DeviceInfo {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = DeviceInfoWire::deserialize(deserializer)?;
+        Self::new(
+            wire.platform,
+            wire.app_name,
+            wire.app_version,
+            wire.max_protocol_version,
+            wire.features,
+        )
+        .map_err(de::Error::custom)
+    }
+}
+
+/// Runtime wallet metadata is not a valid protocol-v2 `DeviceInfo` value.
+#[derive(Clone, Copy, Debug, Eq, thiserror::Error, PartialEq)]
+pub enum DeviceInfoValidationError {
+    /// Wallet registry identity or application version is empty.
+    #[error("DeviceInfo appName and appVersion must be non-empty")]
+    EmptyIdentity,
+    /// The wallet does not report support for the current protocol revision.
+    #[error("DeviceInfo maxProtocolVersion does not support TON Connect v2")]
+    UnsupportedProtocolVersion,
+    /// More than one entry advertises the same runtime feature.
+    #[error("DeviceInfo contains a duplicate feature")]
+    DuplicateFeature,
 }
 
 /// Connected account information returned for `ton_addr`.
@@ -751,6 +838,16 @@ pub enum ConnectItemReply {
 }
 
 impl ConnectItemReply {
+    /// Returns the connect-item discriminator echoed by this reply.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        match self {
+            Self::TonAddress(_) => "ton_addr",
+            Self::TonProof(_) => "ton_proof",
+            Self::Error(error) => error.name(),
+        }
+    }
+
     /// Creates the protocol-required error for an unsupported requested item.
     #[must_use]
     pub fn unsupported(item: &ConnectItem, message: Option<String>) -> Self {
@@ -858,6 +955,141 @@ impl ConnectEvent {
     pub const fn terminates_session(&self) -> bool {
         matches!(self, Self::ConnectError { .. } | Self::Disconnect { .. })
     }
+
+    /// Validates a connect response against the exact request and optional
+    /// embedded action carried by the link.
+    ///
+    /// Replies may be reordered, but their names and multiplicities must match
+    /// the requested items. A successful connect always needs exactly one
+    /// successful `ton_addr` reply because that address becomes the immutable
+    /// session identity.
+    pub fn validate_for_connect(
+        &self,
+        request: &ConnectRequest,
+        embedded_request: Option<&crate::EmbeddedRequest>,
+    ) -> Result<(), ConnectValidationError> {
+        let Self::Connect {
+            payload, response, ..
+        } = self
+        else {
+            return if matches!(self, Self::ConnectError { .. }) {
+                Ok(())
+            } else {
+                Err(ConnectValidationError::NotAConnectResponse)
+            };
+        };
+
+        payload.device.validate()?;
+        let requested = request.items.as_slice();
+        if requested
+            .iter()
+            .filter(|item| matches!(item, ConnectItem::TonAddr { .. }))
+            .count()
+            != 1
+        {
+            return Err(ConnectValidationError::InvalidTonAddressRequest);
+        }
+        if requested.len() != payload.items.len()
+            || requested.iter().any(|item| {
+                let requested_count = requested
+                    .iter()
+                    .filter(|candidate| candidate.name() == item.name())
+                    .count();
+                let reply_count = payload
+                    .items
+                    .iter()
+                    .filter(|reply| reply.name() == item.name())
+                    .count();
+                requested_count != reply_count
+            })
+        {
+            return Err(ConnectValidationError::ItemReplyMismatch);
+        }
+
+        let mut accounts = payload.items.iter().filter_map(|reply| match reply {
+            ConnectItemReply::TonAddress(account) => Some(account),
+            ConnectItemReply::TonProof(_) | ConnectItemReply::Error(_) => None,
+        });
+        let Some(account) = accounts.next() else {
+            return Err(ConnectValidationError::MissingTonAddressReply);
+        };
+        if accounts.next().is_some() {
+            return Err(ConnectValidationError::MultipleTonAddressReplies);
+        }
+        let requested_network = requested.iter().find_map(|item| match item {
+            ConnectItem::TonAddr { network } => network.as_ref(),
+            ConnectItem::TonProof { .. } | ConnectItem::Unsupported { .. } => None,
+        });
+        if requested_network.is_some_and(|network| network != &account.network) {
+            return Err(ConnectValidationError::NetworkMismatch);
+        }
+
+        for proof in payload.items.iter().filter_map(|reply| match reply {
+            ConnectItemReply::TonProof(reply) => Some(&reply.proof),
+            ConnectItemReply::TonAddress(_) | ConnectItemReply::Error(_) => None,
+        }) {
+            if !requested.iter().any(|item| {
+                matches!(item, ConnectItem::TonProof { payload } if payload == &proof.payload)
+            }) {
+                return Err(ConnectValidationError::ProofPayloadMismatch);
+            }
+        }
+
+        let supports_embedded = payload
+            .device
+            .features
+            .iter()
+            .any(|feature| matches!(feature, Feature::EmbeddedRequest));
+        match (embedded_request, response, supports_embedded) {
+            (None, None, false | true) | (Some(_), None, false) => Ok(()),
+            (None, Some(_), false | true) | (Some(_), Some(_), false) => {
+                Err(ConnectValidationError::UnexpectedEmbeddedResponse)
+            }
+            (Some(_), None, true) => Err(ConnectValidationError::MissingEmbeddedResponse),
+            (Some(request), Some(response), true) => {
+                let _ = response.validate_for(request)?;
+                Ok(())
+            }
+        }
+    }
+}
+
+/// A connect event cannot be correlated safely with its initiating request.
+#[derive(Clone, Debug, Eq, thiserror::Error, PartialEq)]
+pub enum ConnectValidationError {
+    /// A disconnect event was passed where a connect response was expected.
+    #[error("disconnect event is not a response to a connect request")]
+    NotAConnectResponse,
+    /// A successful connection requires exactly one requested `ton_addr` item.
+    #[error("connect request must contain exactly one ton_addr item")]
+    InvalidTonAddressRequest,
+    /// Reply names or counts do not match the requested items.
+    #[error("connect item replies do not match the request")]
+    ItemReplyMismatch,
+    /// The wallet did not return the account required to establish a session.
+    #[error("successful connect event has no ton_addr reply")]
+    MissingTonAddressReply,
+    /// More than one account identity was returned for one session.
+    #[error("successful connect event has multiple ton_addr replies")]
+    MultipleTonAddressReplies,
+    /// The returned account network differs from the explicit request network.
+    #[error("connected account network differs from the requested network")]
+    NetworkMismatch,
+    /// A proof does not echo any challenge from the connect request.
+    #[error("ton_proof reply payload does not match the requested challenge")]
+    ProofPayloadMismatch,
+    /// A response appeared without a supported embedded request.
+    #[error("connect event contains an unexpected embedded response")]
+    UnexpectedEmbeddedResponse,
+    /// The wallet advertised embedded support but omitted the action response.
+    #[error("connect event omitted the embedded request response")]
+    MissingEmbeddedResponse,
+    /// Runtime wallet metadata violates protocol invariants.
+    #[error(transparent)]
+    InvalidDeviceInfo(#[from] DeviceInfoValidationError),
+    /// Embedded action result does not match its method.
+    #[error(transparent)]
+    InvalidEmbeddedResponse(#[from] ResponseValidationError),
 }
 
 #[cfg(test)]
@@ -948,6 +1180,22 @@ mod tests {
         for value in invalid {
             assert!(
                 serde_json::from_str::<Feature>(value).is_err(),
+                "accepted {value}"
+            );
+        }
+    }
+
+    #[test]
+    fn device_info_rejects_invalid_identity_version_and_duplicate_features() {
+        let invalid = [
+            r#"{"platform":"browser","appName":"","appVersion":"1","maxProtocolVersion":2,"features":[]}"#,
+            r#"{"platform":"browser","appName":"wallet","appVersion":"","maxProtocolVersion":2,"features":[]}"#,
+            r#"{"platform":"browser","appName":"wallet","appVersion":"1","maxProtocolVersion":1,"features":[]}"#,
+            r#"{"platform":"browser","appName":"wallet","appVersion":"1","maxProtocolVersion":2,"features":["SendTransaction",{"name":"SendTransaction","maxMessages":4}]}"#,
+        ];
+        for value in invalid {
+            assert!(
+                serde_json::from_str::<DeviceInfo>(value).is_err(),
                 "accepted {value}"
             );
         }

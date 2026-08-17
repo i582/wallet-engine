@@ -4,7 +4,10 @@ use std::future::Future;
 
 use thiserror::Error;
 
-use crate::{AppRequest, ConnectEvent, ConnectRequest, DeviceInfo, HttpsUrl, WalletResponse};
+use crate::{
+    AppRequest, ConnectEvent, ConnectRequest, DeviceInfo, DeviceInfoValidationError, HttpsUrl,
+    WalletResponse,
+};
 
 /// Optional wallet metadata exposed directly by an injected bridge.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -84,6 +87,7 @@ impl JsBridgeDescriptor {
         protocol_version: u32,
         is_wallet_browser: bool,
     ) -> Result<Self, JsBridgeContractError> {
+        device_info.validate()?;
         if protocol_version == 0 || protocol_version != device_info.max_protocol_version {
             return Err(JsBridgeContractError::ProtocolVersionMismatch);
         }
@@ -171,6 +175,9 @@ pub enum JsBridgeContractError {
     /// Bridge and `DeviceInfo` protocol versions differ or are zero.
     #[error("injected bridge protocol version does not match DeviceInfo")]
     ProtocolVersionMismatch,
+    /// Injected runtime metadata violates `DeviceInfo` invariants.
+    #[error(transparent)]
+    InvalidDeviceInfo(#[from] DeviceInfoValidationError),
 }
 
 #[cfg(test)]

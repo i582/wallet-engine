@@ -7,8 +7,8 @@ use thiserror::Error;
 use crate::{
     AccountAddress, AccountVerificationError, Base64Value, CellBoc, DecimalString,
     Ed25519PublicKey, Ed25519Signature, FriendlyAddress, NetworkId, NonEmptyVec, RawAccountAddress,
-    SignDataSigningPayload, SignatureDomain, SigningError, TonAddressItemReply,
-    sign_data_signing_hash, verify_signature,
+    SignDataSigningPayload, SignDataType, SignatureDomain, SigningError, StructuredItemType,
+    TonAddressItemReply, sign_data_signing_hash, verify_signature,
 };
 
 /// Extra-currency identifier to non-negative elementary-unit amount.
@@ -56,9 +56,9 @@ pub enum StructuredItem {
     /// TEP-74 jetton transfer.
     Jetton {
         /// Jetton master contract address.
-        master: String,
+        master: AccountAddress,
         /// Recipient address.
-        destination: String,
+        destination: AccountAddress,
         /// Jetton elementary-unit amount.
         amount: DecimalString,
         /// Optional attached TON amount in nanocoins.
@@ -72,7 +72,7 @@ pub enum StructuredItem {
             rename = "responseDestination",
             skip_serializing_if = "Option::is_none"
         )]
-        response_destination: Option<String>,
+        response_destination: Option<AccountAddress>,
         /// Optional base64 `custom_payload` cell `BoC`.
         #[serde(rename = "customPayload", skip_serializing_if = "Option::is_none")]
         custom_payload: Option<CellBoc>,
@@ -87,10 +87,10 @@ pub enum StructuredItem {
     Nft {
         /// NFT item contract address.
         #[serde(rename = "nftAddress")]
-        nft_address: String,
+        nft_address: AccountAddress,
         /// New owner address.
         #[serde(rename = "newOwner")]
-        new_owner: String,
+        new_owner: AccountAddress,
         /// Optional attached TON amount in nanocoins.
         #[serde(rename = "attachAmount", skip_serializing_if = "Option::is_none")]
         attach_amount: Option<DecimalString>,
@@ -102,7 +102,7 @@ pub enum StructuredItem {
             rename = "responseDestination",
             skip_serializing_if = "Option::is_none"
         )]
-        response_destination: Option<String>,
+        response_destination: Option<AccountAddress>,
         /// Optional base64 `custom_payload` cell `BoC`.
         #[serde(rename = "customPayload", skip_serializing_if = "Option::is_none")]
         custom_payload: Option<CellBoc>,
@@ -153,7 +153,7 @@ pub struct StructuredTransactionPayload {
 ///
 /// The untagged representation enforces the protocol's exclusive choice:
 /// exactly one of `messages` or `items` must be present.
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum TransactionPayload {
     /// Raw caller-built messages.
@@ -162,7 +162,88 @@ pub enum TransactionPayload {
     Structured(StructuredTransactionPayload),
 }
 
+impl<'de> Deserialize<'de> for TransactionPayload {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        let Value::Object(object) = &value else {
+            return Err(de::Error::custom("transaction payload must be an object"));
+        };
+        match (
+            object.contains_key("messages"),
+            object.contains_key("items"),
+        ) {
+            (true, false) => serde_json::from_value::<RawTransactionPayload>(value)
+                .map(Self::Raw)
+                .map_err(de::Error::custom),
+            (false, true) => serde_json::from_value::<StructuredTransactionPayload>(value)
+                .map(Self::Structured)
+                .map_err(de::Error::custom),
+            (true, true) | (false, false) => Err(de::Error::custom(
+                "transaction payload requires exactly one of messages or items",
+            )),
+        }
+    }
+}
+
 impl TransactionPayload {
+    /// Returns the number of raw messages or structured items in the request.
+    #[must_use]
+    pub fn message_count(&self) -> usize {
+        match self {
+            Self::Raw(payload) => payload.messages.as_slice().len(),
+            Self::Structured(payload) => payload.items.as_slice().len(),
+        }
+    }
+
+    /// Reports whether the request transfers any TEP-92 extra currency.
+    #[must_use]
+    pub fn uses_extra_currency(&self) -> bool {
+        match self {
+            Self::Raw(payload) => payload.messages.as_slice().iter().any(|message| {
+                message
+                    .extra_currency
+                    .as_ref()
+                    .is_some_and(|currencies| !currencies.is_empty())
+            }),
+            Self::Structured(payload) => payload.items.as_slice().iter().any(|item| {
+                matches!(
+                    item,
+                    StructuredItem::Ton {
+                        extra_currency: Some(currencies),
+                        ..
+                    } if !currencies.is_empty()
+                )
+            }),
+        }
+    }
+
+    /// Returns the structured item kinds used by this request.
+    ///
+    /// `None` identifies the raw `messages` form. A non-empty slice identifies
+    /// the `items` form and retains duplicates because each item still counts
+    /// towards the wallet's advertised `maxMessages` limit.
+    #[must_use]
+    pub fn structured_item_types(&self) -> Option<Vec<StructuredItemType>> {
+        let Self::Structured(payload) = self else {
+            return None;
+        };
+        Some(
+            payload
+                .items
+                .as_slice()
+                .iter()
+                .map(|item| match item {
+                    StructuredItem::Ton { .. } => StructuredItemType::Ton,
+                    StructuredItem::Jetton { .. } => StructuredItemType::Jetton,
+                    StructuredItem::Nft { .. } => StructuredItemType::Nft,
+                })
+                .collect(),
+        )
+    }
+
     /// Validates time, network, and fixed-sender constraints common to
     /// `sendTransaction` and `signMessage`.
     pub fn validate_context(
@@ -232,6 +313,16 @@ pub enum SignDataPayload {
 }
 
 impl SignDataPayload {
+    /// Returns the capability discriminator required to process this payload.
+    #[must_use]
+    pub const fn data_type(&self) -> SignDataType {
+        match self {
+            Self::Text { .. } => SignDataType::Text,
+            Self::Binary { .. } => SignDataType::Binary,
+            Self::Cell { .. } => SignDataType::Cell,
+        }
+    }
+
     /// Validates optional network and signer constraints for `signData`.
     pub fn validate_context(
         &self,

@@ -9,6 +9,7 @@
 
 mod account_address;
 mod bridge;
+mod capability;
 mod cell_boc;
 mod connect;
 mod deep_link;
@@ -28,13 +29,15 @@ mod wallets_list;
 
 pub use account_address::{AccountAddress, AccountAddressError};
 pub use bridge::BridgeMessage;
+pub use capability::CapabilityError;
 pub use cell_boc::{CellBoc, CellBocError};
 pub use connect::{
     ConnectEvent, ConnectEventError, ConnectEventErrorCode, ConnectEventPayload, ConnectItem,
-    ConnectItemError, ConnectItemErrorCode, ConnectItemReply, ConnectRequest, DeviceInfo,
-    DevicePlatform, Feature, FeatureValidationError, SendTransactionFeature, SignDataFeature,
-    SignDataType, SignMessageFeature, StructuredItemType, TonAddressItem, TonAddressItemReply,
-    TonProof, TonProofDomain, TonProofItem, TonProofItemReply, UnsupportedConnectItemError,
+    ConnectItemError, ConnectItemErrorCode, ConnectItemReply, ConnectRequest,
+    ConnectValidationError, DeviceInfo, DeviceInfoValidationError, DevicePlatform, Feature,
+    FeatureValidationError, SendTransactionFeature, SignDataFeature, SignDataType,
+    SignMessageFeature, StructuredItemType, TonAddressItem, TonAddressItemReply, TonProof,
+    TonProofDomain, TonProofItem, TonProofItemReply, UnsupportedConnectItemError,
 };
 pub use deep_link::{ConnectLink, ConnectLinkError, ReturnStrategy};
 pub use embedded::{
@@ -42,7 +45,10 @@ pub use embedded::{
     EmbeddedResponseSuccess, decode_embedded_request_param, encode_embedded_request_param,
 };
 pub use friendly_address::{FriendlyAddress, FriendlyAddressError};
-pub use http_bridge::{BridgeSseDecoder, BridgeSseMessage, HttpBridgeError, HttpBridgeUrl};
+pub use http_bridge::{
+    BridgeCodecError, BridgeSseDecoder, BridgeSseMessage, HttpBridgeError, HttpBridgeUrl,
+    PreparedBridgePost,
+};
 pub use http_session::{HttpSessionError, PersistedHttpSession};
 pub use js_bridge::{
     InjectedWalletInfo, JsBridge, JsBridgeContractError, JsBridgeDescriptor, JsBridgeEventListener,

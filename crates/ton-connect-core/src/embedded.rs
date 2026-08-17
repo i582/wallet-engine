@@ -1,11 +1,14 @@
 use base64::{Engine as _, engine::general_purpose};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de};
+use serde_json::Value;
 use thiserror::Error;
 
 use crate::{
     AccountAddress, Base64Value, CellBoc, DecimalString, ExtraCurrencies, FriendlyAddress,
-    NetworkId, NonEmptyVec, RawMessage, RawTransactionPayload, SignDataPayload, StructuredItem,
-    StructuredTransactionPayload, TransactionPayload, WalletResponseError, WalletResult,
+    KnownAppRequest, KnownWalletResponse, NetworkId, NonEmptyVec, RawMessage,
+    RawTransactionPayload, ResponseValidationError, SendTransactionRequest, SignDataPayload,
+    SignDataRequest, SignMessageRequest, StructuredItem, StructuredTransactionPayload,
+    TransactionPayload, WalletResponse, WalletResponseError, WalletResponseSuccess, WalletResult,
 };
 
 /// An RPC request embedded in a connect link, before a request ID exists.
@@ -30,6 +33,49 @@ pub enum EmbeddedResponse {
     Success(EmbeddedResponseSuccess),
     /// Embedded action returned an error while connect still succeeded.
     Error(EmbeddedResponseError),
+}
+
+impl EmbeddedResponse {
+    /// Validates the result shape and error catalogue against the embedded
+    /// method that produced it.
+    ///
+    /// Embedded responses omit only the ordinary RPC `id`; every other result
+    /// rule is identical, so validation deliberately reuses the normal
+    /// request/response correlator with an internal empty identifier.
+    pub fn validate_for(
+        &self,
+        request: &EmbeddedRequest,
+    ) -> Result<KnownWalletResponse, ResponseValidationError> {
+        let request = match request {
+            EmbeddedRequest::SendTransaction(payload) => {
+                KnownAppRequest::SendTransaction(SendTransactionRequest {
+                    id: String::new(),
+                    payload: payload.clone(),
+                })
+            }
+            EmbeddedRequest::SignMessage(payload) => {
+                KnownAppRequest::SignMessage(SignMessageRequest {
+                    id: String::new(),
+                    payload: payload.clone(),
+                })
+            }
+            EmbeddedRequest::SignData(payload) => KnownAppRequest::SignData(SignDataRequest {
+                id: String::new(),
+                payload: payload.clone(),
+            }),
+        };
+        let response = match self {
+            Self::Success(response) => WalletResponse::Success(WalletResponseSuccess {
+                result: response.result.clone(),
+                id: String::new(),
+            }),
+            Self::Error(response) => WalletResponse::Error {
+                error: response.error.clone(),
+                id: String::new(),
+            },
+        };
+        response.validate_for(&request)
+    }
 }
 
 /// Success body for an embedded action.
@@ -97,11 +143,36 @@ struct WireTransactionRequest {
     payload: WireTransactionPayload,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Serialize)]
 #[serde(untagged)]
 enum WireTransactionPayload {
     Raw(WireRawTransaction),
     Structured(WireStructuredTransaction),
+}
+
+impl<'de> Deserialize<'de> for WireTransactionPayload {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        let Value::Object(object) = &value else {
+            return Err(de::Error::custom(
+                "embedded transaction payload must be an object",
+            ));
+        };
+        match (object.contains_key("ms"), object.contains_key("i")) {
+            (true, false) => serde_json::from_value::<WireRawTransaction>(value)
+                .map(Self::Raw)
+                .map_err(de::Error::custom),
+            (false, true) => serde_json::from_value::<WireStructuredTransaction>(value)
+                .map(Self::Structured)
+                .map_err(de::Error::custom),
+            (true, true) | (false, false) => Err(de::Error::custom(
+                "embedded transaction requires exactly one of ms or i",
+            )),
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -155,15 +226,15 @@ enum WireItem {
         ec: Option<ExtraCurrencies>,
     },
     Jetton {
-        ma: String,
-        d: String,
+        ma: AccountAddress,
+        d: AccountAddress,
         am: DecimalString,
         #[serde(skip_serializing_if = "Option::is_none")]
         aa: Option<DecimalString>,
         #[serde(skip_serializing_if = "Option::is_none")]
         qi: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        rd: Option<String>,
+        rd: Option<AccountAddress>,
         #[serde(skip_serializing_if = "Option::is_none")]
         cp: Option<CellBoc>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -172,14 +243,14 @@ enum WireItem {
         fp: Option<CellBoc>,
     },
     Nft {
-        na: String,
-        no: String,
+        na: AccountAddress,
+        no: AccountAddress,
         #[serde(skip_serializing_if = "Option::is_none")]
         aa: Option<DecimalString>,
         #[serde(skip_serializing_if = "Option::is_none")]
         qi: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        rd: Option<String>,
+        rd: Option<AccountAddress>,
         #[serde(skip_serializing_if = "Option::is_none")]
         cp: Option<CellBoc>,
         #[serde(skip_serializing_if = "Option::is_none")]
