@@ -43,6 +43,10 @@ mod engine;
 mod types;
 mod wallet;
 
+#[cfg(feature = "c-abi")]
+#[doc(hidden)]
+pub mod c_abi;
+
 pub use domain::*;
 pub use engine::{WalletClient, WalletHttpHost, WalletPlatformHost};
 pub use types::{

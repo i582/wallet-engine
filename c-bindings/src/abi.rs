@@ -5,16 +5,16 @@ use std::ffi::c_char;
 /// The major version of the Wallet Engine C ABI.
 ///
 /// A breaking change to exported types or functions must increment this value.
-pub const ABI_VERSION: u32 = 2;
+pub const ABI_VERSION: u32 = 3;
 
 /// The immediate result of a C ABI function call.
 ///
-/// Asynchronous domain failures will use their own error types. This status is
+/// Domain failures use their own error types. This status is
 /// reserved for failures at the language boundary itself.
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WalletEngineAbiStatus {
-    /// The ABI call completed or started successfully.
+    /// The synchronous ABI call completed successfully.
     Ok = 0,
     /// An argument is null, malformed, or outside its accepted range.
     InvalidArgument = 1,
@@ -22,8 +22,6 @@ pub enum WalletEngineAbiStatus {
     InvalidUtf8 = 2,
     /// Rust caught a panic before it crossed the C boundary.
     Panic = 3,
-    /// Another thread is currently polling the same operation handle.
-    OperationBusy = 4,
 }
 
 /// A borrowed, non-NUL-terminated UTF-8 string.

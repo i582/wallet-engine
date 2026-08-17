@@ -272,7 +272,7 @@ impl WalletLifecycle {
     }
 }
 
-fn derive_descriptor(
+pub(crate) fn derive_descriptor(
     record_id: &str,
     network: Network,
     secret: &SensitiveMnemonic,
@@ -309,7 +309,9 @@ fn derive_address(
     Ok(wallet.address.clone())
 }
 
-fn recovery_phrase(secret: &SensitiveMnemonic) -> Result<RecoveryPhrase, WalletLifecycleError> {
+pub(crate) fn recovery_phrase(
+    secret: &SensitiveMnemonic,
+) -> Result<RecoveryPhrase, WalletLifecycleError> {
     Ok(RecoveryPhrase {
         phrase: secret
             .as_str()
@@ -339,7 +341,7 @@ fn validate_descriptor(descriptor: &WalletDescriptor) -> Result<(), WalletLifecy
     Ok(())
 }
 
-fn validate_record_id(record_id: &str) -> Result<(), WalletLifecycleError> {
+pub(crate) fn validate_record_id(record_id: &str) -> Result<(), WalletLifecycleError> {
     if record_id.is_empty()
         || record_id.len() > MAX_RECORD_ID_BYTES
         || !record_id

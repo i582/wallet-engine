@@ -4,6 +4,14 @@
 //! panic containment needed by native consumers. The core `wallet-engine`
 //! crate remains a Rust API and contains no C ABI declarations.
 
+use wallet_engine::ProtectedSecretHostError;
+
+#[derive(Debug)]
+enum StoreProtectedSecretError {
+    Abi(WalletEngineAbiStatus),
+    Host(ProtectedSecretHostError),
+}
+
 // Exporting stable symbols requires Rust's unsafe `no_mangle` attribute. Keep
 // that exception local to the ABI modules.
 #[allow(unsafe_code)]
@@ -21,18 +29,13 @@ pub use abi::{
 pub use host::{
     WALLET_ENGINE_PLATFORM_HOST_CALLBACKS_SIZE, WalletEngineContextReleaseFn,
     WalletEngineContextRetainFn, WalletEnginePlatformHostAdapter,
-    WalletEnginePlatformHostCallbacks, WalletEngineProtectedSecretStoreCompletion,
-    WalletEngineStoreProtectedSecretFn, wallet_engine_protected_secret_store_completion_complete,
-    wallet_engine_protected_secret_store_completion_free,
+    WalletEnginePlatformHostCallbacks, WalletEngineProtectedSecretStoreResultFn,
+    WalletEngineStoreProtectedSecretFn,
 };
 pub use lifecycle::{
-    WalletEngineCreateWalletOperation, WalletEngineCreateWalletResultFn,
-    WalletEngineImportWalletOperation, WalletEngineImportWalletResultFn, WalletEngineLifecycle,
-    WalletEngineOperationPollState, wallet_engine_create_wallet_operation_free,
-    wallet_engine_create_wallet_operation_poll, wallet_engine_import_wallet_operation_free,
-    wallet_engine_import_wallet_operation_poll, wallet_engine_lifecycle_create_wallet_start,
-    wallet_engine_lifecycle_free, wallet_engine_lifecycle_import_wallet_start,
-    wallet_engine_lifecycle_new,
+    WalletEngineCreateWalletResultFn, WalletEngineImportWalletResultFn, WalletEngineLifecycle,
+    wallet_engine_lifecycle_create_wallet, wallet_engine_lifecycle_free,
+    wallet_engine_lifecycle_import_wallet, wallet_engine_lifecycle_new,
 };
 pub use types::{
     WALLET_ENGINE_NETWORK_MAINNET, WALLET_ENGINE_NETWORK_TESTNET,

@@ -115,8 +115,8 @@ impl WalletEngineStringViewSlice {
 
 /// A borrowed request to import an existing V5R1 wallet.
 ///
-/// The request and all recovery-word views are copied by `import_wallet_start`.
-/// The client may release its input storage as soon as that call returns.
+/// The request and all recovery-word views are consumed synchronously by
+/// `wallet_engine_lifecycle_import_wallet` and are never retained.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct WalletEngineImportWalletRequest {
@@ -134,8 +134,8 @@ impl WalletEngineImportWalletRequest {
     /// # Errors
     ///
     /// Returns an ABI status when any input view or the network value is
-    /// malformed. Mnemonic and record-ID domain validation happens during
-    /// explicit operation polling.
+    /// malformed. Mnemonic and record-ID domain validation happens during the
+    /// synchronous lifecycle call.
     ///
     /// # Safety
     ///

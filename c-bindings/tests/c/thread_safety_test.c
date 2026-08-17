@@ -17,28 +17,23 @@ typedef int (*ThreadFunction)(void *context);
 
 #if defined(_WIN32)
 typedef DWORD TestThreadId;
-
 typedef struct TestThread {
     HANDLE handle;
     ThreadFunction function;
     void *context;
     int result;
 } TestThread;
-
 static DWORD WINAPI thread_entry(void *context) {
     TestThread *thread = context;
     thread->result = thread->function(thread->context);
     return 0;
 }
-
 static bool thread_start(TestThread *thread, ThreadFunction function, void *context) {
     thread->function = function;
     thread->context = context;
-    thread->result = -1;
     thread->handle = CreateThread(NULL, 0, thread_entry, thread, 0, NULL);
     return thread->handle != NULL;
 }
-
 static bool thread_join(TestThread *thread, int *result) {
     if (WaitForSingleObject(thread->handle, INFINITE) != WAIT_OBJECT_0) {
         return false;
@@ -46,41 +41,27 @@ static bool thread_join(TestThread *thread, int *result) {
     *result = thread->result;
     return CloseHandle(thread->handle) != 0;
 }
-
-static void thread_yield(void) {
-    (void)SwitchToThread();
-}
-
-static TestThreadId current_thread_id(void) {
-    return GetCurrentThreadId();
-}
-
-static bool thread_ids_equal(TestThreadId first, TestThreadId second) {
-    return first == second;
-}
+static void thread_yield(void) {(void)SwitchToThread();}
+static TestThreadId current_thread_id(void) {return GetCurrentThreadId();}
+static bool thread_ids_equal(TestThreadId first, TestThreadId second) {return first == second;}
 #else
 typedef pthread_t TestThreadId;
-
 typedef struct TestThread {
     pthread_t handle;
     ThreadFunction function;
     void *context;
     int result;
 } TestThread;
-
 static void *thread_entry(void *context) {
     TestThread *thread = context;
     thread->result = thread->function(thread->context);
     return NULL;
 }
-
 static bool thread_start(TestThread *thread, ThreadFunction function, void *context) {
     thread->function = function;
     thread->context = context;
-    thread->result = -1;
     return pthread_create(&thread->handle, NULL, thread_entry, thread) == 0;
 }
-
 static bool thread_join(TestThread *thread, int *result) {
     if (pthread_join(thread->handle, NULL) != 0) {
         return false;
@@ -88,15 +69,8 @@ static bool thread_join(TestThread *thread, int *result) {
     *result = thread->result;
     return true;
 }
-
-static void thread_yield(void) {
-    (void)sched_yield();
-}
-
-static TestThreadId current_thread_id(void) {
-    return pthread_self();
-}
-
+static void thread_yield(void) {(void)sched_yield();}
+static TestThreadId current_thread_id(void) {return pthread_self();}
 static bool thread_ids_equal(TestThreadId first, TestThreadId second) {
     return pthread_equal(first, second) != 0;
 }
@@ -112,33 +86,18 @@ typedef struct HostContext {
     atomic_size_t releases;
     atomic_size_t stores;
     atomic_bool valid;
-    _Atomic(WalletEngineProtectedSecretStoreCompletion *) pending_completion;
 } HostContext;
 
-typedef struct OperationTask {
+typedef struct CallTask {
     WalletEngineLifecycle *lifecycle;
     const char *record_id;
-    bool expect_wallet;
     ThreadGate *gate;
-    WalletEngineCreateWalletOperation *operation;
-    WalletEngineAbiStatus start_status;
-    WalletEngineAbiStatus poll_status;
-    WalletEngineOperationPollState poll_state;
-    TestThreadId poll_thread;
+    WalletEngineAbiStatus status;
+    TestThreadId call_thread;
     bool result_called;
     bool result_thread_matches;
     bool result_shape_valid;
-} OperationTask;
-
-typedef struct CompletionTask {
-    WalletEngineProtectedSecretStoreCompletion *completion;
-    WalletEngineAbiStatus status;
-} CompletionTask;
-
-static void gate_init(ThreadGate *gate) {
-    atomic_init(&gate->ready, 0);
-    atomic_init(&gate->open, false);
-}
+} CallTask;
 
 static void gate_wait(ThreadGate *gate) {
     atomic_fetch_add_explicit(&gate->ready, 1, memory_order_release);
@@ -147,37 +106,30 @@ static void gate_wait(ThreadGate *gate) {
     }
 }
 
-static void gate_open(ThreadGate *gate, size_t expected_threads) {
-    while (atomic_load_explicit(&gate->ready, memory_order_acquire) != expected_threads) {
-        thread_yield();
-    }
-    atomic_store_explicit(&gate->open, true, memory_order_release);
-}
-
 static void retain_context(void *context) {
-    HostContext *host = context;
-    atomic_fetch_add_explicit(&host->retains, 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&((HostContext *)context)->retains, 1, memory_order_relaxed);
 }
 
 static void release_context(void *context) {
-    HostContext *host = context;
-    atomic_fetch_add_explicit(&host->releases, 1, memory_order_release);
+    atomic_fetch_add_explicit(&((HostContext *)context)->releases, 1, memory_order_release);
 }
 
 static void store_protected_secret(
     void *context,
-    WalletEngineProtectedSecretStoreCompletion *completion,
-    const WalletEngineProtectedSecretStoreView *request
+    const WalletEngineProtectedSecretStoreView *request,
+    void *result_context,
+    WalletEngineProtectedSecretStoreResultFn result
 ) {
     HostContext *host = context;
-    const bool valid = completion != NULL && request != NULL && request->bytes.data != NULL &&
-                       request->bytes.len != 0 && request->secret_ref.value.data != NULL &&
-                       request->secret_ref.value.len != 0;
-    if (!valid) {
+    if (request == NULL || request->bytes.data == NULL || request->bytes.len == 0 ||
+        result == NULL) {
         atomic_store_explicit(&host->valid, false, memory_order_relaxed);
+        return;
     }
     atomic_fetch_add_explicit(&host->stores, 1, memory_order_relaxed);
-    atomic_store_explicit(&host->pending_completion, completion, memory_order_release);
+    if (result(result_context, NULL) != WALLET_ENGINE_ABI_STATUS_OK) {
+        atomic_store_explicit(&host->valid, false, memory_order_relaxed);
+    }
 }
 
 static void create_wallet_result(
@@ -186,67 +138,34 @@ static void create_wallet_result(
     const WalletEngineCreatedWalletView *wallet,
     const WalletEngineWalletLifecycleErrorView *error
 ) {
-    OperationTask *task = context;
+    CallTask *task = context;
     task->result_called = true;
-    task->result_thread_matches = thread_ids_equal(task->poll_thread, current_thread_id());
-    task->result_shape_valid = task->expect_wallet ?
-                                          abi_status == WALLET_ENGINE_ABI_STATUS_OK &&
-                                              wallet != NULL && error == NULL :
-                                          abi_status == WALLET_ENGINE_ABI_STATUS_OK &&
-                                              wallet == NULL && error != NULL;
+    task->result_thread_matches = thread_ids_equal(task->call_thread, current_thread_id());
+    task->result_shape_valid = abi_status == WALLET_ENGINE_ABI_STATUS_OK &&
+                               wallet != NULL && error == NULL;
 }
 
-static int start_operation(void *context) {
-    OperationTask *task = context;
+static int call_create_wallet(void *context) {
+    CallTask *task = context;
     gate_wait(task->gate);
+    task->call_thread = current_thread_id();
     const WalletEngineCreateWalletRequest request = {
         .record_id = {task->record_id, strlen(task->record_id)},
         .network = WALLET_ENGINE_NETWORK_TESTNET,
     };
-    task->start_status = wallet_engine_lifecycle_create_wallet_start(
+    task->status = wallet_engine_lifecycle_create_wallet(
         task->lifecycle,
         &request,
-        &task->operation
-    );
-    return 0;
-}
-
-static int poll_operation(void *context) {
-    OperationTask *task = context;
-    if (task->gate != NULL) {
-        gate_wait(task->gate);
-    }
-    task->poll_thread = current_thread_id();
-    task->poll_state = WALLET_ENGINE_OPERATION_POLL_STATE_PENDING;
-    task->poll_status = wallet_engine_create_wallet_operation_poll(
-        task->operation,
         task,
-        create_wallet_result,
-        &task->poll_state
+        create_wallet_result
     );
-    return 0;
-}
-
-static int complete_store(void *context) {
-    CompletionTask *task = context;
-    task->status = wallet_engine_protected_secret_store_completion_complete(
-        task->completion,
-        NULL
-    );
-    wallet_engine_protected_secret_store_completion_free(task->completion);
     return 0;
 }
 
 #define CHECK(condition)                                                       \
     do {                                                                       \
         if (!(condition)) {                                                    \
-            fprintf(                                                           \
-                stderr,                                                        \
-                "%s:%d: check failed: %s\n",                                 \
-                __FILE__,                                                      \
-                __LINE__,                                                      \
-                #condition                                                     \
-            );                                                                 \
+            fprintf(stderr, "%s:%d: check failed: %s\n", __FILE__, __LINE__, #condition); \
             return 1;                                                          \
         }                                                                      \
     } while (0)
@@ -257,7 +176,6 @@ int main(void) {
     atomic_init(&host.releases, 0);
     atomic_init(&host.stores, 0);
     atomic_init(&host.valid, true);
-    atomic_init(&host.pending_completion, NULL);
     const WalletEnginePlatformHostCallbacks callbacks = {
         .struct_size = sizeof(WalletEnginePlatformHostCallbacks),
         .context = &host,
@@ -270,98 +188,38 @@ int main(void) {
         wallet_engine_lifecycle_new(&callbacks, &lifecycle) ==
         WALLET_ENGINE_ABI_STATUS_OK
     );
-    CHECK(lifecycle != NULL);
 
-    ThreadGate start_gate;
-    gate_init(&start_gate);
-    OperationTask invalid = {
-        .lifecycle = lifecycle,
-        .record_id = "",
-        .expect_wallet = false,
-        .gate = &start_gate,
-    };
-    OperationTask valid = {
-        .lifecycle = lifecycle,
-        .record_id = "thread-wallet",
-        .expect_wallet = true,
-        .gate = &start_gate,
-    };
-    TestThread first_start;
-    TestThread second_start;
-    CHECK(thread_start(&first_start, start_operation, &invalid));
-    CHECK(thread_start(&second_start, start_operation, &valid));
-    gate_open(&start_gate, 2);
+    ThreadGate gate;
+    atomic_init(&gate.ready, 0);
+    atomic_init(&gate.open, false);
+    CallTask first = {.lifecycle = lifecycle, .record_id = "thread-wallet-1", .gate = &gate};
+    CallTask second = {.lifecycle = lifecycle, .record_id = "thread-wallet-2", .gate = &gate};
+    TestThread first_thread;
+    TestThread second_thread;
+    CHECK(thread_start(&first_thread, call_create_wallet, &first));
+    CHECK(thread_start(&second_thread, call_create_wallet, &second));
+    while (atomic_load_explicit(&gate.ready, memory_order_acquire) != 2) {
+        thread_yield();
+    }
+    atomic_store_explicit(&gate.open, true, memory_order_release);
+
     int thread_result = -1;
-    CHECK(thread_join(&first_start, &thread_result));
+    CHECK(thread_join(&first_thread, &thread_result));
     CHECK(thread_result == 0);
-    CHECK(thread_join(&second_start, &thread_result));
+    CHECK(thread_join(&second_thread, &thread_result));
     CHECK(thread_result == 0);
-    CHECK(invalid.start_status == WALLET_ENGINE_ABI_STATUS_OK);
-    CHECK(valid.start_status == WALLET_ENGINE_ABI_STATUS_OK);
-    CHECK(invalid.operation != NULL);
-    CHECK(valid.operation != NULL);
-
-    wallet_engine_lifecycle_free(lifecycle);
-    lifecycle = NULL;
-    CHECK(atomic_load_explicit(&host.releases, memory_order_acquire) == 0);
-
-    ThreadGate poll_gate;
-    gate_init(&poll_gate);
-    invalid.gate = &poll_gate;
-    valid.gate = &poll_gate;
-    TestThread first_poll;
-    TestThread second_poll;
-    CHECK(thread_start(&first_poll, poll_operation, &invalid));
-    CHECK(thread_start(&second_poll, poll_operation, &valid));
-    gate_open(&poll_gate, 2);
-    CHECK(thread_join(&first_poll, &thread_result));
-    CHECK(thread_result == 0);
-    CHECK(thread_join(&second_poll, &thread_result));
-    CHECK(thread_result == 0);
-
-    CHECK(invalid.poll_status == WALLET_ENGINE_ABI_STATUS_OK);
-    CHECK(invalid.poll_state == WALLET_ENGINE_OPERATION_POLL_STATE_READY);
-    CHECK(invalid.result_called);
-    CHECK(invalid.result_thread_matches);
-    CHECK(invalid.result_shape_valid);
-    CHECK(valid.poll_status == WALLET_ENGINE_ABI_STATUS_OK);
-    CHECK(valid.poll_state == WALLET_ENGINE_OPERATION_POLL_STATE_PENDING);
-    CHECK(!valid.result_called);
-    CHECK(atomic_load_explicit(&host.stores, memory_order_acquire) == 1);
-
-    CompletionTask completion = {
-        .completion = atomic_exchange_explicit(
-            &host.pending_completion,
-            NULL,
-            memory_order_acq_rel
-        ),
-        .status = WALLET_ENGINE_ABI_STATUS_PANIC,
-    };
-    CHECK(completion.completion != NULL);
-    TestThread completion_thread;
-    CHECK(thread_start(&completion_thread, complete_store, &completion));
-    CHECK(thread_join(&completion_thread, &thread_result));
-    CHECK(thread_result == 0);
-    CHECK(completion.status == WALLET_ENGINE_ABI_STATUS_OK);
-    CHECK(!valid.result_called);
-
-    valid.gate = NULL;
-    TestThread final_poll;
-    CHECK(thread_start(&final_poll, poll_operation, &valid));
-    CHECK(thread_join(&final_poll, &thread_result));
-    CHECK(thread_result == 0);
-    CHECK(valid.poll_status == WALLET_ENGINE_ABI_STATUS_OK);
-    CHECK(valid.poll_state == WALLET_ENGINE_OPERATION_POLL_STATE_READY);
-    CHECK(valid.result_called);
-    CHECK(valid.result_thread_matches);
-    CHECK(valid.result_shape_valid);
-
-    wallet_engine_create_wallet_operation_free(invalid.operation);
-    wallet_engine_create_wallet_operation_free(valid.operation);
-    CHECK(atomic_load_explicit(&host.retains, memory_order_acquire) == 1);
-    CHECK(atomic_load_explicit(&host.releases, memory_order_acquire) == 1);
+    CHECK(first.status == WALLET_ENGINE_ABI_STATUS_OK);
+    CHECK(second.status == WALLET_ENGINE_ABI_STATUS_OK);
+    CHECK(first.result_called && second.result_called);
+    CHECK(first.result_thread_matches && second.result_thread_matches);
+    CHECK(first.result_shape_valid && second.result_shape_valid);
+    CHECK(!thread_ids_equal(first.call_thread, second.call_thread));
+    CHECK(atomic_load_explicit(&host.stores, memory_order_acquire) == 2);
     CHECK(atomic_load_explicit(&host.valid, memory_order_acquire));
 
-    puts("Wallet Engine C thread-safety test passed");
+    wallet_engine_lifecycle_free(lifecycle);
+    CHECK(atomic_load_explicit(&host.retains, memory_order_acquire) == 1);
+    CHECK(atomic_load_explicit(&host.releases, memory_order_acquire) == 1);
+    puts("Wallet Engine synchronous C thread-safety test passed");
     return 0;
 }

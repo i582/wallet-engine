@@ -3,101 +3,56 @@
 
 use std::{
     ffi::c_void,
-    sync::{
-        Mutex, MutexGuard,
-        atomic::{AtomicUsize, Ordering},
-        mpsc::{Receiver, Sender, channel},
-    },
-    time::{Duration, Instant},
+    sync::{Mutex, MutexGuard},
+    thread::ThreadId,
 };
 
 use wallet_engine_c::{
-    WALLET_ENGINE_NETWORK_MAINNET, WALLET_ENGINE_NETWORK_TESTNET,
-    WALLET_ENGINE_PLATFORM_HOST_CALLBACKS_SIZE,
-    WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_AUTHENTICATION_FAILED,
-    WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_CANCELLED,
-    WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_NOT_FOUND,
-    WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_OTHER,
-    WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_POLICY_VIOLATION,
+    WALLET_ENGINE_NETWORK_TESTNET, WALLET_ENGINE_PLATFORM_HOST_CALLBACKS_SIZE,
     WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_UNAVAILABLE, WalletEngineAbiStatus,
-    WalletEngineCreateWalletOperation, WalletEngineCreateWalletRequest,
-    WalletEngineCreatedWalletView, WalletEngineLifecycle, WalletEngineNetwork,
-    WalletEngineOperationPollState, WalletEnginePlatformHostCallbacks,
-    WalletEngineProtectedSecretHostErrorView, WalletEngineProtectedSecretStoreCompletion,
-    WalletEngineProtectedSecretStoreView, WalletEngineStoreProtectedSecretFn,
-    WalletEngineStringView, WalletEngineWalletLifecycleErrorCode,
-    WalletEngineWalletLifecycleErrorView, wallet_engine_create_wallet_operation_free,
-    wallet_engine_create_wallet_operation_poll, wallet_engine_lifecycle_create_wallet_start,
-    wallet_engine_lifecycle_free, wallet_engine_lifecycle_new,
-    wallet_engine_protected_secret_store_completion_complete,
-    wallet_engine_protected_secret_store_completion_free,
+    WalletEngineCreateWalletRequest, WalletEngineCreatedWalletView,
+    WalletEngineImportWalletRequest, WalletEngineLifecycle, WalletEnginePlatformHostCallbacks,
+    WalletEngineProtectedSecretHostErrorView, WalletEngineProtectedSecretStoreResultFn,
+    WalletEngineProtectedSecretStoreView, WalletEngineStringView, WalletEngineStringViewSlice,
+    WalletEngineWalletDescriptorView, WalletEngineWalletLifecycleErrorCode,
+    WalletEngineWalletLifecycleErrorView, wallet_engine_lifecycle_create_wallet,
+    wallet_engine_lifecycle_free, wallet_engine_lifecycle_import_wallet,
+    wallet_engine_lifecycle_new,
 };
 
-const TEST_TIMEOUT: Duration = Duration::from_secs(30);
+const RECOVERY_PHRASE: &str = "section garden tomato dinner season dice renew length useful spin trade intact use universe what post spike keen mandate behind concert egg doll rug";
+const TESTNET_ADDRESS: &str = "0QA_6fh0aRAkD7n1MNfAUx8TvyCUw2iTQfzVM-0isMze2anN";
 
 #[derive(Debug, PartialEq, Eq)]
-struct StoredSecret {
-    secret_ref: String,
-    bytes_len: usize,
-    require_user_presence: bool,
+enum LifecycleResult {
+    Created {
+        record_id: String,
+        secret_ref: String,
+        phrase: String,
+    },
+    Imported {
+        record_id: String,
+        address: String,
+        secret_ref: String,
+    },
+    Error {
+        code: WalletEngineWalletLifecycleErrorCode,
+        diagnostic: String,
+    },
 }
 
-#[derive(Debug, PartialEq, Eq)]
-struct CreatedWallet {
-    record_id: String,
-    address: String,
-    network: WalletEngineNetwork,
-    secret_ref: String,
-    phrase: String,
+#[derive(Default)]
+struct Observation {
+    store_threads: Vec<ThreadId>,
+    result_threads: Vec<ThreadId>,
+    stored_secret_refs: Vec<String>,
+    stored_secrets: Vec<String>,
+    results: Vec<LifecycleResult>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-struct LifecycleError {
-    code: WalletEngineWalletLifecycleErrorCode,
-    protected_secret_host_error_kind: Option<u32>,
-    diagnostic: String,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct CompletionResult {
-    abi_status: WalletEngineAbiStatus,
-    wallet: Option<CreatedWallet>,
-    error: Option<LifecycleError>,
-    valid_pointer_shape: bool,
-}
-
+#[derive(Default)]
 struct TestContext {
-    retains: AtomicUsize,
-    releases: AtomicUsize,
-    stores: AtomicUsize,
-    completion_calls: AtomicUsize,
-    host_error_kind: u32,
-    stored_secret: Mutex<Option<StoredSecret>>,
-    completion_sender: Mutex<Option<Sender<CompletionResult>>>,
-}
-
-impl TestContext {
-    const fn new(completion_sender: Sender<CompletionResult>) -> Self {
-        Self::with_host_error_kind(
-            completion_sender,
-            WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_UNAVAILABLE,
-        )
-    }
-
-    const fn with_host_error_kind(
-        completion_sender: Sender<CompletionResult>,
-        host_error_kind: u32,
-    ) -> Self {
-        Self {
-            retains: AtomicUsize::new(0),
-            releases: AtomicUsize::new(0),
-            stores: AtomicUsize::new(0),
-            completion_calls: AtomicUsize::new(0),
-            host_error_kind,
-            stored_secret: Mutex::new(None),
-            completion_sender: Mutex::new(Some(completion_sender)),
-        }
-    }
+    observation: Mutex<Observation>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -108,185 +63,130 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 unsafe fn test_context<'a>(context: *mut c_void) -> &'a TestContext {
-    // SAFETY: Test callback tables and completions use a live `TestContext`.
+    // SAFETY: Every callback table in this test uses a live `TestContext`.
     unsafe { &*context.cast::<TestContext>() }
 }
 
-unsafe extern "C" fn retain_context(context: *mut c_void) {
-    // SAFETY: The callback table supplies a live `TestContext` pointer.
-    unsafe { test_context(context) }
-        .retains
-        .fetch_add(1, Ordering::Release);
-}
+const unsafe extern "C" fn retain_context(_context: *mut c_void) {}
 
-unsafe extern "C" fn release_context(context: *mut c_void) {
-    // SAFETY: The callback table supplies a live `TestContext` pointer.
-    unsafe { test_context(context) }
-        .releases
-        .fetch_add(1, Ordering::Release);
-}
+const unsafe extern "C" fn release_context(_context: *mut c_void) {}
 
-unsafe fn record_store_request(
-    context: *mut c_void,
-    request: *const WalletEngineProtectedSecretStoreView,
-) {
-    // SAFETY: The host adapter supplies a callback-scoped request.
-    let request = unsafe { *request };
-    // SAFETY: Nested views remain live for the callback.
-    let secret_ref = unsafe { request.secret_ref.value.try_to_string() };
-    let stored = secret_ref.ok().map(|secret_ref| StoredSecret {
-        secret_ref,
-        bytes_len: request.bytes.len,
-        require_user_presence: request.require_user_presence,
-    });
-    // SAFETY: The callback table supplies a live `TestContext` pointer.
+unsafe fn record_store(context: *mut c_void, request: *const WalletEngineProtectedSecretStoreView) {
+    assert!(!request.is_null());
+    // SAFETY: The library supplies a callback-scoped readable request.
+    let request = unsafe { request.read() };
+    // SAFETY: Nested request views remain live during this callback.
+    let secret_ref = unsafe { request.secret_ref.value.try_to_string() }
+        .expect("secret reference should be valid");
+    // SAFETY: Nested request views remain live during this callback.
+    let secret = unsafe { request.bytes.try_to_vec() }.expect("secret bytes should be valid");
+    let secret = String::from_utf8(secret).expect("mnemonic should be UTF-8");
+    assert!(request.require_user_presence);
+
+    // SAFETY: The callback table supplies a live test context.
     let context = unsafe { test_context(context) };
-    context.stores.fetch_add(1, Ordering::Relaxed);
-    *lock(&context.stored_secret) = stored;
+    let mut observation = lock(&context.observation);
+    observation.store_threads.push(std::thread::current().id());
+    observation.stored_secret_refs.push(secret_ref);
+    observation.stored_secrets.push(secret);
 }
 
 unsafe extern "C" fn store_success(
     context: *mut c_void,
-    completion: *mut WalletEngineProtectedSecretStoreCompletion,
     request: *const WalletEngineProtectedSecretStoreView,
+    result_context: *mut c_void,
+    result: WalletEngineProtectedSecretStoreResultFn,
 ) {
-    // SAFETY: The adapter supplies a callback-scoped request.
-    unsafe { record_store_request(context, request) };
-    // SAFETY: Null denotes successful completion and is not dereferenced.
-    let _ = unsafe {
-        wallet_engine_protected_secret_store_completion_complete(completion, std::ptr::null())
-    };
-    // SAFETY: The callback owns this handle and has finished using it.
-    unsafe { wallet_engine_protected_secret_store_completion_free(completion) };
-}
-
-unsafe extern "C" fn store_async_success(
-    context: *mut c_void,
-    completion: *mut WalletEngineProtectedSecretStoreCompletion,
-    request: *const WalletEngineProtectedSecretStoreView,
-) {
-    // SAFETY: The adapter supplies a callback-scoped request.
-    unsafe { record_store_request(context, request) };
-    let completion_address = completion as usize;
-    drop(std::thread::spawn(move || {
-        let completion = completion_address as *mut WalletEngineProtectedSecretStoreCompletion;
-        // SAFETY: Null denotes successful completion and is not dereferenced.
-        let _ = unsafe {
-            wallet_engine_protected_secret_store_completion_complete(completion, std::ptr::null())
-        };
-        // SAFETY: This thread owns the handle and has finished using it.
-        unsafe { wallet_engine_protected_secret_store_completion_free(completion) };
-    }));
+    // SAFETY: The library supplies callback-scoped arguments.
+    unsafe { record_store(context, request) };
+    let result = result.expect("result callback should be present");
+    // SAFETY: The result context and callback are valid for this host call.
+    let status = unsafe { result(result_context, std::ptr::null()) };
+    assert_eq!(status, WalletEngineAbiStatus::Ok);
 }
 
 unsafe extern "C" fn store_error(
     context: *mut c_void,
-    completion: *mut WalletEngineProtectedSecretStoreCompletion,
     request: *const WalletEngineProtectedSecretStoreView,
+    result_context: *mut c_void,
+    result: WalletEngineProtectedSecretStoreResultFn,
 ) {
-    // SAFETY: The adapter supplies a callback-scoped request.
-    unsafe { record_store_request(context, request) };
-    // SAFETY: The callback table supplies a live `TestContext` pointer.
-    let kind = unsafe { test_context(context) }.host_error_kind;
+    // SAFETY: The library supplies callback-scoped arguments.
+    unsafe { record_store(context, request) };
     let error = WalletEngineProtectedSecretHostErrorView {
-        kind,
-        diagnostic: WalletEngineStringView::from("protected storage failure"),
+        kind: WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_UNAVAILABLE,
+        diagnostic: WalletEngineStringView::from("keychain unavailable"),
     };
-    // SAFETY: `error` and its diagnostic remain live for this call.
-    let _ = unsafe { wallet_engine_protected_secret_store_completion_complete(completion, &error) };
-    // SAFETY: The callback owns this handle and has finished using it.
-    unsafe { wallet_engine_protected_secret_store_completion_free(completion) };
+    let result = result.expect("result callback should be present");
+    // SAFETY: The result context and error view remain live for this call.
+    let status = unsafe { result(result_context, &error) };
+    assert_eq!(status, WalletEngineAbiStatus::Ok);
 }
 
-unsafe fn copy_wallet(wallet: *const WalletEngineCreatedWalletView) -> Option<CreatedWallet> {
-    // SAFETY: The completion callback receives a readable wallet view.
-    let wallet = unsafe { *wallet };
-    // SAFETY: All nested strings remain live for the callback.
-    let record_id = unsafe { wallet.descriptor.record_id.try_to_string().ok()? };
-    // SAFETY: All nested strings remain live for the callback.
-    let address = unsafe { wallet.descriptor.address.try_to_string().ok()? };
-    // SAFETY: All nested strings remain live for the callback.
-    let secret_ref = unsafe { wallet.descriptor.secret_ref.value.try_to_string().ok()? };
-    // SAFETY: The callback contract keeps the phrase view live.
-    let phrase = unsafe { wallet.recovery_phrase.phrase.try_to_string().ok()? };
-
-    Some(CreatedWallet {
-        record_id,
-        address,
-        network: wallet.descriptor.network,
-        secret_ref,
-        phrase,
-    })
-}
-
-unsafe fn copy_error(error: *const WalletEngineWalletLifecycleErrorView) -> Option<LifecycleError> {
-    // SAFETY: The completion callback receives a readable error view.
-    let error = unsafe { *error };
-    // SAFETY: The diagnostic remains live for the callback.
-    let diagnostic = unsafe { error.diagnostic.try_to_string().ok()? };
-    Some(LifecycleError {
-        code: error.code,
-        protected_secret_host_error_kind: error
-            .has_protected_secret_host_error_kind
-            .then_some(error.protected_secret_host_error_kind),
-        diagnostic,
-    })
-}
-
-unsafe extern "C" fn create_wallet_complete(
-    context: *mut c_void,
-    abi_status: WalletEngineAbiStatus,
-    wallet: *const WalletEngineCreatedWalletView,
-    error: *const WalletEngineWalletLifecycleErrorView,
+const unsafe extern "C" fn store_without_result(
+    _context: *mut c_void,
+    _request: *const WalletEngineProtectedSecretStoreView,
+    _result_context: *mut c_void,
+    _result: WalletEngineProtectedSecretStoreResultFn,
 ) {
-    let (wallet_copy, error_copy, valid_pointer_shape) =
-        if abi_status == WalletEngineAbiStatus::Ok && !wallet.is_null() && error.is_null() {
-            // SAFETY: The non-null wallet view remains live for this callback.
-            let wallet = unsafe { copy_wallet(wallet) };
-            let valid = wallet.is_some();
-            (wallet, None, valid)
-        } else if abi_status == WalletEngineAbiStatus::Ok && wallet.is_null() && !error.is_null() {
-            // SAFETY: The non-null error view remains live for this callback.
-            let error = unsafe { copy_error(error) };
-            let valid = error.is_some();
-            (None, error, valid)
-        } else {
-            (
-                None,
-                None,
-                abi_status == WalletEngineAbiStatus::Panic && wallet.is_null() && error.is_null(),
-            )
-        };
-    let result = CompletionResult {
-        abi_status,
-        wallet: wallet_copy,
-        error: error_copy,
-        valid_pointer_shape,
-    };
-
-    // SAFETY: The completion context is a live `TestContext`.
-    let context = unsafe { test_context(context) };
-    context.completion_calls.fetch_add(1, Ordering::Relaxed);
-    let sender = lock(&context.completion_sender).take();
-    if let Some(sender) = sender {
-        let _ = sender.send(result);
-    }
 }
 
-fn callback_table(
+unsafe extern "C" fn store_duplicate_result(
+    _context: *mut c_void,
+    _request: *const WalletEngineProtectedSecretStoreView,
+    result_context: *mut c_void,
+    result: WalletEngineProtectedSecretStoreResultFn,
+) {
+    let result = result.expect("result callback should be present");
+    // SAFETY: The result callback is live for this host call.
+    let first = unsafe { result(result_context, std::ptr::null()) };
+    assert_eq!(first, WalletEngineAbiStatus::Ok);
+    // SAFETY: This deliberate duplicate verifies rejection.
+    let duplicate = unsafe { result(result_context, std::ptr::null()) };
+    assert_eq!(duplicate, WalletEngineAbiStatus::InvalidArgument);
+}
+
+unsafe extern "C" fn store_invalid_error(
+    _context: *mut c_void,
+    _request: *const WalletEngineProtectedSecretStoreView,
+    result_context: *mut c_void,
+    result: WalletEngineProtectedSecretStoreResultFn,
+) {
+    let invalid_utf8 = [0xff];
+    let error = WalletEngineProtectedSecretHostErrorView {
+        kind: WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_UNAVAILABLE,
+        diagnostic: WalletEngineStringView {
+            data: invalid_utf8.as_ptr().cast(),
+            len: invalid_utf8.len(),
+        },
+    };
+    let result = result.expect("result callback should be present");
+    // SAFETY: The invalid bytes are readable and are rejected as UTF-8.
+    let status = unsafe { result(result_context, &error) };
+    assert_eq!(status, WalletEngineAbiStatus::InvalidUtf8);
+}
+
+fn host_callbacks(
     context: &TestContext,
-    store: WalletEngineStoreProtectedSecretFn,
+    store: unsafe extern "C" fn(
+        *mut c_void,
+        *const WalletEngineProtectedSecretStoreView,
+        *mut c_void,
+        WalletEngineProtectedSecretStoreResultFn,
+    ),
 ) -> WalletEnginePlatformHostCallbacks {
     WalletEnginePlatformHostCallbacks {
         struct_size: WALLET_ENGINE_PLATFORM_HOST_CALLBACKS_SIZE,
         context: std::ptr::from_ref(context).cast_mut().cast(),
         retain: Some(retain_context),
         release: Some(release_context),
-        store_protected_secret: store,
+        store_protected_secret: Some(store),
     }
 }
 
-unsafe fn lifecycle(callbacks: &WalletEnginePlatformHostCallbacks) -> *mut WalletEngineLifecycle {
+unsafe fn new_lifecycle(
+    callbacks: &WalletEnginePlatformHostCallbacks,
+) -> *mut WalletEngineLifecycle {
     let mut lifecycle = std::ptr::null_mut();
     // SAFETY: The callback table and output pointer remain live for this call.
     let status = unsafe { wallet_engine_lifecycle_new(callbacks, &mut lifecycle) };
@@ -295,290 +195,334 @@ unsafe fn lifecycle(callbacks: &WalletEnginePlatformHostCallbacks) -> *mut Walle
     lifecycle
 }
 
-unsafe fn start_operation(
-    lifecycle: *const WalletEngineLifecycle,
-    request: &WalletEngineCreateWalletRequest,
-) -> *mut WalletEngineCreateWalletOperation {
-    let mut operation = std::ptr::null_mut();
-    // SAFETY: The lifecycle, request, nested views, and output pointer remain
-    // live for this synchronous call.
-    let status =
-        unsafe { wallet_engine_lifecycle_create_wallet_start(lifecycle, request, &mut operation) };
-    assert_eq!(status, WalletEngineAbiStatus::Ok);
-    assert!(!operation.is_null());
-    operation
-}
-
-unsafe fn poll_until_ready(
-    operation: *mut WalletEngineCreateWalletOperation,
-    context: &TestContext,
+unsafe extern "C" fn create_result(
+    context: *mut c_void,
+    abi_status: WalletEngineAbiStatus,
+    wallet: *const WalletEngineCreatedWalletView,
+    error: *const WalletEngineWalletLifecycleErrorView,
 ) {
-    let deadline = Instant::now() + TEST_TIMEOUT;
-    loop {
-        let mut state = WalletEngineOperationPollState::Pending;
-        // SAFETY: The operation and callback context remain live for this
-        // synchronous poll, and `state` is writable.
-        let status = unsafe {
-            wallet_engine_create_wallet_operation_poll(
-                operation,
-                std::ptr::from_ref(context).cast_mut().cast(),
-                Some(create_wallet_complete),
-                &mut state,
-            )
-        };
-        assert_eq!(status, WalletEngineAbiStatus::Ok);
-        if state == WalletEngineOperationPollState::Ready {
-            return;
+    assert_eq!(abi_status, WalletEngineAbiStatus::Ok);
+    // SAFETY: The result callback receives a live test context.
+    let context = unsafe { test_context(context) };
+    let result = if !wallet.is_null() && error.is_null() {
+        // SAFETY: The wallet view and nested values live for this callback.
+        let wallet = unsafe { wallet.read() };
+        LifecycleResult::Created {
+            // SAFETY: Nested views live for this callback.
+            record_id: unsafe { wallet.descriptor.record_id.try_to_string() }
+                .expect("record ID should be valid"),
+            // SAFETY: Nested views live for this callback.
+            secret_ref: unsafe { wallet.descriptor.secret_ref.value.try_to_string() }
+                .expect("secret reference should be valid"),
+            // SAFETY: Nested views live for this callback.
+            phrase: unsafe { wallet.recovery_phrase.phrase.try_to_string() }
+                .expect("phrase should be valid"),
         }
-        assert!(Instant::now() < deadline, "wallet operation timed out");
-        std::thread::yield_now();
-    }
+    } else {
+        assert!(wallet.is_null());
+        assert!(!error.is_null());
+        // SAFETY: The error view and diagnostic live for this callback.
+        let error = unsafe { error.read() };
+        LifecycleResult::Error {
+            code: error.code,
+            // SAFETY: The diagnostic view lives for this callback.
+            diagnostic: unsafe { error.diagnostic.try_to_string() }
+                .expect("diagnostic should be valid"),
+        }
+    };
+
+    let mut observation = lock(&context.observation);
+    observation.result_threads.push(std::thread::current().id());
+    observation.results.push(result);
 }
 
-fn wait_for_release(context: &TestContext) {
-    let deadline = Instant::now() + TEST_TIMEOUT;
-    while context.releases.load(Ordering::Acquire) != 1 {
-        assert!(Instant::now() < deadline, "host context was not released");
-        std::thread::yield_now();
-    }
+unsafe extern "C" fn import_result(
+    context: *mut c_void,
+    abi_status: WalletEngineAbiStatus,
+    descriptor: *const WalletEngineWalletDescriptorView,
+    error: *const WalletEngineWalletLifecycleErrorView,
+) {
+    assert_eq!(abi_status, WalletEngineAbiStatus::Ok);
+    // SAFETY: The result callback receives a live test context.
+    let context = unsafe { test_context(context) };
+    let result = if !descriptor.is_null() && error.is_null() {
+        // SAFETY: The descriptor and nested views live for this callback.
+        let descriptor = unsafe { descriptor.read() };
+        LifecycleResult::Imported {
+            // SAFETY: Nested views live for this callback.
+            record_id: unsafe { descriptor.record_id.try_to_string() }
+                .expect("record ID should be valid"),
+            // SAFETY: Nested views live for this callback.
+            address: unsafe { descriptor.address.try_to_string() }
+                .expect("address should be valid"),
+            // SAFETY: Nested views live for this callback.
+            secret_ref: unsafe { descriptor.secret_ref.value.try_to_string() }
+                .expect("secret reference should be valid"),
+        }
+    } else {
+        assert!(descriptor.is_null());
+        assert!(!error.is_null());
+        // SAFETY: The error view and diagnostic live for this callback.
+        let error = unsafe { error.read() };
+        LifecycleResult::Error {
+            code: error.code,
+            // SAFETY: The diagnostic view lives for this callback.
+            diagnostic: unsafe { error.diagnostic.try_to_string() }
+                .expect("diagnostic should be valid"),
+        }
+    };
+
+    let mut observation = lock(&context.observation);
+    observation.result_threads.push(std::thread::current().id());
+    observation.results.push(result);
 }
 
-fn receive(receiver: &Receiver<CompletionResult>) -> CompletionResult {
-    match receiver.recv_timeout(TEST_TIMEOUT) {
-        Ok(result) => result,
-        Err(error) => panic!("wallet completion was not received: {error}"),
-    }
-}
-
-#[test]
-fn create_wallet_rejects_invalid_boundary_arguments_before_starting() {
-    let (sender, receiver) = channel();
-    let context = TestContext::new(sender);
-    let callbacks = callback_table(&context, Some(store_success));
-    // SAFETY: The callback table remains live until the handle is freed.
-    let lifecycle = unsafe { lifecycle(&callbacks) };
-    let valid_request = WalletEngineCreateWalletRequest {
-        record_id: WalletEngineStringView::from("wallet-1"),
-        network: WALLET_ENGINE_NETWORK_TESTNET,
-    };
-
-    // SAFETY: A null output pointer is rejected without being dereferenced.
-    let status = unsafe {
-        wallet_engine_lifecycle_create_wallet_start(lifecycle, &valid_request, std::ptr::null_mut())
-    };
-    assert_eq!(status, WalletEngineAbiStatus::InvalidArgument);
-    let mut operation = std::ptr::dangling_mut::<WalletEngineCreateWalletOperation>();
-    // SAFETY: A null lifecycle is rejected and the writable output is cleared.
-    let status = unsafe {
-        wallet_engine_lifecycle_create_wallet_start(
-            std::ptr::null(),
-            &valid_request,
-            &mut operation,
-        )
-    };
-    assert_eq!(status, WalletEngineAbiStatus::InvalidArgument);
-    assert!(operation.is_null());
-    // SAFETY: A null request is accepted as an invalid argument and is not
-    // dereferenced.
-    let status = unsafe {
-        wallet_engine_lifecycle_create_wallet_start(lifecycle, std::ptr::null(), &mut operation)
-    };
-    assert_eq!(status, WalletEngineAbiStatus::InvalidArgument);
-    assert!(operation.is_null());
-
-    let invalid_utf8 = [0xff];
-    let invalid_utf8_request = WalletEngineCreateWalletRequest {
-        record_id: WalletEngineStringView {
-            data: invalid_utf8.as_ptr().cast(),
-            len: invalid_utf8.len(),
-        },
-        network: WALLET_ENGINE_NETWORK_TESTNET,
-    };
-    // SAFETY: The invalid UTF-8 byte remains readable for this call.
-    let status = unsafe {
-        wallet_engine_lifecycle_create_wallet_start(
-            lifecycle,
-            &invalid_utf8_request,
-            &mut operation,
-        )
-    };
-    assert_eq!(status, WalletEngineAbiStatus::InvalidUtf8);
-    assert!(operation.is_null());
-
-    let unknown_network_request = WalletEngineCreateWalletRequest {
-        record_id: WalletEngineStringView::from("wallet-1"),
-        network: 2,
-    };
-    // SAFETY: The handle, request, and output pointer remain live.
-    let status = unsafe {
-        wallet_engine_lifecycle_create_wallet_start(
-            lifecycle,
-            &unknown_network_request,
-            &mut operation,
-        )
-    };
-    assert_eq!(status, WalletEngineAbiStatus::InvalidArgument);
-    assert!(operation.is_null());
-
-    assert!(receiver.try_recv().is_err());
-    assert_eq!(context.stores.load(Ordering::Relaxed), 0);
-    assert_eq!(context.completion_calls.load(Ordering::Relaxed), 0);
-    // SAFETY: This is the live handle returned above.
-    unsafe { wallet_engine_lifecycle_free(lifecycle) };
-    wait_for_release(&context);
-}
-
-#[test]
-fn invalid_record_id_is_reported_as_a_domain_error() {
-    let (sender, receiver) = channel();
-    let context = TestContext::new(sender);
-    let callbacks = callback_table(&context, Some(store_success));
-    // SAFETY: The callback table remains live through operation completion.
-    let lifecycle = unsafe { lifecycle(&callbacks) };
+unsafe fn create_wallet(
+    lifecycle: *const WalletEngineLifecycle,
+    context: &TestContext,
+    record_id: &str,
+) -> WalletEngineAbiStatus {
     let request = WalletEngineCreateWalletRequest {
-        record_id: WalletEngineStringView::from(""),
-        network: WALLET_ENGINE_NETWORK_MAINNET,
+        record_id: WalletEngineStringView::from(record_id),
+        network: WALLET_ENGINE_NETWORK_TESTNET,
     };
+    // SAFETY: The handle, request views, and callback context are live.
+    unsafe {
+        wallet_engine_lifecycle_create_wallet(
+            lifecycle,
+            &request,
+            std::ptr::from_ref(context).cast_mut().cast(),
+            Some(create_result),
+        )
+    }
+}
 
-    // SAFETY: The lifecycle and request remain live for the start call.
-    let operation = unsafe { start_operation(lifecycle, &request) };
-    // SAFETY: The operation owns an internal Arc after the successful start.
-    unsafe { wallet_engine_lifecycle_free(lifecycle) };
-    // SAFETY: The operation and callback context remain live until ready.
-    unsafe { poll_until_ready(operation, &context) };
-    // SAFETY: Polling is complete and this test uniquely owns the handle.
-    unsafe { wallet_engine_create_wallet_operation_free(operation) };
+#[test]
+fn create_wallet_is_fully_synchronous_on_the_calling_thread() {
+    let context = TestContext::default();
+    let callbacks = host_callbacks(&context, store_success);
+    // SAFETY: The callback context outlives the lifecycle.
+    let lifecycle = unsafe { new_lifecycle(&callbacks) };
+    let caller = std::thread::current().id();
 
+    // SAFETY: The lifecycle and callback context are live for this call.
+    let status = unsafe { create_wallet(lifecycle, &context, "wallet-1") };
+    assert_eq!(status, WalletEngineAbiStatus::Ok);
+
+    let observation = lock(&context.observation);
+    assert_eq!(observation.store_threads, [caller]);
+    assert_eq!(observation.result_threads, [caller]);
+    assert_eq!(observation.stored_secret_refs, ["wallet:wallet-1:mnemonic"]);
+    assert_eq!(observation.stored_secrets.len(), 1);
     assert_eq!(
-        receive(&receiver),
-        CompletionResult {
-            abi_status: WalletEngineAbiStatus::Ok,
-            wallet: None,
-            error: Some(LifecycleError {
-                code: WalletEngineWalletLifecycleErrorCode::InvalidRecordId,
-                protected_secret_host_error_kind: None,
-                diagnostic: String::new(),
-            }),
-            valid_pointer_shape: true,
-        }
+        observation.stored_secrets[0]
+            .split_ascii_whitespace()
+            .count(),
+        24
     );
-    assert_eq!(context.stores.load(Ordering::Relaxed), 0);
-    wait_for_release(&context);
-    assert_eq!(context.completion_calls.load(Ordering::Relaxed), 1);
+    assert!(matches!(
+        observation.results.as_slice(),
+        [LifecycleResult::Created {
+            record_id,
+            secret_ref,
+            phrase,
+        }] if record_id == "wallet-1"
+            && secret_ref == "wallet:wallet-1:mnemonic"
+            && phrase.split_ascii_whitespace().count() == 24
+    ));
+    drop(observation);
+
+    // SAFETY: No calls use the lifecycle concurrently with this free.
+    unsafe { wallet_engine_lifecycle_free(lifecycle) };
 }
 
-fn run_success_case(store: WalletEngineStoreProtectedSecretFn, network: WalletEngineNetwork) {
-    let (sender, receiver) = channel();
-    let context = TestContext::new(sender);
-    let callbacks = callback_table(&context, store);
-    // SAFETY: The callback table remains live through operation completion.
-    let lifecycle = unsafe { lifecycle(&callbacks) };
+#[test]
+fn import_wallet_is_fully_synchronous() {
+    let context = TestContext::default();
+    let callbacks = host_callbacks(&context, store_success);
+    // SAFETY: The callback context outlives the lifecycle.
+    let lifecycle = unsafe { new_lifecycle(&callbacks) };
+    let words = RECOVERY_PHRASE.split_ascii_whitespace().collect::<Vec<_>>();
+    let word_views = words
+        .iter()
+        .copied()
+        .map(WalletEngineStringView::from)
+        .collect::<Vec<_>>();
+    let request = WalletEngineImportWalletRequest {
+        record_id: WalletEngineStringView::from("imported-wallet"),
+        network: WALLET_ENGINE_NETWORK_TESTNET,
+        recovery_words: WalletEngineStringViewSlice::from(word_views.as_slice()),
+    };
+
+    // SAFETY: The handle, request views, and callback context are live.
+    let status = unsafe {
+        wallet_engine_lifecycle_import_wallet(
+            lifecycle,
+            &request,
+            std::ptr::from_ref(&context).cast_mut().cast(),
+            Some(import_result),
+        )
+    };
+    assert_eq!(status, WalletEngineAbiStatus::Ok);
+
+    let observation = lock(&context.observation);
+    assert_eq!(observation.stored_secrets, [RECOVERY_PHRASE]);
+    assert_eq!(
+        observation.results,
+        [LifecycleResult::Imported {
+            record_id: "imported-wallet".to_owned(),
+            address: TESTNET_ADDRESS.to_owned(),
+            secret_ref: "wallet:imported-wallet:mnemonic".to_owned(),
+        }]
+    );
+    drop(observation);
+
+    // SAFETY: No calls use the lifecycle concurrently with this free.
+    unsafe { wallet_engine_lifecycle_free(lifecycle) };
+}
+
+#[test]
+fn domain_and_host_errors_are_delivered_synchronously() {
+    let invalid_context = TestContext::default();
+    let callbacks = host_callbacks(&invalid_context, store_success);
+    // SAFETY: The callback context outlives the lifecycle.
+    let lifecycle = unsafe { new_lifecycle(&callbacks) };
+    // SAFETY: The lifecycle and callback context are live.
+    let status = unsafe { create_wallet(lifecycle, &invalid_context, "") };
+    assert_eq!(status, WalletEngineAbiStatus::Ok);
+    let observation = lock(&invalid_context.observation);
+    assert!(observation.store_threads.is_empty());
+    assert_eq!(
+        observation.results,
+        [LifecycleResult::Error {
+            code: WalletEngineWalletLifecycleErrorCode::InvalidRecordId,
+            diagnostic: String::new(),
+        }]
+    );
+    drop(observation);
+    // SAFETY: No calls use the lifecycle concurrently with this free.
+    unsafe { wallet_engine_lifecycle_free(lifecycle) };
+
+    let host_context = TestContext::default();
+    let callbacks = host_callbacks(&host_context, store_error);
+    // SAFETY: The callback context outlives the lifecycle.
+    let lifecycle = unsafe { new_lifecycle(&callbacks) };
+    // SAFETY: The lifecycle and callback context are live.
+    let status = unsafe { create_wallet(lifecycle, &host_context, "host-error") };
+    assert_eq!(status, WalletEngineAbiStatus::Ok);
+    assert_eq!(
+        lock(&host_context.observation).results,
+        [LifecycleResult::Error {
+            code: WalletEngineWalletLifecycleErrorCode::ProtectedSecretHost,
+            diagnostic: "keychain unavailable".to_owned(),
+        }]
+    );
+    // SAFETY: No calls use the lifecycle concurrently with this free.
+    unsafe { wallet_engine_lifecycle_free(lifecycle) };
+}
+
+#[test]
+fn synchronous_host_contract_violations_are_boundary_errors() {
+    for (store, expected) in [
+        (
+            store_without_result as unsafe extern "C" fn(_, _, _, _),
+            WalletEngineAbiStatus::InvalidArgument,
+        ),
+        (
+            store_duplicate_result as unsafe extern "C" fn(_, _, _, _),
+            WalletEngineAbiStatus::InvalidArgument,
+        ),
+        (
+            store_invalid_error as unsafe extern "C" fn(_, _, _, _),
+            WalletEngineAbiStatus::InvalidUtf8,
+        ),
+    ] {
+        let context = TestContext::default();
+        let callbacks = host_callbacks(&context, store);
+        // SAFETY: The callback context outlives the lifecycle.
+        let lifecycle = unsafe { new_lifecycle(&callbacks) };
+        // SAFETY: The lifecycle and callback context are live.
+        let status = unsafe { create_wallet(lifecycle, &context, "boundary-error") };
+        assert_eq!(status, expected);
+        assert!(lock(&context.observation).results.is_empty());
+        // SAFETY: No calls use the lifecycle concurrently with this free.
+        unsafe { wallet_engine_lifecycle_free(lifecycle) };
+    }
+}
+
+#[test]
+fn separate_calls_run_concurrently_only_on_client_threads() {
+    let context = Box::new(TestContext::default());
+    let callbacks = host_callbacks(&context, store_success);
+    // SAFETY: The boxed callback context outlives the lifecycle and threads.
+    let lifecycle = unsafe { new_lifecycle(&callbacks) };
+    let lifecycle_address = lifecycle as usize;
+    let context_address = std::ptr::from_ref(context.as_ref()) as usize;
+
+    let threads = ["thread-wallet-1", "thread-wallet-2"].map(|record_id| {
+        std::thread::spawn(move || {
+            let lifecycle = lifecycle_address as *const WalletEngineLifecycle;
+            let context = context_address as *const TestContext;
+            // SAFETY: Main keeps both allocations live until every thread joins.
+            let status = unsafe { create_wallet(lifecycle, &*context, record_id) };
+            assert_eq!(status, WalletEngineAbiStatus::Ok);
+        })
+    });
+    for thread in threads {
+        thread.join().expect("client worker should finish");
+    }
+
+    let observation = lock(&context.observation);
+    assert_eq!(observation.store_threads.len(), 2);
+    assert_eq!(observation.result_threads.len(), 2);
+    assert_ne!(observation.store_threads[0], observation.store_threads[1]);
+    for thread in &observation.store_threads {
+        assert!(observation.result_threads.contains(thread));
+    }
+    drop(observation);
+
+    // SAFETY: Both client workers finished before lifecycle destruction.
+    unsafe { wallet_engine_lifecycle_free(lifecycle) };
+}
+
+#[test]
+fn lifecycle_calls_validate_boundary_arguments() {
+    let context = TestContext::default();
+    let callbacks = host_callbacks(&context, store_success);
+    // SAFETY: The callback context outlives the lifecycle.
+    let lifecycle = unsafe { new_lifecycle(&callbacks) };
     let request = WalletEngineCreateWalletRequest {
         record_id: WalletEngineStringView::from("wallet-1"),
-        network,
+        network: WALLET_ENGINE_NETWORK_TESTNET,
     };
 
-    // SAFETY: The lifecycle and request remain live for the start call.
-    let operation = unsafe { start_operation(lifecycle, &request) };
-    assert_eq!(context.retains.load(Ordering::Acquire), 1);
-    // SAFETY: The operation owns an internal Arc after the successful start.
+    // SAFETY: Each invalid pointer is rejected before dereference; other values
+    // remain valid for the call.
+    let status = unsafe {
+        wallet_engine_lifecycle_create_wallet(
+            std::ptr::null(),
+            &request,
+            std::ptr::null_mut(),
+            Some(create_result),
+        )
+    };
+    assert_eq!(status, WalletEngineAbiStatus::InvalidArgument);
+    // SAFETY: Null request is rejected before dereference.
+    let status = unsafe {
+        wallet_engine_lifecycle_create_wallet(
+            lifecycle,
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            Some(create_result),
+        )
+    };
+    assert_eq!(status, WalletEngineAbiStatus::InvalidArgument);
+    // SAFETY: Missing callback is rejected before the null context is used.
+    let status = unsafe {
+        wallet_engine_lifecycle_create_wallet(lifecycle, &request, std::ptr::null_mut(), None)
+    };
+    assert_eq!(status, WalletEngineAbiStatus::InvalidArgument);
+
+    // SAFETY: No calls use the lifecycle concurrently with this free.
     unsafe { wallet_engine_lifecycle_free(lifecycle) };
-    // SAFETY: The operation and callback context remain live until ready.
-    unsafe { poll_until_ready(operation, &context) };
-    // SAFETY: Polling is complete and this test uniquely owns the handle.
-    unsafe { wallet_engine_create_wallet_operation_free(operation) };
-
-    let result = receive(&receiver);
-    assert_eq!(result.abi_status, WalletEngineAbiStatus::Ok);
-    assert!(result.valid_pointer_shape);
-    assert_eq!(result.error, None);
-    let Some(wallet) = result.wallet else {
-        panic!("successful completion did not contain a wallet");
-    };
-    assert_eq!(wallet.record_id, "wallet-1");
-    assert!(!wallet.address.is_empty());
-    assert_eq!(wallet.network, network);
-    assert_eq!(wallet.secret_ref, "wallet:wallet-1:mnemonic");
-    assert_eq!(wallet.phrase.split_ascii_whitespace().count(), 24);
-
-    assert_eq!(context.stores.load(Ordering::Relaxed), 1);
-    let stored_guard = lock(&context.stored_secret);
-    let Some(stored) = stored_guard.as_ref() else {
-        panic!("storage callback did not copy the request");
-    };
-    assert_eq!(stored.secret_ref, wallet.secret_ref);
-    assert_ne!(stored.bytes_len, 0);
-    assert!(stored.require_user_presence);
-    drop(stored_guard);
-    wait_for_release(&context);
-    assert_eq!(context.completion_calls.load(Ordering::Relaxed), 1);
-}
-
-#[test]
-#[cfg_attr(
-    miri,
-    ignore = "wallet generation and key derivation are prohibitively slow under Miri"
-)]
-fn created_wallet_is_delivered_after_synchronous_host_completion() {
-    run_success_case(Some(store_success), WALLET_ENGINE_NETWORK_MAINNET);
-}
-
-#[test]
-#[cfg_attr(
-    miri,
-    ignore = "wallet generation and key derivation are prohibitively slow under Miri"
-)]
-fn created_wallet_is_delivered_after_asynchronous_host_completion() {
-    run_success_case(Some(store_async_success), WALLET_ENGINE_NETWORK_TESTNET);
-}
-
-#[test]
-#[cfg_attr(
-    miri,
-    ignore = "wallet generation and key derivation are prohibitively slow under Miri"
-)]
-fn protected_storage_failure_is_reported_as_a_domain_error() {
-    for host_error_kind in [
-        WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_NOT_FOUND,
-        WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_AUTHENTICATION_FAILED,
-        WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_CANCELLED,
-        WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_UNAVAILABLE,
-        WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_POLICY_VIOLATION,
-        WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_OTHER,
-    ] {
-        let (sender, receiver) = channel();
-        let context = TestContext::with_host_error_kind(sender, host_error_kind);
-        let callbacks = callback_table(&context, Some(store_error));
-        // SAFETY: The callback table remains live through operation completion.
-        let lifecycle = unsafe { lifecycle(&callbacks) };
-        let request = WalletEngineCreateWalletRequest {
-            record_id: WalletEngineStringView::from("wallet-1"),
-            network: WALLET_ENGINE_NETWORK_TESTNET,
-        };
-
-        // SAFETY: The lifecycle and request remain live for the start call.
-        let operation = unsafe { start_operation(lifecycle, &request) };
-        // SAFETY: The operation owns an internal Arc after the successful start.
-        unsafe { wallet_engine_lifecycle_free(lifecycle) };
-        // SAFETY: The operation and callback context remain live until ready.
-        unsafe { poll_until_ready(operation, &context) };
-        // SAFETY: Polling is complete and this test uniquely owns the handle.
-        unsafe { wallet_engine_create_wallet_operation_free(operation) };
-
-        assert_eq!(
-            receive(&receiver),
-            CompletionResult {
-                abi_status: WalletEngineAbiStatus::Ok,
-                wallet: None,
-                error: Some(LifecycleError {
-                    code: WalletEngineWalletLifecycleErrorCode::ProtectedSecretHost,
-                    protected_secret_host_error_kind: Some(host_error_kind),
-                    diagnostic: "protected storage failure".to_owned(),
-                }),
-                valid_pointer_shape: true,
-            }
-        );
-        wait_for_release(&context);
-        assert_eq!(context.completion_calls.load(Ordering::Relaxed), 1);
-    }
 }

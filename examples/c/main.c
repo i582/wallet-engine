@@ -53,7 +53,8 @@ static bool restrict_secret_file_permissions(void) {
 }
 
 static void complete_storage_error(
-    WalletEngineProtectedSecretStoreCompletion *completion,
+    void *result_context,
+    WalletEngineProtectedSecretStoreResultFn result,
     WalletEngineProtectedSecretHostErrorKind kind,
     const char *diagnostic
 ) {
@@ -61,19 +62,20 @@ static void complete_storage_error(
         .kind = kind,
         .diagnostic = {diagnostic, strlen(diagnostic)},
     };
-    (void)wallet_engine_protected_secret_store_completion_complete(completion, &error);
-    wallet_engine_protected_secret_store_completion_free(completion);
+    (void)result(result_context, &error);
 }
 
 static void store_protected_secret(
     void *context,
-    WalletEngineProtectedSecretStoreCompletion *completion,
-    const WalletEngineProtectedSecretStoreView *request
+    const WalletEngineProtectedSecretStoreView *request,
+    void *result_context,
+    WalletEngineProtectedSecretStoreResultFn result
 ) {
     (void)context;
     if (request == NULL || request->bytes.data == NULL || request->bytes.len == 0) {
         complete_storage_error(
-            completion,
+            result_context,
+            result,
             WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_OTHER,
             "invalid file-storage request"
         );
@@ -83,7 +85,8 @@ static void store_protected_secret(
     FILE *file = fopen(WALLET_SECRETS_FILE, "ab");
     if (file == NULL) {
         complete_storage_error(
-            completion,
+            result_context,
+            result,
             WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_UNAVAILABLE,
             "failed to open the secrets file"
         );
@@ -92,7 +95,8 @@ static void store_protected_secret(
     if (!restrict_secret_file_permissions()) {
         (void)fclose(file);
         complete_storage_error(
-            completion,
+            result_context,
+            result,
             WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_POLICY_VIOLATION,
             "failed to restrict permissions on the secrets file"
         );
@@ -108,15 +112,15 @@ static void store_protected_secret(
 
     if (!stored) {
         complete_storage_error(
-            completion,
+            result_context,
+            result,
             WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_OTHER,
             "failed to append the mnemonic to the secrets file"
         );
         return;
     }
 
-    (void)wallet_engine_protected_secret_store_completion_complete(completion, NULL);
-    wallet_engine_protected_secret_store_completion_free(completion);
+    (void)result(result_context, NULL);
 }
 
 static bool append_wallet_metadata(const WalletEngineCreatedWalletView *wallet) {
@@ -201,32 +205,6 @@ static void create_wallet_complete(
     }
 }
 
-static bool poll_creation_once(WalletEngineCreateWalletOperation *operation) {
-    WalletEngineOperationPollState state = WALLET_ENGINE_OPERATION_POLL_STATE_PENDING;
-    const WalletEngineAbiStatus status = wallet_engine_create_wallet_operation_poll(
-        operation,
-        &example_context,
-        create_wallet_complete,
-        &state
-    );
-    if (status != WALLET_ENGINE_ABI_STATUS_OK) {
-        fprintf(
-            stderr,
-            "Failed to poll wallet creation: ABI status %u\n",
-            (unsigned)status
-        );
-        return false;
-    }
-    if (state == WALLET_ENGINE_OPERATION_POLL_STATE_PENDING) {
-        fputs(
-            "The host deferred completion; schedule another poll in the client event loop\n",
-            stderr
-        );
-        return false;
-    }
-    return true;
-}
-
 static bool read_line(char *buffer, size_t capacity) {
     if (fgets(buffer, (int)capacity, stdin) == NULL) {
         return false;
@@ -258,20 +236,14 @@ static void create_wallet(WalletEngineLifecycle *lifecycle) {
         .network = prompt_network(),
     };
     example_context.succeeded = false;
-    WalletEngineCreateWalletOperation *operation = NULL;
-    const WalletEngineAbiStatus status = wallet_engine_lifecycle_create_wallet_start(
+    const WalletEngineAbiStatus status = wallet_engine_lifecycle_create_wallet(
         lifecycle,
         &request,
-        &operation
+        &example_context,
+        create_wallet_complete
     );
     if (status != WALLET_ENGINE_ABI_STATUS_OK) {
-        fprintf(stderr, "Failed to start wallet creation: ABI status %u\n", (unsigned)status);
-        return;
-    }
-    const bool completed = poll_creation_once(operation);
-    wallet_engine_create_wallet_operation_free(operation);
-    if (!completed) {
-        fputs("Wallet creation did not complete\n", stderr);
+        fprintf(stderr, "Failed to create wallet: ABI status %u\n", (unsigned)status);
         return;
     }
     if (example_context.succeeded) {

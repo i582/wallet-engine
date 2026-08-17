@@ -18,10 +18,11 @@ callback persistence. Never use this storage implementation in production.
 Replace it with Keychain, Keystore, Credential Manager, or an equivalent secure
 store.
 
-The example's file-storage callback completes synchronously, so wallet creation
-becomes ready in one explicit `operation_poll` call. A real asynchronous client
-must return to its own event loop on `PENDING` and schedule a later poll after
-its host operation completes; it must not spin or block inside the library.
+Wallet creation is a synchronous library call. The file-storage callback and
+result callback both run before that call returns, on the thread selected by
+the client. A client that needs asynchronous UI behavior should invoke the
+library from its own worker thread or task; Wallet Engine does not create or
+schedule threads, tasks, queues, or event loops.
 
 Build and run it from the repository root:
 

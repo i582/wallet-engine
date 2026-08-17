@@ -8,8 +8,7 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [dependencies]
-async-trait = "=0.1.89"
-wallet-engine = { path = ".." }
+wallet-engine = { path = "..", features = ["c-abi"] }
 
 [lib]
 name = "wallet_engine_c"

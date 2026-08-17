@@ -9,7 +9,7 @@ use std::{
 
 use wallet_engine_c::{
     WALLET_ENGINE_PLATFORM_HOST_CALLBACKS_SIZE, WalletEngineAbiStatus, WalletEngineLifecycle,
-    WalletEnginePlatformHostCallbacks, WalletEngineProtectedSecretStoreCompletion,
+    WalletEnginePlatformHostCallbacks, WalletEngineProtectedSecretStoreResultFn,
     WalletEngineProtectedSecretStoreView, wallet_engine_lifecycle_free,
     wallet_engine_lifecycle_new,
 };
@@ -41,8 +41,9 @@ unsafe extern "C" fn release_context(context: *mut c_void) {
 
 const unsafe extern "C" fn store_protected_secret(
     _context: *mut c_void,
-    _completion: *mut WalletEngineProtectedSecretStoreCompletion,
     _request: *const WalletEngineProtectedSecretStoreView,
+    _result_context: *mut c_void,
+    _result: WalletEngineProtectedSecretStoreResultFn,
 ) {
 }
 
