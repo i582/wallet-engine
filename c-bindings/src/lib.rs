@@ -12,7 +12,6 @@ mod abi;
 mod host;
 #[allow(unsafe_code)]
 mod lifecycle;
-mod runtime;
 mod types;
 
 pub use abi::{
@@ -26,15 +25,10 @@ pub use host::{
     WalletEngineStoreProtectedSecretFn, wallet_engine_protected_secret_store_completion_complete,
     wallet_engine_protected_secret_store_completion_free,
 };
-#[allow(
-    deprecated,
-    reason = "re-exports the legacy ABI while removing the library-owned runtime"
-)]
 pub use lifecycle::{
-    WalletEngineCreateWalletCompletionFn, WalletEngineCreateWalletOperation,
-    WalletEngineCreateWalletResultFn, WalletEngineLifecycle, WalletEngineOperationPollState,
-    wallet_engine_create_wallet_operation_free, wallet_engine_create_wallet_operation_poll,
-    wallet_engine_lifecycle_create_wallet, wallet_engine_lifecycle_create_wallet_start,
+    WalletEngineCreateWalletOperation, WalletEngineCreateWalletResultFn, WalletEngineLifecycle,
+    WalletEngineOperationPollState, wallet_engine_create_wallet_operation_free,
+    wallet_engine_create_wallet_operation_poll, wallet_engine_lifecycle_create_wallet_start,
     wallet_engine_lifecycle_free, wallet_engine_lifecycle_new,
 };
 pub use types::{

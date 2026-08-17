@@ -5,7 +5,7 @@ use std::ffi::c_char;
 /// The major version of the Wallet Engine C ABI.
 ///
 /// A breaking change to exported types or functions must increment this value.
-pub const ABI_VERSION: u32 = 1;
+pub const ABI_VERSION: u32 = 2;
 
 /// The immediate result of a C ABI function call.
 ///

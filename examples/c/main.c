@@ -216,15 +216,32 @@ static void yield_thread(void) {
 #endif
 }
 
-static bool wait_for_completion(const ExampleContext *context) {
+static bool poll_until_completion(WalletEngineCreateWalletOperation *operation) {
     const time_t deadline = time(NULL) + 30;
-    while (!atomic_load_explicit(&context->completed, memory_order_acquire)) {
+    for (;;) {
+        WalletEngineOperationPollState state = WALLET_ENGINE_OPERATION_POLL_STATE_PENDING;
+        const WalletEngineAbiStatus status = wallet_engine_create_wallet_operation_poll(
+            operation,
+            &example_context,
+            create_wallet_complete,
+            &state
+        );
+        if (status != WALLET_ENGINE_ABI_STATUS_OK) {
+            fprintf(
+                stderr,
+                "Failed to poll wallet creation: ABI status %u\n",
+                (unsigned)status
+            );
+            return false;
+        }
+        if (state == WALLET_ENGINE_OPERATION_POLL_STATE_READY) {
+            return atomic_load_explicit(&example_context.completed, memory_order_acquire);
+        }
         if (time(NULL) > deadline) {
             return false;
         }
         yield_thread();
     }
-    return true;
 }
 
 static bool read_line(char *buffer, size_t capacity) {
@@ -259,18 +276,20 @@ static void create_wallet(WalletEngineLifecycle *lifecycle) {
     };
     example_context.succeeded = false;
     atomic_store_explicit(&example_context.completed, false, memory_order_relaxed);
-    const WalletEngineAbiStatus status = wallet_engine_lifecycle_create_wallet(
+    WalletEngineCreateWalletOperation *operation = NULL;
+    const WalletEngineAbiStatus status = wallet_engine_lifecycle_create_wallet_start(
         lifecycle,
         &request,
-        &example_context,
-        create_wallet_complete
+        &operation
     );
     if (status != WALLET_ENGINE_ABI_STATUS_OK) {
         fprintf(stderr, "Failed to start wallet creation: ABI status %u\n", (unsigned)status);
         return;
     }
-    if (!wait_for_completion(&example_context)) {
-        fputs("Timed out waiting for wallet creation\n", stderr);
+    const bool completed = poll_until_completion(operation);
+    wallet_engine_create_wallet_operation_free(operation);
+    if (!completed) {
+        fputs("Wallet creation did not complete\n", stderr);
         return;
     }
     if (example_context.succeeded) {

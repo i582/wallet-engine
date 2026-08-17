@@ -9,37 +9,14 @@ use std::{
     task::{Context, Poll},
 };
 
-use futures::{FutureExt, task::noop_waker_ref};
+use futures::task::noop_waker_ref;
 use wallet_engine::{CreatedWallet, WalletLifecycle as CoreWalletLifecycle, WalletLifecycleError};
 
-#[allow(deprecated, reason = "used only by the deprecated asynchronous C ABI")]
-use crate::runtime::runtime;
 use crate::{
     WalletEngineAbiStatus, WalletEngineCreateWalletRequest, WalletEngineCreatedWalletView,
     WalletEnginePlatformHostAdapter, WalletEnginePlatformHostCallbacks,
     WalletEngineWalletLifecycleErrorView, with_created_wallet_view,
 };
-
-/// Receives the result of an asynchronous wallet-creation operation.
-///
-/// `abi_status` is `OK` for both a successful wallet and a domain failure. On
-/// success, `wallet` is non-null and `error` is null. For a domain failure,
-/// `wallet` is null and `error` is non-null. A boundary panic is reported with
-/// `PANIC` and both result pointers null.
-///
-/// All result views and their nested pointers remain valid only until the
-/// callback returns. The callback can run on an arbitrary worker thread.
-#[deprecated(
-    note = "use WalletEngineCreateWalletResultFn with wallet_engine_create_wallet_operation_poll"
-)]
-pub type WalletEngineCreateWalletCompletionFn = Option<
-    unsafe extern "C" fn(
-        context: *mut c_void,
-        abi_status: WalletEngineAbiStatus,
-        wallet: *const WalletEngineCreatedWalletView,
-        error: *const WalletEngineWalletLifecycleErrorView,
-    ),
->;
 
 /// Receives a wallet-creation result synchronously from an explicit poll.
 ///
@@ -97,11 +74,6 @@ struct CreateWalletCompletion {
         *const WalletEngineWalletLifecycleErrorView,
     ),
 }
-
-// SAFETY: The start-function contract requires the callback and its opaque
-// context to be safe to use from an arbitrary worker thread. Rust forwards the
-// pointer but never dereferences it.
-unsafe impl Send for CreateWalletCompletion {}
 
 impl CreateWalletCompletion {
     unsafe fn call(
@@ -380,101 +352,4 @@ pub unsafe extern "C" fn wallet_engine_create_wallet_operation_free(
         // from `wallet_engine_lifecycle_create_wallet_start`.
         drop(unsafe { Box::from_raw(operation) });
     })));
-}
-
-/// Starts creation of a wallet on the shared asynchronous runtime.
-///
-/// Returns an ABI status describing argument validation and task startup. An
-/// `OK` return guarantees that `completion` will be called exactly once. Domain
-/// failures are delivered asynchronously with an `OK` ABI status and a
-/// non-null error view.
-///
-/// The request is copied before this function returns. The lifecycle service
-/// is retained for the operation, so the caller may immediately free its
-/// lifecycle handle after an `OK` return.
-///
-/// # Safety
-///
-/// `lifecycle` must point to a live lifecycle handle for this call. `request`
-/// and its record-ID view must be readable for this call. `completion` and
-/// `completion_context` must remain safe to invoke from an arbitrary worker
-/// thread until the callback returns. The context may be null if the callback
-/// accepts null.
-#[deprecated(
-    note = "use wallet_engine_lifecycle_create_wallet_start, wallet_engine_create_wallet_operation_poll, and wallet_engine_create_wallet_operation_free"
-)]
-#[unsafe(no_mangle)]
-#[allow(deprecated, reason = "implements the deprecated asynchronous C ABI")]
-pub unsafe extern "C" fn wallet_engine_lifecycle_create_wallet(
-    lifecycle: *const WalletEngineLifecycle,
-    request: *const WalletEngineCreateWalletRequest,
-    completion_context: *mut c_void,
-    completion: WalletEngineCreateWalletCompletionFn,
-) -> WalletEngineAbiStatus {
-    catch_unwind(AssertUnwindSafe(|| {
-        // SAFETY: The caller upholds the handle, request, and callback
-        // contracts documented by this function.
-        unsafe { lifecycle_create_wallet(lifecycle, request, completion_context, completion) }
-    }))
-    .unwrap_or(WalletEngineAbiStatus::Panic)
-}
-
-#[allow(deprecated, reason = "implements the deprecated asynchronous C ABI")]
-unsafe fn lifecycle_create_wallet(
-    lifecycle: *const WalletEngineLifecycle,
-    request: *const WalletEngineCreateWalletRequest,
-    completion_context: *mut c_void,
-    completion: WalletEngineCreateWalletCompletionFn,
-) -> WalletEngineAbiStatus {
-    let Some(completion) = completion else {
-        return WalletEngineAbiStatus::InvalidArgument;
-    };
-    if lifecycle.is_null() || request.is_null() {
-        return WalletEngineAbiStatus::InvalidArgument;
-    }
-
-    // SAFETY: The caller guarantees a readable request and nested record-ID
-    // view for this call. Conversion copies all request data.
-    let request = match unsafe { request.read().try_to_core() } {
-        Ok(request) => request,
-        Err(status) => return status,
-    };
-    // SAFETY: The caller guarantees the handle remains live for this call.
-    let lifecycle = Arc::clone(&unsafe { &*lifecycle }.inner);
-    let completion = CreateWalletCompletion {
-        context: completion_context,
-        callback: completion,
-    };
-
-    let runtime = match runtime() {
-        Ok(runtime) => runtime,
-        Err(status) => return status,
-    };
-    drop(runtime.spawn(async move {
-        let outcome = AssertUnwindSafe(run_create_wallet(lifecycle, request, completion))
-            .catch_unwind()
-            .await;
-        if outcome.is_err() {
-            // SAFETY: Null result pointers represent a caught boundary panic
-            // and are valid for this callback invocation.
-            unsafe {
-                completion.call(
-                    WalletEngineAbiStatus::Panic,
-                    std::ptr::null(),
-                    std::ptr::null(),
-                )
-            };
-        }
-    }));
-
-    WalletEngineAbiStatus::Ok
-}
-
-async fn run_create_wallet(
-    lifecycle: Arc<CoreWalletLifecycle>,
-    request: wallet_engine::CreateWalletRequest,
-    completion: CreateWalletCompletion,
-) {
-    let outcome = lifecycle.create_wallet(request).await;
-    deliver_create_wallet_outcome(outcome, completion);
 }

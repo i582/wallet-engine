@@ -3,14 +3,17 @@
 
 use std::{
     ffi::c_void,
+    future::Future,
     mem::size_of,
+    pin::pin,
     sync::{
         Mutex, MutexGuard,
         atomic::{AtomicPtr, AtomicUsize, Ordering},
     },
+    task::{Context, Poll},
 };
 
-use futures::{FutureExt, executor::block_on};
+use futures::task::noop_waker_ref;
 use wallet_engine::{
     ProtectedSecretHostError, ProtectedSecretHostErrorKind, ProtectedSecretRef,
     ProtectedSecretStore, WalletPlatformHost,
@@ -46,6 +49,26 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     match mutex.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn poll_once<F: Future>(future: F) -> Option<F::Output> {
+    let mut future = pin!(future);
+    let mut context = Context::from_waker(noop_waker_ref());
+    match future.as_mut().poll(&mut context) {
+        Poll::Ready(output) => Some(output),
+        Poll::Pending => None,
+    }
+}
+
+fn run_to_completion<F: Future>(future: F) -> F::Output {
+    let mut future = pin!(future);
+    let mut context = Context::from_waker(noop_waker_ref());
+    loop {
+        match future.as_mut().poll(&mut context) {
+            Poll::Ready(output) => return output,
+            Poll::Pending => std::thread::yield_now(),
+        }
     }
 }
 
@@ -322,7 +345,7 @@ fn store_request_can_complete_synchronously() {
     let host = unsafe { adapter(&callbacks) };
 
     assert_eq!(
-        block_on(host.store_protected_secret(store_request())),
+        run_to_completion(host.store_protected_secret(store_request())),
         Ok(())
     );
     assert_eq!(context.stores.load(Ordering::Relaxed), 1);
@@ -348,7 +371,7 @@ fn store_request_can_complete_from_another_thread() {
     let host = unsafe { adapter(&callbacks) };
 
     assert_eq!(
-        block_on(host.store_protected_secret(store_request())),
+        run_to_completion(host.store_protected_secret(store_request())),
         Ok(())
     );
     assert_eq!(context.stores.load(Ordering::Relaxed), 1);
@@ -362,7 +385,7 @@ fn store_error_is_copied_into_the_core_type() {
     let host = unsafe { adapter(&callbacks) };
 
     assert_eq!(
-        block_on(host.store_protected_secret(store_request())),
+        run_to_completion(host.store_protected_secret(store_request())),
         Err(ProtectedSecretHostError::Failed {
             kind: ProtectedSecretHostErrorKind::Unavailable,
             diagnostic: "keychain unavailable".to_owned(),
@@ -382,7 +405,7 @@ fn invalid_and_duplicate_completions_are_rejected() {
     let host = unsafe { adapter(&callbacks) };
 
     assert_eq!(
-        block_on(host.store_protected_secret(store_request())),
+        run_to_completion(host.store_protected_secret(store_request())),
         Ok(())
     );
     assert_eq!(
@@ -411,7 +434,7 @@ fn completion_remains_safe_after_dropping_the_host_future() {
     // SAFETY: The callback table and context remain live through this test.
     let host = unsafe { adapter(&callbacks) };
 
-    let result = host.store_protected_secret(store_request()).now_or_never();
+    let result = poll_once(host.store_protected_secret(store_request()));
     assert_eq!(result, None);
     let completion = context.captured_completion.load(Ordering::Relaxed);
     assert!(!completion.is_null());
@@ -433,7 +456,7 @@ fn freeing_without_completion_reports_cancellation() {
     let host = unsafe { adapter(&callbacks) };
 
     assert_eq!(
-        block_on(host.store_protected_secret(store_request())),
+        run_to_completion(host.store_protected_secret(store_request())),
         Err(ProtectedSecretHostError::Failed {
             kind: ProtectedSecretHostErrorKind::Cancelled,
             diagnostic: "protected-secret store completion was released without a result"
