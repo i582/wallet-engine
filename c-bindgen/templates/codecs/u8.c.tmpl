@@ -1,0 +1,19 @@
+
+WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_write_u8(
+    WalletEnginePrivateBufferWriter *writer,
+    uint8_t value
+) {
+    return wallet_engine_private_write(writer, &value, sizeof(value));
+}
+
+WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_read_u8(
+    WalletEnginePrivateBufferReader *reader,
+    uint8_t *out_value
+) {
+    const uint8_t *data = NULL;
+    WalletEngineAbiStatus status = wallet_engine_private_read(reader, &data, 1u);
+    if (status == WALLET_ENGINE_ABI_STATUS_OK) {
+        *out_value = data[0];
+    }
+    return status;
+}

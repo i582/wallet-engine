@@ -1,0 +1,11 @@
+
+/*
+ * A borrowed, non-NUL-terminated UTF-8 string.
+ *
+ * `data` may be NULL only when `len` is zero. The bytes remain owned by the
+ * caller and must stay readable for the documented lifetime of the view.
+ */
+typedef struct WalletEngineStringView {
+    const char *data;
+    size_t len;
+} WalletEngineStringView;

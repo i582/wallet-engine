@@ -662,6 +662,7 @@ dependencies = [
  "anyhow",
  "camino",
  "clap",
+ "heck",
  "serde",
  "serde_json",
  "tempfile",

@@ -1,0 +1,54 @@
+
+/* Private UniFFI-compatible codecs. These symbols are not part of the C ABI. */
+#if defined(__GNUC__)
+#  define WALLET_ENGINE_PRIVATE __attribute__((visibility("hidden")))
+#else
+#  define WALLET_ENGINE_PRIVATE
+#endif
+
+typedef struct WalletEnginePrivateBufferWriter {
+    uint8_t *data;
+    size_t len;
+    size_t offset;
+} WalletEnginePrivateBufferWriter;
+
+typedef struct WalletEnginePrivateBufferReader {
+    const uint8_t *data;
+    size_t len;
+    size_t offset;
+} WalletEnginePrivateBufferReader;
+
+WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_write(
+    WalletEnginePrivateBufferWriter *writer,
+    const uint8_t *data,
+    size_t len
+) {
+    if (writer == NULL || writer->offset > writer->len || len > writer->len - writer->offset) {
+        return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
+    }
+    if (len != 0u && (writer->data == NULL || data == NULL)) {
+        return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
+    }
+    if (len != 0u) {
+        memcpy(writer->data + writer->offset, data, len);
+    }
+    writer->offset += len;
+    return WALLET_ENGINE_ABI_STATUS_OK;
+}
+
+WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_read(
+    WalletEnginePrivateBufferReader *reader,
+    const uint8_t **out_data,
+    size_t len
+) {
+    if (reader == NULL || out_data == NULL || reader->offset > reader->len
+        || len > reader->len - reader->offset) {
+        return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
+    }
+    if (len != 0u && reader->data == NULL) {
+        return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
+    }
+    *out_data = len == 0u ? NULL : reader->data + reader->offset;
+    reader->offset += len;
+    return WALLET_ENGINE_ABI_STATUS_OK;
+}

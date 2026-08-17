@@ -11,6 +11,7 @@ The generator currently:
   `wallet_engine.c-api.json` artifacts;
 - discovers the builtin types actually used by the component;
 - generates UniFFI-compatible wire codecs for builtin values;
+- generates public C types and codecs for flat non-error enums;
 - compiles the generated facade as strict C11 in its test suite.
 
 Compound codecs, callback adapters, and export lists will be added on top of
@@ -26,17 +27,24 @@ just bindings-c-experimental
 
 The output directory is always `bindings/c-experimental`.
 
+Static C and header source lives in `templates/`, split into facade, public
+type, and private codec blocks. Rust renderers choose the blocks required by
+the normalized component model and substitute explicit `{{PLACEHOLDER}}`
+values. Templates are embedded into the generator binary with `include_str!`,
+so generation has no runtime template-file dependency. The small renderer
+rejects missing and unresolved placeholders in tests.
+
 The generator already produces a minimal compilable `wallet_engine.h` and
 `wallet_engine.c` there. These files grow incrementally with each supported type
 and callable instead of being postponed until the complete API model is
 implemented. C++ compatibility is deliberately deferred until the C ABI is
 complete and stable.
 
-The current builtin-type slice discovers the types used by the real
-`ComponentInterface`, records their Rust-to-C mapping and codec in the
-manifest, and generates borrowed views plus private wire helpers. Tests
-compile the facade with strict C11 warnings and execute its codecs against
-known UniFFI wire values.
+The current type slice discovers the builtins and flat non-error enums used by
+the real `ComponentInterface`, records their public Rust-to-C mapping in the
+manifest, and generates borrowed views plus private wire helpers. Tests compile
+the facade with strict C11 warnings and execute its codecs against known UniFFI
+wire values.
 
 ## Rust to C mapping
 
@@ -112,6 +120,7 @@ metadata; it never frees Rust-owned memory with the C allocator.
 | `bool` | `int8_t`, `0` or `1` | one byte, `0` or non-zero |
 | `String` | raw UTF-8 `RustBuffer` | big-endian `i32` byte length followed by UTF-8 |
 | `Vec<u8>` / `Bytes` | length-prefixed `RustBuffer` | big-endian `i32` length followed by bytes |
+| flat enum | `RustBuffer` | big-endian `i32` UniFFI discriminant |
 
 Lowering rejects malformed views, invalid UTF-8, lengths above `INT32_MAX`
 where UniFFI uses a signed 32-bit length, and arithmetic overflow. Lifting
@@ -119,7 +128,38 @@ checks buffer bounds and rejects trailing data for a complete `Bytes` value.
 
 The pure codec behavior is tested in `tests/codec.c`. That C11 executable
 checks exact wire bytes and write/read round trips for every integer width,
-booleans, strings, and bytes, together with malformed and truncated inputs.
+booleans, strings, bytes, and a flat enum, together with malformed, truncated,
+and unknown enum inputs.
+
+### Flat enums
+
+A Rust enum without payloads that is not used as an error gets its own public
+C scalar type and named constants. For example:
+
+```rust
+pub enum Network {
+    Mainnet,
+    Testnet,
+}
+```
+
+becomes:
+
+```c
+typedef uint32_t WalletEngineNetwork;
+#define WALLET_ENGINE_NETWORK_MAINNET ((WalletEngineNetwork)0u)
+#define WALLET_ENGINE_NETWORK_TESTNET ((WalletEngineNetwork)1u)
+```
+
+The public values are stable zero-based C ABI values and are recorded in
+`wallet_engine.c-api.json`. They are deliberately separate from UniFFI's
+private one-based wire tags. Generated codecs use an explicit `switch` in both
+directions, so an unknown public value or wire tag is rejected instead of being
+passed through accidentally.
+
+The current Wallet Engine component contains 15 supported flat non-error
+enums. Enums with payloads and enums used as declared errors remain planned
+separate slices.
 
 ### Wallet Engine custom string types
 
@@ -144,7 +184,6 @@ and non-empty validation stays in the Rust custom-type lift implementation.
 | `Option<T>` | `WalletEngineOptionalT { bool has_value; T value; }` | `value` is ignored when `has_value == false`. |
 | `Vec<T>` | `WalletEngineTListView { const T *data; size_t len; }` | Borrowed contiguous sequence. |
 | record `T` | `WalletEngineTView` | Fields are converted recursively. |
-| flat enum `T` | `WalletEngineT` plus stable numeric constants | Unknown input values are rejected before calling UniFFI. |
 | enum with fields | kind/tag plus generated payload union | Only the payload selected by the tag is active. |
 | error enum `E` | stable error code plus generated payload | Declared errors are separate from immediate ABI failures. |
 
@@ -182,7 +221,7 @@ The generated header and facade stay compilable after every slice:
 
 1. Builtin integer, boolean, string, and byte representations — implemented.
 2. Primitive/bool wire codecs and string/bytes lower/lift — implemented.
-3. Flat enums.
+3. Flat non-error enums — implemented.
 4. Options and sequences.
 5. Records and nested combinations.
 6. Error and payload enums.

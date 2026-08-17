@@ -32,7 +32,7 @@ fn write_file(path: &Utf8Path, contents: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::{env, ffi::OsString, fs, process::Command};
+    use std::{env, ffi::OsString, process::Command};
 
     use anyhow::{Context, Result, ensure};
     use camino::Utf8Path;
@@ -76,7 +76,7 @@ mod tests {
     }
 
     #[test]
-    fn c_builtin_codec_tests_match_the_uniffi_wire_format() -> Result<()> {
+    fn c_codec_tests_match_the_uniffi_wire_format() -> Result<()> {
         let component = builtin_fixture()?;
         let model = BindingsModel::from_components(&[component])?;
         let temporary = tempfile::tempdir().context("failed to create C codec-test directory")?;
@@ -84,9 +84,7 @@ mod tests {
             .context("C codec-test path is not valid UTF-8")?;
         write_bindings(out_dir, &model)?;
 
-        let harness = out_dir.join("codec_test.c");
-        fs::write(&harness, CODEC_TEST_HARNESS)
-            .with_context(|| format!("failed to write C codec-test harness {harness}"))?;
+        let harness = Utf8Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/codec.c");
         let executable = out_dir.join("codec_test");
         let compiler = env::var_os("CC").unwrap_or_else(|| OsString::from("cc"));
         let output = Command::new(compiler)
@@ -121,7 +119,7 @@ mod tests {
 
     fn builtin_fixture() -> Result<ComponentInterface> {
         ComponentInterface::from_webidl(
-            r"
+            r#"
             namespace wallet_engine {};
 
             dictionary Example {
@@ -136,11 +134,12 @@ mod tests {
                 i64 signed_revision;
                 string name;
                 bytes payload;
+                Network network;
             };
-            ",
+
+            enum Network { "mainnet", "testnet" };
+            "#,
             "wallet_engine",
         )
     }
-
-    const CODEC_TEST_HARNESS: &str = include_str!("../../tests/codec.c");
 }

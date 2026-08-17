@@ -1,0 +1,82 @@
+
+WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_write_bytes(
+    WalletEnginePrivateBufferWriter *writer,
+    WalletEngineBytesView value
+) {
+    WalletEngineAbiStatus status;
+    if ((value.len != 0u && value.data == NULL) || value.len > (size_t)INT32_MAX) {
+        return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
+    }
+    status = wallet_engine_private_write_u32(writer, (uint32_t)value.len);
+    if (status != WALLET_ENGINE_ABI_STATUS_OK) {
+        return status;
+    }
+    return wallet_engine_private_write(writer, value.data, value.len);
+}
+
+WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_read_bytes(
+    WalletEnginePrivateBufferReader *reader,
+    WalletEngineBytesView *out_value
+) {
+    uint32_t len = 0u;
+    const uint8_t *data = NULL;
+    WalletEngineAbiStatus status;
+    if (out_value == NULL) {
+        return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
+    }
+    status = wallet_engine_private_read_u32(reader, &len);
+    if (status != WALLET_ENGINE_ABI_STATUS_OK || len > (uint32_t)INT32_MAX) {
+        return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
+    }
+    status = wallet_engine_private_read(reader, &data, (size_t)len);
+    if (status != WALLET_ENGINE_ABI_STATUS_OK) {
+        return status;
+    }
+    out_value->data = data;
+    out_value->len = (size_t)len;
+    return WALLET_ENGINE_ABI_STATUS_OK;
+}
+
+WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_lower_bytes(
+    WalletEngineBytesView value,
+    WalletEnginePrivateRustBuffer *out_buffer
+) {
+    WalletEnginePrivateBufferWriter writer;
+    WalletEngineAbiStatus status;
+    if ((value.len != 0u && value.data == NULL) || value.len > (size_t)INT32_MAX
+        || value.len > SIZE_MAX - 4u) {
+        return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
+    }
+    status = wallet_engine_private_rustbuffer_alloc(value.len + 4u, out_buffer);
+    if (status != WALLET_ENGINE_ABI_STATUS_OK) {
+        return status;
+    }
+    writer.data = out_buffer->data;
+    writer.len = (size_t)out_buffer->len;
+    writer.offset = 0u;
+    status = wallet_engine_private_write_bytes(&writer, value);
+    if (status != WALLET_ENGINE_ABI_STATUS_OK) {
+        wallet_engine_private_rustbuffer_free(*out_buffer);
+        *out_buffer = (WalletEnginePrivateRustBuffer){0};
+    }
+    return status;
+}
+
+WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_lift_bytes(
+    const WalletEnginePrivateRustBuffer *buffer,
+    WalletEngineBytesView *out_value
+) {
+    WalletEnginePrivateBufferReader reader;
+    WalletEngineAbiStatus status;
+    if (out_value == NULL || !wallet_engine_private_rustbuffer_is_valid(buffer)) {
+        return WALLET_ENGINE_ABI_STATUS_PANIC;
+    }
+    reader.data = buffer->data;
+    reader.len = (size_t)buffer->len;
+    reader.offset = 0u;
+    status = wallet_engine_private_read_bytes(&reader, out_value);
+    if (status != WALLET_ENGINE_ABI_STATUS_OK || reader.offset != reader.len) {
+        return WALLET_ENGINE_ABI_STATUS_PANIC;
+    }
+    return WALLET_ENGINE_ABI_STATUS_OK;
+}
