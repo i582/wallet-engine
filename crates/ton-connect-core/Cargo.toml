@@ -1,0 +1,57 @@
+[package]
+name = "ton-connect-core"
+version = "0.1.0"
+authors = ["TON Core"]
+edition = "2024"
+rust-version = "1.96.1"
+license = "MIT OR Apache-2.0"
+description = "Runtime-neutral TON Connect protocol types and session cryptography"
+documentation = "https://docs.rs/ton-connect-core"
+readme = "README.md"
+
+[dependencies]
+base64 = "=0.22.1"
+crypto_box = { version = "=0.9.1", default-features = false, features = ["alloc", "salsa20", "std"] }
+crc = "=3.4.0"
+ed25519-dalek = "=2.2.0"
+getrandom = { version = "=0.3.4", features = ["wasm_js"] }
+hex = "=0.4.3"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+sha2 = "=0.10.9"
+thiserror = "=2.0.17"
+ton_core = "=0.1.4"
+url = "=2.5.7"
+zeroize = "=1.9.0"
+
+[dev-dependencies]
+proptest = "=1.11.0"
+
+[lints.rust]
+future_incompatible = { level = "deny", priority = -1 }
+unsafe_code = "forbid"
+unreachable_pub = "warn"
+unused_must_use = "deny"
+unused_results = "deny"
+
+[lints.clippy]
+correctness = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+suspicious = { level = "deny", priority = -1 }
+
+unwrap_used = "deny"
+expect_used = "deny"
+arithmetic_side_effects = "deny"
+as_conversions = "deny"
+dbg_macro = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+wildcard_enum_match_arm = "deny"
+
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"

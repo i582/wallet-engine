@@ -1,0 +1,502 @@
+use std::collections::BTreeMap;
+
+use thiserror::Error;
+
+use crate::{
+    ClientId, ConnectRequest, EmbeddedRequest, EmbeddedRequestError, TraceId, ValueError,
+    decode_embedded_request_param, encode_embedded_request_param,
+};
+
+const PROTOCOL_VERSION: &str = "2";
+
+/// Encodes a TON Connect query for Telegram's `startapp` transport.
+#[must_use]
+pub fn encode_telegram_url_parameters(parameters: &str) -> String {
+    parameters
+        .replace('.', "%2E")
+        .replace('-', "%2D")
+        .replace('_', "%5F")
+        .replace('&', "-")
+        .replace('=', "__")
+        .replace('%', "--")
+}
+
+/// Decodes Telegram `startapp` substitutions back to a TON Connect query.
+#[must_use]
+pub fn decode_telegram_url_parameters(parameters: &str) -> String {
+    parameters
+        .replace("--", "%")
+        .replace("__", "=")
+        .replace('-', "&")
+        .replace("%5F", "_")
+        .replace("%2D", "-")
+        .replace("%2E", ".")
+}
+
+/// Action the wallet takes after the connect prompt completes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ReturnStrategy {
+    /// Return to the application that opened the wallet.
+    Back,
+    /// Do not perform a return jump.
+    None,
+    /// Open an explicit absolute application URL.
+    Custom(String),
+}
+
+/// A parsed TON Connect universal, unified, or custom-scheme link.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConnectLink {
+    client_id: ClientId,
+    request: Option<ConnectRequest>,
+    return_strategy: ReturnStrategy,
+    embedded_request: Option<EmbeddedRequest>,
+    trace_id: Option<TraceId>,
+    extensions: Vec<(String, String)>,
+}
+
+impl ConnectLink {
+    /// Creates a complete connect link value before choosing a wallet-specific
+    /// universal or custom-scheme base URL.
+    #[must_use]
+    pub fn connect(
+        client_id: ClientId,
+        request: ConnectRequest,
+        return_strategy: ReturnStrategy,
+        embedded_request: Option<EmbeddedRequest>,
+        trace_id: Option<TraceId>,
+    ) -> Self {
+        Self {
+            client_id,
+            request: Some(request),
+            return_strategy,
+            embedded_request,
+            trace_id,
+            extensions: Vec::new(),
+        }
+    }
+
+    /// Creates the reduced `id`/`ret` link accepted by compatible wallets.
+    #[must_use]
+    pub fn reduced(
+        client_id: ClientId,
+        return_strategy: ReturnStrategy,
+        trace_id: Option<TraceId>,
+    ) -> Self {
+        Self {
+            client_id,
+            request: None,
+            return_strategy,
+            embedded_request: None,
+            trace_id,
+            extensions: Vec::new(),
+        }
+    }
+
+    /// Parses both a full connect link and the protocol's reduced `id`/`ret` link.
+    pub fn parse(value: &str) -> Result<Self, ConnectLinkError> {
+        let url = url::Url::parse(value)?;
+        let mut known = BTreeMap::<String, String>::new();
+        let mut extensions = Vec::new();
+        for (name, value) in url.query_pairs() {
+            let name = name.into_owned();
+            let value = value.into_owned();
+            if matches!(name.as_str(), "v" | "id" | "r" | "ret" | "e" | "trace_id") {
+                if known.insert(name.clone(), value).is_some() {
+                    return Err(ConnectLinkError::DuplicateParameter(name));
+                }
+            } else {
+                extensions.push((name, value));
+            }
+        }
+
+        let client_id = known
+            .remove("id")
+            .ok_or(ConnectLinkError::MissingParameter("id"))?
+            .parse()?;
+        let request = known
+            .remove("r")
+            .map(|request| serde_json::from_str::<ConnectRequest>(&request))
+            .transpose()?;
+        let version = known.remove("v");
+        if let Some(version) = version.as_deref()
+            && version != PROTOCOL_VERSION
+        {
+            return Err(ConnectLinkError::UnsupportedVersion(version.to_owned()));
+        }
+        if request.is_some() && version.is_none() {
+            return Err(ConnectLinkError::MissingParameter("v"));
+        }
+
+        // Malformed or unsupported embedded requests are deliberately ignored.
+        // The dApp SDK then falls back to ordinary bridge RPC after connect.
+        let embedded_request = known
+            .remove("e")
+            .and_then(|parameter| decode_embedded_request_param(&parameter).ok());
+        if embedded_request.is_some() && request.is_none() {
+            return Err(ConnectLinkError::EmbeddedRequestWithoutConnect);
+        }
+
+        let return_parameter = known.remove("ret");
+        let return_strategy = parse_return_strategy(return_parameter.as_deref())?;
+        let trace_id = known
+            .remove("trace_id")
+            .map(TraceId::try_from)
+            .transpose()?;
+
+        Ok(Self {
+            client_id,
+            request,
+            return_strategy,
+            embedded_request,
+            trace_id,
+            extensions,
+        })
+    }
+
+    /// Encodes this value against a wallet universal URL, `tc://`, or a
+    /// wallet-specific custom scheme.
+    ///
+    /// Query parameters already present on `base_url` are rejected so caller
+    /// data cannot shadow the protocol's singleton parameters.
+    pub fn to_url(&self, base_url: &str) -> Result<url::Url, ConnectLinkError> {
+        let mut url = url::Url::parse(base_url).map_err(ConnectLinkError::InvalidBaseUrl)?;
+        if url.query().is_some() || url.fragment().is_some() {
+            return Err(ConnectLinkError::BaseUrlContainsQueryOrFragment);
+        }
+
+        let request = self
+            .request
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(ConnectLinkError::EncodeConnectRequest)?;
+        let embedded = self
+            .embedded_request
+            .as_ref()
+            .map(encode_embedded_request_param)
+            .transpose()?;
+        if embedded.is_some() && request.is_none() {
+            return Err(ConnectLinkError::EmbeddedRequestWithoutConnect);
+        }
+        let return_strategy = match &self.return_strategy {
+            ReturnStrategy::Back => "back",
+            ReturnStrategy::None => "none",
+            ReturnStrategy::Custom(value) => {
+                let parsed = url::Url::parse(value)
+                    .map_err(|_| ConnectLinkError::InvalidReturnStrategy(value.clone()))?;
+                if parsed.scheme().is_empty() {
+                    return Err(ConnectLinkError::InvalidReturnStrategy(value.clone()));
+                }
+                value
+            }
+        };
+
+        {
+            let mut query = url.query_pairs_mut();
+            if request.is_some() {
+                let _ = query.append_pair("v", PROTOCOL_VERSION);
+            }
+            let _ = query.append_pair("id", &self.client_id.to_string());
+            if let Some(request) = request.as_deref() {
+                let _ = query.append_pair("r", request);
+            }
+            let _ = query.append_pair("ret", return_strategy);
+            if let Some(trace_id) = &self.trace_id {
+                let _ = query.append_pair("trace_id", trace_id.as_str());
+            }
+            if let Some(embedded) = embedded.as_deref() {
+                let _ = query.append_pair("e", embedded);
+            }
+            for (name, value) in &self.extensions {
+                let _ = query.append_pair(name, value);
+            }
+        }
+        Ok(url)
+    }
+
+    /// Returns the dApp's bridge client identifier.
+    #[must_use]
+    pub const fn client_id(&self) -> ClientId {
+        self.client_id
+    }
+
+    /// Returns the connect request, absent only for reduced `id`/`ret` links.
+    #[must_use]
+    pub const fn request(&self) -> Option<&ConnectRequest> {
+        self.request.as_ref()
+    }
+
+    /// Returns the post-action navigation strategy.
+    #[must_use]
+    pub const fn return_strategy(&self) -> &ReturnStrategy {
+        &self.return_strategy
+    }
+
+    /// Returns the optional one-tap request.
+    #[must_use]
+    pub const fn embedded_request(&self) -> Option<&EmbeddedRequest> {
+        self.embedded_request.as_ref()
+    }
+
+    /// Returns the optional analytics correlation identifier.
+    #[must_use]
+    pub const fn trace_id(&self) -> Option<&TraceId> {
+        self.trace_id.as_ref()
+    }
+
+    /// Returns unknown query parameters retained for forward compatibility.
+    #[must_use]
+    pub fn extensions(&self) -> &[(String, String)] {
+        &self.extensions
+    }
+}
+
+fn parse_return_strategy(value: Option<&str>) -> Result<ReturnStrategy, ConnectLinkError> {
+    match value {
+        None | Some("back") => Ok(ReturnStrategy::Back),
+        Some("none") => Ok(ReturnStrategy::None),
+        Some(custom) => {
+            let parsed = url::Url::parse(custom)
+                .map_err(|_| ConnectLinkError::InvalidReturnStrategy(custom.to_owned()))?;
+            if parsed.scheme().is_empty() {
+                return Err(ConnectLinkError::InvalidReturnStrategy(custom.to_owned()));
+            }
+            Ok(ReturnStrategy::Custom(custom.to_owned()))
+        }
+    }
+}
+
+/// Failure to parse a TON Connect link.
+#[derive(Debug, Error)]
+pub enum ConnectLinkError {
+    /// A universal, unified, or custom-scheme base URL is malformed.
+    #[error("invalid TON Connect base URL: {0}")]
+    InvalidBaseUrl(url::ParseError),
+    /// A base URL already contains values that could shadow protocol fields.
+    #[error("TON Connect base URL must not contain a query or fragment")]
+    BaseUrlContainsQueryOrFragment,
+    /// The outer link itself is not an absolute URL.
+    #[error("invalid TON Connect URL: {0}")]
+    InvalidUrl(#[from] url::ParseError),
+    /// A required query parameter is absent.
+    #[error("missing TON Connect query parameter: {0}")]
+    MissingParameter(&'static str),
+    /// A singleton protocol query parameter appeared more than once.
+    #[error("duplicate TON Connect query parameter: {0}")]
+    DuplicateParameter(String),
+    /// The link requests a protocol version other than version 2.
+    #[error("unsupported TON Connect protocol version: {0}")]
+    UnsupportedVersion(String),
+    /// A compact request appeared without a connect request.
+    #[error("embedded request requires a connect request")]
+    EmbeddedRequestWithoutConnect,
+    /// The custom return target is not an absolute URL.
+    #[error("invalid TON Connect return strategy: {0}")]
+    InvalidReturnStrategy(String),
+    /// A scalar protocol value is malformed.
+    #[error(transparent)]
+    InvalidValue(#[from] ValueError),
+    /// The URL-decoded connect request violates its JSON schema.
+    #[error("invalid TON Connect request: {0}")]
+    InvalidConnectRequest(#[from] serde_json::Error),
+    /// A typed connect request could not be serialized.
+    #[error("failed to encode TON Connect request: {0}")]
+    EncodeConnectRequest(serde_json::Error),
+    /// The compact embedded request is malformed.
+    #[error(transparent)]
+    InvalidEmbeddedRequest(#[from] EmbeddedRequestError),
+}
+
+#[cfg(test)]
+mod tests {
+    use base64::{Engine as _, engine::general_purpose};
+
+    use super::*;
+    use crate::ConnectItem;
+
+    const CLIENT_ID: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn parses_unified_link_and_percent_decoded_connect_request() {
+        let request = r#"{"manifestUrl":"https://app.example/tonconnect-manifest.json","items":[{"name":"ton_addr"}]}"#;
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("v", "2")
+            .append_pair("id", CLIENT_ID)
+            .append_pair("r", request)
+            .append_pair("ret", "back")
+            .append_pair("future", "preserved")
+            .finish();
+        let parsed = ConnectLink::parse(&format!("tc://?{query}"));
+        assert!(parsed.as_ref().is_ok_and(|link| link.request().is_some()));
+        assert!(matches!(
+            parsed.as_ref().map(ConnectLink::return_strategy),
+            Ok(ReturnStrategy::Back)
+        ));
+        assert!(parsed.is_ok_and(|link| {
+            link.extensions() == [("future".to_owned(), "preserved".to_owned())]
+        }));
+    }
+
+    /// Ported from Tonkeeper iOS `TCUrlParserTests.swift` at
+    /// `ddd80aa0542079e839c2b9db2b16492d3150d732`.
+    #[test]
+    fn parses_tonkeeper_ios_demo_dapp_vector() -> Result<(), Box<dyn std::error::Error>> {
+        let value = concat!(
+            "tc://?v=2&id=4091db63def30d086acef76cd045a20ca6def5744bad530d2a86766d3e781477",
+            "&r=%7B%22manifestUrl%22%3A%22https%3A%2F%2Fton-connect.github.io%2F",
+            "demo-dapp-with-react-ui%2Ftonconnect-manifest.json%22%2C%22items%22%3A%5B",
+            "%7B%22name%22%3A%22ton_addr%22%7D%2C%7B%22name%22%3A%22ton_proof",
+            "%22%2C%22payload%22%3A%224c9523d2c0017c3e00000000652fc398090082a031a65",
+            "ab99be6209a91c0f818%22%7D%5D%7D"
+        );
+        let link = ConnectLink::parse(value)?;
+        assert_eq!(
+            link.client_id().to_string(),
+            "4091db63def30d086acef76cd045a20ca6def5744bad530d2a86766d3e781477"
+        );
+        let request = link.request().ok_or("full request is required")?;
+        assert_eq!(
+            request.manifest_url.as_str(),
+            "https://ton-connect.github.io/demo-dapp-with-react-ui/tonconnect-manifest.json"
+        );
+        assert!(matches!(
+            request.items.as_slice(),
+            [ConnectItem::TonAddr { .. }, ConnectItem::TonProof { payload }]
+                if payload == "4c9523d2c0017c3e00000000652fc398090082a031a65ab99be6209a91c0f818"
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn supports_reduced_link_but_not_embedded_action_without_connect() {
+        let reduced = format!("tc://?id={CLIENT_ID}&ret=none");
+        let embedded = general_purpose::URL_SAFE_NO_PAD.encode(r#"{"m":"sd","t":"text","tx":"x"}"#);
+        let invalid = format!("tc://?id={CLIENT_ID}&e={embedded}");
+        assert!(ConnectLink::parse(&reduced).is_ok_and(|link| link.request().is_none()));
+        assert!(matches!(
+            ConnectLink::parse(&invalid),
+            Err(ConnectLinkError::EmbeddedRequestWithoutConnect)
+        ));
+    }
+
+    #[test]
+    fn rejects_duplicate_identifiers_and_unknown_versions() {
+        let duplicate = format!("tc://?id={CLIENT_ID}&id={CLIENT_ID}");
+        let version = format!("tc://?id={CLIENT_ID}&v=3");
+        let invalid_return = format!("tc://?id={CLIENT_ID}&ret=relative");
+        assert!(matches!(
+            ConnectLink::parse(&duplicate),
+            Err(ConnectLinkError::DuplicateParameter(parameter)) if parameter == "id"
+        ));
+        assert!(matches!(
+            ConnectLink::parse(&version),
+            Err(ConnectLinkError::UnsupportedVersion(version)) if version == "3"
+        ));
+        assert!(matches!(
+            ConnectLink::parse(&invalid_return),
+            Err(ConnectLinkError::InvalidReturnStrategy(value)) if value == "relative"
+        ));
+    }
+
+    #[test]
+    fn malformed_embedded_request_is_ignored_for_bridge_fallback() {
+        let request = r#"{"manifestUrl":"https://app.example/tonconnect-manifest.json","items":[{"name":"ton_addr"}]}"#;
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("v", "2")
+            .append_pair("id", CLIENT_ID)
+            .append_pair("r", request)
+            .append_pair("e", "not-base64url")
+            .finish();
+        let parsed = ConnectLink::parse(&format!("tc://?{query}"));
+
+        assert!(parsed.is_ok_and(|link| link.embedded_request().is_none()));
+    }
+
+    /// Ported from both official TypeScript URL suites at
+    /// `273bc3a6050e6024886ca50c12677dc42ae142a9`.
+    #[test]
+    fn telegram_parameter_encoding_matches_typescript_vectors() {
+        for parameters in [
+            concat!(
+                "v=2&id=1a7894bfea897afa462bc8ccc6857c992cc92b0a5ef994ab2f855e764ece4942",
+                "&r=%7B%22manifestUrl%22%3A%22https%3A%2F%2Ftonconnect-sdk-demo-dapp",
+                ".vercel.app%2Ftonconnect-manifest.json%22%2C%22items%22%3A%5B",
+                "%7B%22name%22%3A%22ton_addr%22%7D%5D%7D&ret=none"
+            ),
+            concat!(
+                "id=17b086055e59e7c87fee47797e92be1a51be0dd1a42f2a39131f79cf5169682e",
+                "&ret=back"
+            ),
+            concat!(
+                "v=2&id=7730cae23f454f8d4ba52b07a4ea869773834be331edcadbb5e2da5d94ddfa2d",
+                "&trace_id=019d85ea-ca0e-7129-8155-05c7534ef894&r=%7B%22items%22%3A",
+                "%5B%7B%22name%22%3A%22ton_addr%22%7D%5D%7D"
+            ),
+        ] {
+            let encoded = encode_telegram_url_parameters(parameters);
+            assert_eq!(decode_telegram_url_parameters(&encoded), parameters);
+            assert!(!encoded.contains('&'));
+            assert!(!encoded.contains('='));
+        }
+    }
+
+    #[test]
+    fn complete_and_reduced_links_have_canonical_round_trips()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let request = serde_json::from_str::<ConnectRequest>(
+            r#"{
+            "manifestUrl":"https://app.example/tonconnect-manifest.json",
+            "items":[{"name":"ton_addr","network":"00042"}]
+        }"#,
+        )?;
+        let embedded = decode_embedded_request_param(
+            &general_purpose::URL_SAFE_NO_PAD.encode(r#"{"m":"sd","t":"text","tx":"hello"}"#),
+        )?;
+        let trace_id = TraceId::try_from("018f4f84-7b8d-7c3f-8d8e-123456789abc")?;
+        let client_id = CLIENT_ID.parse()?;
+        let link = ConnectLink::connect(
+            client_id,
+            request,
+            ReturnStrategy::Custom("demo-app://return/path".to_owned()),
+            Some(embedded),
+            Some(trace_id.clone()),
+        );
+
+        let encoded = link.to_url("tc://")?;
+        assert_eq!(ConnectLink::parse(encoded.as_str())?, link);
+        assert_eq!(link.trace_id(), Some(&trace_id));
+
+        let reduced = ConnectLink::reduced(client_id, ReturnStrategy::None, None);
+        let encoded = reduced.to_url("https://wallet.example/connect")?;
+        assert_eq!(ConnectLink::parse(encoded.as_str())?, reduced);
+        assert!(
+            !encoded
+                .query_pairs()
+                .any(|(name, _)| name == "v" || name == "r")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn link_encoding_rejects_ambiguous_base_and_return_urls()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let client_id = CLIENT_ID.parse()?;
+        let with_query = ConnectLink::reduced(client_id, ReturnStrategy::Back, None);
+        assert!(matches!(
+            with_query.to_url("https://wallet.example/connect?existing=1"),
+            Err(ConnectLinkError::BaseUrlContainsQueryOrFragment)
+        ));
+
+        let bad_return = ConnectLink::reduced(
+            client_id,
+            ReturnStrategy::Custom("relative/path".to_owned()),
+            None,
+        );
+        assert!(matches!(
+            bad_return.to_url("tc://"),
+            Err(ConnectLinkError::InvalidReturnStrategy(_))
+        ));
+        Ok(())
+    }
+}

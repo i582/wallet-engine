@@ -1,0 +1,700 @@
+use std::{cmp::Ordering, fmt, str::FromStr};
+
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use thiserror::Error;
+
+use crate::{AppRequest, ConnectEvent};
+
+/// A dApp RPC request ID ordered as an arbitrary-precision unsigned integer.
+///
+/// The protocol transports this counter as a string and does not specify a
+/// machine-width limit. Canonicalization removes leading zeroes so `"01"` and
+/// `"1"` cannot bypass replay protection while the original request envelope
+/// remains available for an exact response-ID echo.
+#[derive(Clone, Eq, Hash, PartialEq)]
+pub struct RpcRequestId(String);
+
+impl RpcRequestId {
+    /// Returns the canonical decimal representation used for ordering.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for RpcRequestId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, formatter)
+    }
+}
+
+impl fmt::Display for RpcRequestId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl FromStr for RpcRequestId {
+    type Err = SessionStateError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value.is_empty() || !value.as_bytes().iter().all(u8::is_ascii_digit) {
+            return Err(SessionStateError::InvalidRequestId);
+        }
+        let without_zeroes = value.trim_start_matches('0');
+        let canonical = if without_zeroes.is_empty() {
+            "0"
+        } else {
+            without_zeroes
+        };
+        Ok(Self(canonical.to_owned()))
+    }
+}
+
+impl Ord for RpcRequestId {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0
+            .len()
+            .cmp(&other.0.len())
+            .then_with(|| self.0.cmp(&other.0))
+    }
+}
+
+impl PartialOrd for RpcRequestId {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Serialize for RpcRequestId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for RpcRequestId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::from_str(&value).map_err(de::Error::custom)
+    }
+}
+
+/// Durable lifecycle phase of one wallet-side TON Connect session.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WalletSessionPhase {
+    /// A deep-link request exists but no connect event has completed it.
+    PendingConnect,
+    /// The connect event succeeded and dApp RPC requests are accepted.
+    Connected,
+    /// A connect error or either side's disconnect permanently ended the session.
+    Disconnected,
+}
+
+/// Wallet event transition whose identifier is allocated by the session reducer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WalletEventKind {
+    /// Successful initial connection.
+    Connect,
+    /// Failed initial connection.
+    ConnectError,
+    /// Wallet-initiated termination of an established session.
+    Disconnect,
+}
+
+/// Persistable state required for monotonic IDs, replay rejection, and disconnect.
+///
+/// Transition methods are deliberately non-mutating. Atomically persist the
+/// returned next state together with the accepted request or outgoing event
+/// before running the wallet action or publishing. After a crash, restore that
+/// durable work item and retry it directly; a replay from the bridge is then
+/// rejected instead of signing the same request twice.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WalletSessionState {
+    phase: WalletSessionPhase,
+    last_request_id: Option<RpcRequestId>,
+    last_event_id: Option<u64>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawWalletSessionState {
+    phase: WalletSessionPhase,
+    last_request_id: Option<RpcRequestId>,
+    last_event_id: Option<u64>,
+}
+
+impl<'de> Deserialize<'de> for WalletSessionState {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = RawWalletSessionState::deserialize(deserializer)?;
+        let valid = match raw.phase {
+            WalletSessionPhase::PendingConnect => {
+                raw.last_request_id.is_none() && raw.last_event_id.is_none()
+            }
+            WalletSessionPhase::Connected | WalletSessionPhase::Disconnected => {
+                raw.last_event_id.is_some()
+            }
+        };
+        if !valid {
+            return Err(de::Error::custom(
+                "persisted TON Connect session state violates lifecycle invariants",
+            ));
+        }
+        Ok(Self {
+            phase: raw.phase,
+            last_request_id: raw.last_request_id,
+            last_event_id: raw.last_event_id,
+        })
+    }
+}
+
+impl WalletSessionState {
+    /// Creates state for a newly received connect request.
+    #[must_use]
+    pub const fn pending_connect() -> Self {
+        Self {
+            phase: WalletSessionPhase::PendingConnect,
+            last_request_id: None,
+            last_event_id: None,
+        }
+    }
+
+    /// Returns the durable lifecycle phase.
+    #[must_use]
+    pub const fn phase(&self) -> WalletSessionPhase {
+        self.phase
+    }
+
+    /// Returns the highest accepted dApp request ID, if any.
+    #[must_use]
+    pub fn last_request_id(&self) -> Option<&RpcRequestId> {
+        self.last_request_id.as_ref()
+    }
+
+    /// Returns the last allocated wallet event ID, if any.
+    #[must_use]
+    pub const fn last_event_id(&self) -> Option<u64> {
+        self.last_event_id
+    }
+
+    /// Prepares a wallet event and its durable next state.
+    ///
+    /// The first event ID is zero, matching the reference TypeScript SDK. A
+    /// connect result may only finish a pending session, and a disconnect event
+    /// may only finish a connected session.
+    pub fn prepare_event(
+        &self,
+        kind: WalletEventKind,
+    ) -> Result<PreparedWalletEvent, SessionStateError> {
+        let next_phase = match (self.phase, kind) {
+            (WalletSessionPhase::PendingConnect, WalletEventKind::Connect) => {
+                WalletSessionPhase::Connected
+            }
+            (WalletSessionPhase::PendingConnect, WalletEventKind::ConnectError)
+            | (WalletSessionPhase::Connected, WalletEventKind::Disconnect) => {
+                WalletSessionPhase::Disconnected
+            }
+            (
+                WalletSessionPhase::PendingConnect
+                | WalletSessionPhase::Connected
+                | WalletSessionPhase::Disconnected,
+                WalletEventKind::Connect
+                | WalletEventKind::ConnectError
+                | WalletEventKind::Disconnect,
+            ) => return Err(SessionStateError::InvalidEventTransition),
+        };
+
+        let id = match self.last_event_id {
+            Some(previous) => previous
+                .checked_add(1)
+                .ok_or(SessionStateError::EventIdExhausted)?,
+            None => 0,
+        };
+        let mut next_state = self.clone();
+        next_state.phase = next_phase;
+        next_state.last_event_id = Some(id);
+        Ok(PreparedWalletEvent { id, next_state })
+    }
+
+    /// Accepts a strictly newer dApp request and prepares its durable next state.
+    ///
+    /// The raw envelope is used intentionally: unsupported or malformed methods
+    /// still consume a fresh ID once processed, so replaying the same packet
+    /// cannot repeatedly exercise parsing and approval code. A syntactically
+    /// exact `disconnect` request closes the session in the same atomic state
+    /// transition that consumes its ID.
+    pub fn prepare_request(
+        &self,
+        request: &AppRequest,
+    ) -> Result<PreparedAppRequest, SessionStateError> {
+        if self.phase != WalletSessionPhase::Connected {
+            return Err(SessionStateError::SessionNotConnected);
+        }
+
+        let request_id = RpcRequestId::from_str(&request.id)?;
+        if self
+            .last_request_id
+            .as_ref()
+            .is_some_and(|last| request_id <= *last)
+        {
+            return Err(SessionStateError::RequestIdNotIncreasing);
+        }
+
+        let closes_session = request.method == "disconnect" && request.params.is_empty();
+        let mut next_state = self.clone();
+        next_state.last_request_id = Some(request_id.clone());
+        if closes_session {
+            next_state.phase = WalletSessionPhase::Disconnected;
+        }
+        Ok(PreparedAppRequest {
+            request_id,
+            closes_session,
+            next_state,
+        })
+    }
+}
+
+impl Default for WalletSessionState {
+    fn default() -> Self {
+        Self::pending_connect()
+    }
+}
+
+/// Prepared event ID plus the state that must be persisted before publication.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreparedWalletEvent {
+    id: u64,
+    next_state: WalletSessionState,
+}
+
+impl PreparedWalletEvent {
+    /// Returns the event ID to place in the wallet event envelope.
+    #[must_use]
+    pub const fn id(&self) -> u64 {
+        self.id
+    }
+
+    /// Borrows the state that must be persisted before event publication.
+    #[must_use]
+    pub const fn next_state(&self) -> &WalletSessionState {
+        &self.next_state
+    }
+
+    /// Consumes the transition and returns its durable state.
+    #[must_use]
+    pub fn into_state(self) -> WalletSessionState {
+        self.next_state
+    }
+}
+
+/// Accepted request plus the state that must be persisted before processing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreparedAppRequest {
+    request_id: RpcRequestId,
+    closes_session: bool,
+    next_state: WalletSessionState,
+}
+
+impl PreparedAppRequest {
+    /// Returns the canonical numeric request ID used by replay protection.
+    #[must_use]
+    pub const fn request_id(&self) -> &RpcRequestId {
+        &self.request_id
+    }
+
+    /// Reports whether this exact request atomically ends the session.
+    #[must_use]
+    pub const fn closes_session(&self) -> bool {
+        self.closes_session
+    }
+
+    /// Borrows the state that must be persisted before request processing.
+    #[must_use]
+    pub const fn next_state(&self) -> &WalletSessionState {
+        &self.next_state
+    }
+
+    /// Consumes the transition and returns its durable state.
+    #[must_use]
+    pub fn into_state(self) -> WalletSessionState {
+        self.next_state
+    }
+}
+
+/// A rejected session-state transition.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+pub enum SessionStateError {
+    /// Request ID is not a non-empty unsigned decimal string.
+    #[error("TON Connect request id must be a non-empty unsigned decimal string")]
+    InvalidRequestId,
+    /// Request ID is equal to or below the durable session baseline.
+    #[error("TON Connect request id is not strictly greater than the last processed id")]
+    RequestIdNotIncreasing,
+    /// RPC requests are only valid after a successful connect and before disconnect.
+    #[error("TON Connect session is not connected")]
+    SessionNotConnected,
+    /// The requested event does not follow the session lifecycle.
+    #[error("wallet event is invalid for the current TON Connect session phase")]
+    InvalidEventTransition,
+    /// No larger `u64` wallet event ID can be allocated.
+    #[error("TON Connect wallet event id is exhausted")]
+    EventIdExhausted,
+}
+
+/// Durable dApp-side cursor for monotonic wallet events.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WalletEventCursor {
+    last_event_id: Option<u64>,
+    terminated: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WalletEventCursorWire {
+    last_event_id: Option<u64>,
+    terminated: bool,
+}
+
+impl<'de> Deserialize<'de> for WalletEventCursor {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = WalletEventCursorWire::deserialize(deserializer)?;
+        if wire.terminated && wire.last_event_id.is_none() {
+            return Err(serde::de::Error::custom(
+                "terminated wallet event cursor requires an accepted event id",
+            ));
+        }
+        Ok(Self {
+            last_event_id: wire.last_event_id,
+            terminated: wire.terminated,
+        })
+    }
+}
+
+impl WalletEventCursor {
+    /// Returns the last accepted wallet event ID.
+    #[must_use]
+    pub const fn last_event_id(&self) -> Option<u64> {
+        self.last_event_id
+    }
+
+    /// Reports whether connect failed or either side disconnected.
+    #[must_use]
+    pub const fn is_terminated(&self) -> bool {
+        self.terminated
+    }
+
+    /// Validates one event and prepares state to persist before publication.
+    pub fn prepare_event(
+        &self,
+        event: &ConnectEvent,
+    ) -> Result<PreparedWalletEventReceipt, WalletEventCursorError> {
+        if self.terminated {
+            return Err(WalletEventCursorError::SessionTerminated);
+        }
+        let id = event.id();
+        if self.last_event_id.is_some_and(|last| id <= last) {
+            return Err(WalletEventCursorError::EventIdNotIncreasing);
+        }
+        Ok(PreparedWalletEventReceipt {
+            event_id: id,
+            next_cursor: Self {
+                last_event_id: Some(id),
+                terminated: event.terminates_session(),
+            },
+        })
+    }
+}
+
+/// Accepted wallet event and cursor that must be persisted first.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreparedWalletEventReceipt {
+    event_id: u64,
+    next_cursor: WalletEventCursor,
+}
+
+impl PreparedWalletEventReceipt {
+    /// Returns the accepted protocol event ID.
+    #[must_use]
+    pub const fn event_id(&self) -> u64 {
+        self.event_id
+    }
+
+    /// Returns the cursor to persist before publishing the event.
+    #[must_use]
+    pub const fn next_cursor(&self) -> &WalletEventCursor {
+        &self.next_cursor
+    }
+
+    /// Consumes the prepared receipt into its durable cursor.
+    #[must_use]
+    pub fn into_cursor(self) -> WalletEventCursor {
+        self.next_cursor
+    }
+}
+
+/// Wallet event is replayed, reordered, or belongs to a terminated session.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+pub enum WalletEventCursorError {
+    /// Event ID is equal to or below the accepted baseline.
+    #[error("wallet event id is not strictly increasing")]
+    EventIdNotIncreasing,
+    /// No event is accepted after a terminal event.
+    #[error("wallet event session is already terminated")]
+    SessionTerminated,
+}
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+
+    use super::*;
+    use crate::{ConnectEventError, ConnectEventErrorCode, EmptyObject};
+
+    fn connected() -> Result<WalletSessionState, SessionStateError> {
+        WalletSessionState::pending_connect()
+            .prepare_event(WalletEventKind::Connect)
+            .map(PreparedWalletEvent::into_state)
+    }
+
+    fn disconnect_event(id: u64) -> ConnectEvent {
+        ConnectEvent::Disconnect {
+            id,
+            payload: EmptyObject,
+        }
+    }
+
+    fn request(id: &str, method: &str, params: Vec<String>) -> AppRequest {
+        AppRequest {
+            method: method.to_owned(),
+            params,
+            id: id.to_owned(),
+        }
+    }
+
+    #[test]
+    fn numeric_order_is_not_lexicographic_or_machine_width_limited() {
+        let nine = RpcRequestId::from_str("9");
+        let ten = RpcRequestId::from_str("10");
+        let huge = RpcRequestId::from_str("18446744073709551616000000000000000000");
+        assert!(
+            matches!((nine, ten, huge), (Ok(nine), Ok(ten), Ok(huge)) if nine < ten && ten < huge)
+        );
+        let canonical = RpcRequestId::from_str("00042").expect("decimal request id");
+        assert_eq!(canonical.as_str(), "42");
+        assert_eq!(canonical.to_string(), "42");
+        assert_eq!(format!("{canonical:?}"), "42");
+    }
+
+    #[test]
+    fn request_ids_reject_every_non_decimal_shape() -> Result<(), SessionStateError> {
+        let state = connected()?;
+        for invalid in ["", "-1", "+1", "1.0", " 1", "1 ", "١"] {
+            assert_eq!(
+                state.prepare_request(&request(invalid, "unknown", Vec::new())),
+                Err(SessionStateError::InvalidRequestId)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn leading_zeroes_cannot_bypass_replay_rejection() -> Result<(), SessionStateError> {
+        let state = connected()?;
+        let persisted = state
+            .prepare_request(&request("001", "unknown", Vec::new()))?
+            .into_state();
+        assert_eq!(
+            persisted.prepare_request(&request("1", "unknown", Vec::new())),
+            Err(SessionStateError::RequestIdNotIncreasing)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn restored_state_rejects_replay_before_wallet_action_runs_again()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let original = connected()?;
+        let accepted =
+            original.prepare_request(&request("7", "signData", vec!["{}".to_owned()]))?;
+        assert_eq!(original.last_request_id(), None);
+
+        let stored = serde_json::to_string(accepted.next_state())?;
+        let restored = serde_json::from_str::<WalletSessionState>(&stored)?;
+        assert_eq!(
+            restored.prepare_request(&request("7", "signData", vec!["{}".to_owned()])),
+            Err(SessionStateError::RequestIdNotIncreasing)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn valid_disconnect_consumes_id_and_closes_in_one_transition() -> Result<(), SessionStateError>
+    {
+        let accepted = connected()?.prepare_request(&request("3", "disconnect", Vec::new()))?;
+        assert!(accepted.closes_session());
+        assert_eq!(accepted.request_id().as_str(), "3");
+        assert_eq!(
+            accepted.next_state().phase(),
+            WalletSessionPhase::Disconnected
+        );
+        let closed = accepted.into_state();
+        assert_eq!(closed.phase(), WalletSessionPhase::Disconnected);
+        assert_eq!(
+            closed.prepare_request(&request("4", "sendTransaction", vec!["{}".to_owned()])),
+            Err(SessionStateError::SessionNotConnected)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn malformed_disconnect_consumes_id_without_closing() -> Result<(), SessionStateError> {
+        let accepted = connected()?.prepare_request(&request(
+            "3",
+            "disconnect",
+            vec!["unexpected".to_owned()],
+        ))?;
+        assert!(!accepted.closes_session());
+        assert_eq!(accepted.next_state().phase(), WalletSessionPhase::Connected);
+        Ok(())
+    }
+
+    #[test]
+    fn event_lifecycle_is_monotonic_and_terminal() -> Result<(), SessionStateError> {
+        let pending = WalletSessionState::pending_connect();
+        let connect = pending.prepare_event(WalletEventKind::Connect)?;
+        assert_eq!(connect.id(), 0);
+        let disconnect = connect
+            .into_state()
+            .prepare_event(WalletEventKind::Disconnect)?;
+        assert_eq!(disconnect.id(), 1);
+        assert_eq!(
+            disconnect.next_state().phase(),
+            WalletSessionPhase::Disconnected
+        );
+        assert_eq!(
+            disconnect
+                .next_state()
+                .prepare_event(WalletEventKind::Disconnect),
+            Err(SessionStateError::InvalidEventTransition)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn wallet_event_id_exhaustion_never_wraps_to_zero() -> Result<(), Box<dyn std::error::Error>> {
+        let state = serde_json::from_value::<WalletSessionState>(serde_json::json!({
+            "phase": "connected",
+            "last_request_id": null,
+            "last_event_id": u64::MAX,
+        }))?;
+        assert_eq!(
+            state.prepare_event(WalletEventKind::Disconnect),
+            Err(SessionStateError::EventIdExhausted)
+        );
+        assert_eq!(state.last_event_id(), Some(u64::MAX));
+        assert_eq!(state.phase(), WalletSessionPhase::Connected);
+        Ok(())
+    }
+
+    #[test]
+    fn persisted_state_rejects_impossible_lifecycle_combinations() {
+        assert_eq!(
+            WalletSessionState::default(),
+            WalletSessionState::pending_connect()
+        );
+        let pending_with_request =
+            r#"{"phase":"pending_connect","last_request_id":"1","last_event_id":null}"#;
+        let connected_without_event =
+            r#"{"phase":"connected","last_request_id":null,"last_event_id":null}"#;
+        assert!(serde_json::from_str::<WalletSessionState>(pending_with_request).is_err());
+        assert!(serde_json::from_str::<WalletSessionState>(connected_without_event).is_err());
+    }
+
+    proptest! {
+        #[test]
+    fn every_strictly_increasing_u128_sequence_is_accepted(
+            mut values in proptest::collection::vec(any::<u128>(), 1..64)
+        ) {
+            values.sort_unstable();
+            values.dedup();
+            let mut state = connected().expect("connect transition is valid");
+            for value in values {
+                let transition = state.prepare_request(&request(
+                    &value.to_string(),
+                    "unknown",
+                    Vec::new(),
+                ));
+                prop_assert!(transition.is_ok());
+                if let Ok(accepted) = transition {
+                    state = accepted.into_state();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dapp_event_cursor_rejects_replay_and_stops_after_disconnect()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let cursor = WalletEventCursor::default();
+        let first = cursor.prepare_event(&disconnect_event(7))?;
+        assert_eq!(first.event_id(), 7);
+        assert_eq!(first.next_cursor().last_event_id(), Some(7));
+        let terminated = first.into_cursor();
+        assert!(terminated.is_terminated());
+        let restored =
+            serde_json::from_str::<WalletEventCursor>(&serde_json::to_string(&terminated)?)?;
+        assert_eq!(restored, terminated);
+        assert_eq!(
+            terminated.prepare_event(&disconnect_event(8)),
+            Err(WalletEventCursorError::SessionTerminated)
+        );
+
+        let active = WalletEventCursor::default()
+            .prepare_event(&ConnectEvent::ConnectError {
+                id: 10,
+                payload: ConnectEventError {
+                    code: ConnectEventErrorCode::Unknown,
+                    message: "failed".to_owned(),
+                },
+            })?
+            .into_cursor();
+        assert_eq!(active.last_event_id(), Some(10));
+        assert!(active.is_terminated());
+        Ok(())
+    }
+
+    #[test]
+    fn dapp_event_cursor_accepts_first_baseline_then_requires_strict_growth() {
+        let first = WalletEventCursor::default()
+            .prepare_event(&disconnect_event(0))
+            .map(PreparedWalletEventReceipt::into_cursor);
+        assert!(first.is_ok());
+
+        let active = WalletEventCursor {
+            last_event_id: Some(5),
+            terminated: false,
+        };
+        assert_eq!(
+            active.prepare_event(&disconnect_event(5)),
+            Err(WalletEventCursorError::EventIdNotIncreasing)
+        );
+        assert_eq!(
+            active.prepare_event(&disconnect_event(4)),
+            Err(WalletEventCursorError::EventIdNotIncreasing)
+        );
+    }
+}
