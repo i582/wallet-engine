@@ -29,6 +29,18 @@ pub(super) fn render(model: &BindingsModel) -> String {
 
 /* UniFFI contract version read from the compiled Rust component metadata. */
 #define WALLET_ENGINE_UNIFFI_CONTRACT_VERSION {uniffi_contract_version}u
+
+/*
+ * The immediate result of a C ABI function call. Domain failures use their
+ * generated error types instead.
+ */
+typedef uint32_t WalletEngineAbiStatus;
+
+#define WALLET_ENGINE_ABI_STATUS_OK ((WalletEngineAbiStatus)0u)
+#define WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT ((WalletEngineAbiStatus)1u)
+#define WALLET_ENGINE_ABI_STATUS_INVALID_UTF8 ((WalletEngineAbiStatus)2u)
+#define WALLET_ENGINE_ABI_STATUS_PANIC ((WalletEngineAbiStatus)3u)
+#define WALLET_ENGINE_ABI_STATUS_OPERATION_BUSY ((WalletEngineAbiStatus)4u)
 "#,
         abi_version = model.abi_version(),
         uniffi_contract_version = model.uniffi_contract_version(),
@@ -96,6 +108,8 @@ mod tests {
 
         assert!(header.starts_with("#ifndef WALLET_ENGINE_H\n"));
         assert!(header.contains("#define WALLET_ENGINE_ABI_VERSION 0u\n"));
+        assert!(header.contains("typedef uint32_t WalletEngineAbiStatus;"));
+        assert!(header.contains("WALLET_ENGINE_ABI_STATUS_INVALID_UTF8"));
         assert!(header.contains("wallet_engine_abi_version(void);"));
         assert!(header.ends_with("#endif /* WALLET_ENGINE_H */\n"));
         Ok(())

@@ -51,6 +51,22 @@ impl BuiltinType {
         }
     }
 
+    pub(super) const fn codec(self) -> &'static str {
+        match self {
+            Self::UInt8
+            | Self::Int8
+            | Self::UInt16
+            | Self::Int16
+            | Self::UInt32
+            | Self::Int32
+            | Self::UInt64
+            | Self::Int64 => "big-endian when nested",
+            Self::Boolean => "one byte when nested",
+            Self::String => "raw UTF-8 RustBuffer / length-prefixed when nested",
+            Self::Bytes => "length-prefixed RustBuffer",
+        }
+    }
+
     const fn from_uniffi_type(type_: &Type) -> Option<Self> {
         match type_ {
             Type::UInt8 => Some(Self::UInt8),

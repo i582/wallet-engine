@@ -10,11 +10,12 @@ The generator currently:
 - writes deterministic `wallet_engine.h`, `wallet_engine.c`, and
   `wallet_engine.c-api.json` artifacts;
 - discovers the builtin types actually used by the component;
+- generates UniFFI-compatible wire codecs for builtin values;
 - compiles the generated facade as strict C11 in its test suite.
 
-Codecs, callback adapters, and export lists will be added on top of the
-normalized component model. The crate intentionally has no dependency on the
-`wallet-engine` or `c-bindings` crates.
+Compound codecs, callback adapters, and export lists will be added on top of
+the normalized component model. The crate intentionally has no dependency on
+the `wallet-engine` or `c-bindings` crates.
 
 From the repository root, the experimental recipe builds the library and runs
 the generator without touching the production `bindings/c` output:
@@ -32,10 +33,10 @@ implemented. C++ compatibility is deliberately deferred until the C ABI is
 complete and stable.
 
 The current builtin-type slice discovers the types used by the real
-`ComponentInterface`, records their Rust-to-C mapping in the manifest, and
-generates borrowed `WalletEngineStringView` and `WalletEngineBytesView`
-declarations. A generator test compiles the emitted facade with strict C11
-warnings enabled.
+`ComponentInterface`, records their Rust-to-C mapping and codec in the
+manifest, and generates borrowed views plus private wire helpers. Tests
+compile the facade with strict C11 warnings and execute its codecs against
+known UniFFI wire values.
 
 ## Rust to C mapping
 
@@ -99,6 +100,27 @@ For both views, `data` may be `NULL` only when `len == 0`. Input memory remains
 owned by the C caller and is valid until the C function returns. A result view
 will remain valid only for the duration of its result callback.
 
+### Private UniFFI wire codecs
+
+`RustBuffer` stays private to `wallet_engine.c`. The facade allocates and frees
+it through the exact UniFFI runtime symbols discovered in the component
+metadata; it never frees Rust-owned memory with the C allocator.
+
+| Rust / UniFFI | Direct FFI value | Value nested in a `RustBuffer` |
+|---|---|---|
+| integers | same-width scalar | fixed-width big-endian bytes |
+| `bool` | `int8_t`, `0` or `1` | one byte, `0` or non-zero |
+| `String` | raw UTF-8 `RustBuffer` | big-endian `i32` byte length followed by UTF-8 |
+| `Vec<u8>` / `Bytes` | length-prefixed `RustBuffer` | big-endian `i32` length followed by bytes |
+
+Lowering rejects malformed views, invalid UTF-8, lengths above `INT32_MAX`
+where UniFFI uses a signed 32-bit length, and arithmetic overflow. Lifting
+checks buffer bounds and rejects trailing data for a complete `Bytes` value.
+
+The pure codec behavior is tested in `tests/codec.c`. That C11 executable
+checks exact wire bytes and write/read round trips for every integer width,
+booleans, strings, and bytes, together with malformed and truncated inputs.
+
 ### Wallet Engine custom string types
 
 These Rust types use `String` as their UniFFI builtin representation. They will
@@ -159,7 +181,7 @@ into a blocking C call.
 The generated header and facade stay compilable after every slice:
 
 1. Builtin integer, boolean, string, and byte representations — implemented.
-2. Primitive/string/bytes lower and lift codecs.
+2. Primitive/bool wire codecs and string/bytes lower/lift — implemented.
 3. Flat enums.
 4. Options and sequences.
 5. Records and nested combinations.

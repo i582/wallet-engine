@@ -4,7 +4,7 @@ use uniffi_bindgen::ComponentInterface;
 
 use crate::type_map::{BuiltinType, collect_builtin_types};
 
-pub(super) const MANIFEST_SCHEMA_VERSION: u32 = 3;
+pub(super) const MANIFEST_SCHEMA_VERSION: u32 = 4;
 const EXPERIMENTAL_ABI_VERSION: u32 = 0;
 const EXPECTED_CRATE_NAME: &str = "wallet_engine";
 const EXPECTED_NAMESPACE: &str = "wallet_engine";
@@ -14,7 +14,14 @@ pub(super) struct BindingsModel {
     abi_version: u32,
     uniffi_contract_version: u32,
     builtin_types: Vec<BuiltinType>,
+    private_ffi: PrivateFfi,
     manifest: Manifest,
+}
+
+#[derive(Debug)]
+pub(super) struct PrivateFfi {
+    rustbuffer_alloc: String,
+    rustbuffer_free: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -37,6 +44,7 @@ struct GenerationManifest {
 struct BuiltinTypeManifest {
     rust: &'static str,
     c: &'static str,
+    codec: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -77,11 +85,16 @@ impl BindingsModel {
 
         let builtin_types = collect_builtin_types(component);
         let manifest = Manifest::from_components(components, &builtin_types);
+        let private_ffi = PrivateFfi {
+            rustbuffer_alloc: component.ffi_rustbuffer_alloc().name().to_owned(),
+            rustbuffer_free: component.ffi_rustbuffer_free().name().to_owned(),
+        };
 
         Ok(Self {
             abi_version: EXPERIMENTAL_ABI_VERSION,
             uniffi_contract_version: component.uniffi_contract_version(),
             builtin_types,
+            private_ffi,
             manifest,
         })
     }
@@ -96,6 +109,10 @@ impl BindingsModel {
 
     pub(super) fn has_builtin_type(&self, builtin: BuiltinType) -> bool {
         self.builtin_types.contains(&builtin)
+    }
+
+    pub(super) const fn private_ffi(&self) -> &PrivateFfi {
+        &self.private_ffi
     }
 
     pub(super) const fn manifest(&self) -> &Manifest {
@@ -117,7 +134,7 @@ impl Manifest {
         Self {
             schema_version: MANIFEST_SCHEMA_VERSION,
             generation: GenerationManifest {
-                phase: "builtin_types",
+                phase: "builtin_codecs",
                 artifacts: [
                     "wallet_engine.h",
                     "wallet_engine.c",
@@ -141,7 +158,18 @@ impl From<BuiltinType> for BuiltinTypeManifest {
         Self {
             rust: value.rust_name(),
             c: value.c_name(),
+            codec: value.codec(),
         }
+    }
+}
+
+impl PrivateFfi {
+    pub(super) fn rustbuffer_alloc(&self) -> &str {
+        &self.rustbuffer_alloc
+    }
+
+    pub(super) fn rustbuffer_free(&self) -> &str {
+        &self.rustbuffer_free
     }
 }
 
