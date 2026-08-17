@@ -15,7 +15,7 @@ use super::http::process_response;
 use super::provider::{ActivityPage, parse_account, parse_activity};
 use super::state::{OperationFamily, ensure_running, update};
 
-#[uniffi::export]
+#[cfg_attr(feature = "ffi", uniffi::export)]
 impl WalletClient {
     /// Refreshes account and first-page activity data concurrently.
     ///

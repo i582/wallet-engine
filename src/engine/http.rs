@@ -1,7 +1,5 @@
 //! Shared HTTP request construction and response-boundary validation.
 
-use url::Url;
-
 use crate::{
     DomainError, ErrorCategory, ErrorCode, HttpHeader, HttpHostError, HttpHostErrorKind,
     HttpMethod, HttpRequest, HttpRequestId, HttpResponse, RetryAdvice, WalletClientConfig,
@@ -136,25 +134,155 @@ fn build_provider_url(
     path: &[&str],
     query: &[(&str, &str)],
 ) -> Result<String, WalletClientError> {
-    let mut url = Url::parse(base).map_err(|_| WalletClientError::InvalidProviderBaseUrl)?;
-
-    {
-        let mut segments = url
-            .path_segments_mut()
-            .map_err(|_| WalletClientError::InvalidProviderBaseUrl)?;
-        let _ = segments.pop_if_empty();
-        for segment in path {
-            let _ = segments.push(segment);
+    let mut url = provider_base(base)?;
+    for segment in path {
+        url.push('/');
+        url.push_str(segment);
+    }
+    if let Some(((first_name, first_value), remaining)) = query.split_first() {
+        url.push('?');
+        push_query_pair(&mut url, first_name, first_value);
+        for (name, value) in remaining {
+            url.push('&');
+            push_query_pair(&mut url, name, value);
         }
     }
+    Ok(url)
+}
 
-    url.set_query(None);
-    if !query.is_empty() {
-        let mut query_pairs = url.query_pairs_mut();
-        let _ = query_pairs.extend_pairs(query.iter().copied());
+/// Validates only the URL surface Wallet Engine needs and preserves its path.
+///
+/// Provider bases are application configuration, not arbitrary navigation
+/// URLs. Restricting them to an ASCII HTTP(S) authority avoids pulling a full
+/// browser URL/IDNA implementation into every native wallet binary.
+fn provider_base(value: &str) -> Result<String, WalletClientError> {
+    let (scheme, remainder) = value
+        .split_once("://")
+        .ok_or(WalletClientError::InvalidProviderBaseUrl)?;
+    if !matches!(scheme, "http" | "https")
+        || remainder.is_empty()
+        || value.bytes().any(|byte| byte.is_ascii_control())
+    {
+        return Err(WalletClientError::InvalidProviderBaseUrl);
     }
 
-    Ok(url.into())
+    let without_suffix = remainder
+        .split(['?', '#'])
+        .next()
+        .ok_or(WalletClientError::InvalidProviderBaseUrl)?;
+    let authority_end = without_suffix.find('/').unwrap_or(without_suffix.len());
+    let authority = without_suffix
+        .get(..authority_end)
+        .ok_or(WalletClientError::InvalidProviderBaseUrl)?;
+    if !valid_authority(authority) {
+        return Err(WalletClientError::InvalidProviderBaseUrl);
+    }
+    let path = without_suffix
+        .get(authority_end..)
+        .ok_or(WalletClientError::InvalidProviderBaseUrl)?;
+    if path.contains('\\') {
+        return Err(WalletClientError::InvalidProviderBaseUrl);
+    }
+
+    let mut normalized = String::with_capacity(value.len());
+    normalized.push_str(scheme);
+    normalized.push_str("://");
+    normalized.push_str(authority);
+    push_path(&mut normalized, path.trim_end_matches('/'));
+    Ok(normalized)
+}
+
+fn valid_authority(value: &str) -> bool {
+    if value.is_empty() || value.contains('@') {
+        return false;
+    }
+    if let Some(ipv6) = value.strip_prefix('[') {
+        let Some((host, port)) = ipv6.split_once(']') else {
+            return false;
+        };
+        return !host.is_empty()
+            && host
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() || byte == b':' || byte == b'.')
+            && (port.is_empty() || port.strip_prefix(':').is_some_and(valid_decimal_port));
+    }
+
+    let (host, port) = value
+        .rsplit_once(':')
+        .map_or((value, None), |(host, port)| (host, Some(port)));
+    !host.is_empty()
+        && host.split('.').all(|label| {
+            !label.is_empty()
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+        && port.is_none_or(valid_decimal_port)
+}
+
+fn valid_decimal_port(value: &str) -> bool {
+    !value.is_empty()
+        && value.bytes().all(|byte| byte.is_ascii_digit())
+        && value.parse::<u16>().is_ok()
+}
+
+fn push_query_pair(output: &mut String, name: &str, value: &str) {
+    push_query_component(output, name);
+    output.push('=');
+    push_query_component(output, value);
+}
+
+fn push_path(output: &mut String, value: &str) {
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric()
+            || matches!(
+                byte,
+                b'/' | b'!'
+                    | b'$'
+                    | b'&'
+                    | b'\''
+                    | b'('
+                    | b')'
+                    | b'*'
+                    | b'+'
+                    | b','
+                    | b'-'
+                    | b'.'
+                    | b':'
+                    | b';'
+                    | b'='
+                    | b'@'
+                    | b'_'
+                    | b'~'
+                    | b'%'
+            )
+        {
+            output.push(char::from(byte));
+        } else {
+            output.push('%');
+            output.push(hex_digit(byte >> 4));
+            output.push(hex_digit(byte & 0x0f));
+        }
+    }
+}
+
+fn push_query_component(output: &mut String, value: &str) {
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'*' | b'-' | b'.' | b'_') {
+            output.push(char::from(byte));
+        } else if byte == b' ' {
+            output.push('+');
+        } else {
+            output.push('%');
+            output.push(hex_digit(byte >> 4));
+            output.push(hex_digit(byte & 0x0f));
+        }
+    }
+}
+
+fn hex_digit(value: u8) -> char {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    HEX.get(usize::from(value)).copied().map_or('?', char::from)
 }
 
 #[cfg(test)]
@@ -369,6 +497,49 @@ mod tests {
         assert_eq!(
             build_toncenter_v2_request(&config, HttpRequestId { value: 1 }, "resource", &[],),
             Err(WalletClientError::InvalidProviderBaseUrl)
+        );
+    }
+
+    #[test]
+    fn provider_builder_encodes_query_without_a_browser_url_stack() {
+        assert_eq!(
+            build_provider_url(
+                "https://provider.example:8443/custom/?discarded=yes#fragment",
+                &["api", "v3", "lookup"],
+                &[("hash", "+ /=é"), ("address", "0:abc")],
+            ),
+            Ok(concat!(
+                "https://provider.example:8443/custom/api/v3/lookup?",
+                "hash=%2B+%2F%3D%C3%A9&address=0%3Aabc"
+            )
+            .to_owned())
+        );
+    }
+
+    #[test]
+    fn provider_builder_accepts_ipv6_and_rejects_ambiguous_authorities() {
+        assert_eq!(
+            provider_base("http://[::1]:8080/toncenter/"),
+            Ok("http://[::1]:8080/toncenter".to_owned())
+        );
+        for invalid in [
+            "",
+            "mailto:provider@example.com",
+            "https://",
+            "https://user@provider.example",
+            "https://provider..example",
+            "https://provider.example:99999",
+            "https://провайдер.example",
+        ] {
+            assert_eq!(
+                provider_base(invalid),
+                Err(WalletClientError::InvalidProviderBaseUrl),
+                "accepted {invalid:?}"
+            );
+        }
+        assert_eq!(
+            provider_base("https://provider.example/path with spaces/ü/"),
+            Ok("https://provider.example/path%20with%20spaces/%C3%BC".to_owned())
         );
     }
 }

@@ -3,7 +3,8 @@
 use crate::{Base64Hash, TonAddressString, UnsignedDecimalString};
 
 /// The lifecycle state of a TON account.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
 #[cfg_attr(kani, derive(kani::Arbitrary))]
 #[serde(rename_all = "camelCase")]
 pub enum AccountStatus {
@@ -20,7 +21,8 @@ pub enum AccountStatus {
 }
 
 /// The latest parsed balance and status for a wallet account.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 #[serde(rename_all = "camelCase")]
 pub struct AccountSnapshot {
     /// The exact account balance, in nanograms.
@@ -32,7 +34,8 @@ pub struct AccountSnapshot {
 }
 
 /// The value flow direction for one activity item.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
 #[serde(rename_all = "camelCase")]
 pub enum ActivityDirection {
     /// Value left the wallet.
@@ -42,7 +45,8 @@ pub enum ActivityDirection {
 }
 
 /// One nonzero incoming or outgoing value transfer in wallet activity.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 #[serde(rename_all = "camelCase")]
 pub struct ActivityItem {
     /// A stable item key derived from the transaction, direction, and message index.
@@ -62,7 +66,8 @@ pub struct ActivityItem {
 }
 
 /// The provider cursor for the next older activity page.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 #[serde(rename_all = "camelCase")]
 pub struct ActivityCursor {
     /// The oldest loaded transaction logical time.

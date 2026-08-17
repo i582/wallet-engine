@@ -8,7 +8,7 @@ use super::state::ensure_running;
 use crate::wallet::send::{pending_send_record, send_snapshot_from_journal};
 use crate::{JournalKey, SendSnapshot, WalletClientError};
 
-#[uniffi::export]
+#[cfg_attr(feature = "ffi", uniffi::export)]
 impl WalletClient {
     /// Resolves the durable outgoing message from chain evidence without signing.
     ///

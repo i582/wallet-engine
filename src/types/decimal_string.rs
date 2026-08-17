@@ -149,11 +149,13 @@ fn is_canonical_unsigned_decimal(value: &str) -> bool {
 #[error("value must be a canonical unsigned base-10 integer")]
 pub struct UnsignedDecimalStringError;
 
+#[cfg(feature = "ffi")]
 uniffi::custom_type!(UnsignedDecimalString, String);
 
 #[cfg(test)]
 mod tests {
     use num_bigint::BigUint;
+    #[cfg(feature = "ffi")]
     use uniffi::{Lift, Lower};
 
     use super::UnsignedDecimalString;
@@ -197,6 +199,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "ffi")]
     #[test]
     fn uniffi_rejects_a_negative_client_value_while_lifting() {
         let ffi_value = <String as Lower<crate::UniFfiTag>>::lower("-100".to_owned());

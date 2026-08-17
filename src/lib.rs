@@ -51,4 +51,5 @@ pub use types::{
 };
 pub use wallet::*;
 
+#[cfg(feature = "ffi")]
 uniffi::setup_scaffolding!();

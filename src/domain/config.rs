@@ -10,9 +10,8 @@ pub const DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS: u64 = 15_000;
 pub const DEFAULT_RESOLUTION_MARGIN_SECONDS: u64 = 60;
 
 /// Selects the TON network used for addresses, providers, and wallet derivation.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, uniffi::Enum,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
 #[serde(rename_all = "camelCase")]
 pub enum Network {
     /// The production TON network.
@@ -22,7 +21,8 @@ pub enum Network {
 }
 
 /// Configures the Toncenter endpoint.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderConfig {
     /// The HTTPS base URL for a Toncenter-compatible provider.
@@ -61,7 +61,8 @@ impl ProviderConfig {
 }
 
 /// Identifies one wallet client and its provider configuration.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 #[serde(rename_all = "camelCase")]
 pub struct WalletClientConfig {
     /// The stable application record identifier for this wallet.

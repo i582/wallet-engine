@@ -11,7 +11,7 @@ use super::host::{WalletHttpHost, WalletPlatformHost};
 use super::state::State;
 use super::validation::validate_config;
 
-#[derive(uniffi::Object)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Object))]
 /// Coordinates state and operations for one wallet record.
 ///
 /// The client owns no transport or platform resources. Call [`Self::shutdown`]
@@ -22,9 +22,9 @@ pub struct WalletClient {
     state: Mutex<State>,
 }
 
-#[uniffi::export]
+#[cfg_attr(feature = "ffi", uniffi::export)]
 impl WalletClient {
-    #[uniffi::constructor]
+    #[cfg_attr(feature = "ffi", uniffi::constructor)]
     /// Creates a client after validation of identifiers, URLs, and credential origin.
     ///
     /// The initial snapshot has revision zero and idle resource states.

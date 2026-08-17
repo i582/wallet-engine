@@ -9,7 +9,7 @@ publish = false
 
 [dependencies]
 async-trait = "=0.1.89"
-wallet-engine = { path = ".." }
+wallet-engine = { path = "..", default-features = false }
 
 [lib]
 name = "wallet_engine_c"

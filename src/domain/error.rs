@@ -27,7 +27,8 @@ pub(crate) fn bounded_diagnostic(message: impl AsRef<str>) -> String {
 }
 
 /// The current state of one independently loaded resource.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
 #[serde(rename_all = "camelCase")]
 pub enum ResourcePhase {
     /// No load is active and no successful value is available yet.
@@ -41,7 +42,8 @@ pub enum ResourcePhase {
 }
 
 /// A resource phase and its optional failure details.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceState {
     /// The current resource phase.
@@ -81,7 +83,8 @@ impl ResourceState {
 }
 
 /// The broad source of a provider or host error.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorCategory {
     /// Network transport failed.
@@ -97,7 +100,8 @@ pub enum ErrorCategory {
 }
 
 /// A stable machine-readable domain error code.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorCode {
     /// The provider response did not match the expected schema.
@@ -117,7 +121,8 @@ pub enum ErrorCode {
 }
 
 /// States whether the same operation can be retried safely.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
 #[serde(rename_all = "camelCase")]
 pub enum RetryAdvice {
     /// Do not retry the operation without a user or configuration change.
@@ -129,7 +134,8 @@ pub enum RetryAdvice {
 }
 
 /// Structured error data for account and activity resources.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 #[serde(rename_all = "camelCase")]
 pub struct DomainError {
     /// The stable machine-readable code.
@@ -148,16 +154,8 @@ pub struct DomainError {
     pub host_kind: Option<HttpHostErrorKind>,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    thiserror::Error,
-    serde::Serialize,
-    serde::Deserialize,
-    uniffi::Error,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Error))]
 #[serde(rename_all = "camelCase")]
 /// An operational failure returned by [`crate::WalletClient`].
 pub enum WalletClientError {

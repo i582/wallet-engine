@@ -13,7 +13,7 @@ use super::http::process_response;
 use super::provider::{ActivityPage, ActivityPageCursor, activity_record_order, parse_activity};
 use super::state::{OperationFamily, State, ensure_running, update};
 
-#[uniffi::export]
+#[cfg_attr(feature = "ffi", uniffi::export)]
 impl WalletClient {
     /// Loads the next older activity page and merges unique items by item ID.
     ///

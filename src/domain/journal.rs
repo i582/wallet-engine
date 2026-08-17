@@ -1,7 +1,8 @@
 //! Durable compare-and-swap journal records and host errors.
 
 /// Selects one durable journal slot for one wallet record.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 #[serde(rename_all = "camelCase")]
 pub struct JournalKey {
     /// The stable application record identifier.
@@ -11,7 +12,8 @@ pub struct JournalKey {
 }
 
 /// One opaque versioned journal value owned by the engine.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 #[serde(rename_all = "camelCase")]
 pub struct JournalRecord {
     /// The positive compare-and-swap version.
@@ -21,7 +23,8 @@ pub struct JournalRecord {
 }
 
 /// An atomic compare-and-swap request for a journal slot.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 #[serde(rename_all = "camelCase")]
 pub struct JournalCompareExchange {
     /// The journal slot to change.
@@ -33,7 +36,8 @@ pub struct JournalCompareExchange {
 }
 
 /// The result of an atomic journal compare-and-swap operation.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 #[serde(rename_all = "camelCase")]
 pub struct JournalCompareExchangeResult {
     /// Whether the host stored the replacement.
@@ -43,7 +47,8 @@ pub struct JournalCompareExchangeResult {
 }
 
 /// Classifies a durable journal failure reported by the host.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
 #[serde(rename_all = "camelCase")]
 pub enum JournalHostErrorKind {
     /// Durable storage is temporarily unavailable.
@@ -57,16 +62,8 @@ pub enum JournalHostErrorKind {
 }
 
 /// A durable journal failure returned by [`crate::WalletPlatformHost`].
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    thiserror::Error,
-    serde::Serialize,
-    serde::Deserialize,
-    uniffi::Error,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Error))]
 #[serde(rename_all = "camelCase")]
 pub enum JournalHostError {
     /// Reports a classified journal failure with a safe diagnostic message.

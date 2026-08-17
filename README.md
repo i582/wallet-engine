@@ -104,6 +104,13 @@ For a native Rust integration, see the
 interfaces directly in Rust and provides create, import, refresh, history,
 send, persistence, and delete flows.
 
+For a small non-interactive binary, see the
+[minimal wallet CLI](examples/minimal-wallet/README.md). It provides the same
+one-shot wallet flows with Clap, native TLS, and no TUI or async runtime. It
+builds `wallet-engine` without the default `ffi` feature, which removes UniFFI
+from pure Rust applications. Swift, Kotlin, and WebAssembly builds keep using
+the default feature set.
+
 This repository does not track generated bindings. Generate them from the same
 revision that you use to build the Rust library.
 

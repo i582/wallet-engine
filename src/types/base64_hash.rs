@@ -73,6 +73,7 @@ impl Display for Base64Hash {
 #[error("hash must be a 256-bit Base64 value")]
 pub struct Base64HashError;
 
+#[cfg(feature = "ffi")]
 uniffi::custom_type!(Base64Hash, String);
 
 #[cfg(test)]

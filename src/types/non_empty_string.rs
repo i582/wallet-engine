@@ -83,10 +83,12 @@ impl Display for NonEmptyString {
 #[error("value must contain at least one non-whitespace character")]
 pub struct NonEmptyStringError;
 
+#[cfg(feature = "ffi")]
 uniffi::custom_type!(NonEmptyString, String);
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "ffi")]
     use uniffi::{Lift, Lower};
 
     use super::NonEmptyString;
@@ -127,6 +129,7 @@ mod tests {
         assert_eq!(value.to_string(), " operation ");
     }
 
+    #[cfg(feature = "ffi")]
     #[test]
     fn uniffi_rejects_a_blank_client_value_while_lifting() {
         let ffi_value = <String as Lower<crate::UniFfiTag>>::lower("   ".to_owned());

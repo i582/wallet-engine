@@ -87,13 +87,14 @@ fn build_target(
         .arg(root.join("Cargo.toml"))
         .arg("--target")
         .arg(target.rust_target)
-        .arg("--release")
+        .arg("--profile")
+        .arg("release-size")
         .arg("--locked");
     run_command(&mut command)?;
 
     let library = target_dir
         .join(target.rust_target)
-        .join("release/libwallet_engine.so");
+        .join("release-size/libwallet_engine.so");
     require_file(&library)?;
     copy_generated(
         &library,

@@ -1,7 +1,8 @@
 //! Protected-secret references, requests, and host errors.
 
 /// An opaque reference to recovery words in host protected storage.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 #[serde(rename_all = "camelCase")]
 pub struct ProtectedSecretRef {
     /// The host storage key. The value does not contain secret bytes.
@@ -9,7 +10,8 @@ pub struct ProtectedSecretRef {
 }
 
 /// Explains why the engine requests access to a protected secret.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
 #[serde(rename_all = "camelCase")]
 pub enum SecretAccessReason {
     /// Reserved for wallet creation storage policy.
@@ -21,7 +23,8 @@ pub enum SecretAccessReason {
 }
 
 /// A request to read and authorize access to protected secret bytes.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 #[serde(rename_all = "camelCase")]
 pub struct ProtectedSecretRead {
     /// The host storage key.
@@ -33,7 +36,8 @@ pub struct ProtectedSecretRead {
 }
 
 /// A request to store secret bytes in platform protected storage.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 #[serde(rename_all = "camelCase")]
 pub struct ProtectedSecretStore {
     /// The host storage key.
@@ -45,7 +49,8 @@ pub struct ProtectedSecretStore {
 }
 
 /// Classifies a protected-storage failure reported by the host.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
 #[serde(rename_all = "camelCase")]
 pub enum ProtectedSecretHostErrorKind {
     /// No secret exists for the reference.
@@ -63,16 +68,8 @@ pub enum ProtectedSecretHostErrorKind {
 }
 
 /// A protected-storage failure returned by [`crate::WalletPlatformHost`].
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    thiserror::Error,
-    serde::Serialize,
-    serde::Deserialize,
-    uniffi::Error,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Error))]
 #[serde(rename_all = "camelCase")]
 pub enum ProtectedSecretHostError {
     /// Reports a classified host failure with a safe diagnostic message.

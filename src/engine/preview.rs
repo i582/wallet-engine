@@ -15,7 +15,7 @@ use super::provider::parse_account;
 use super::send_http::{build_seqno_request, parse_seqno};
 use super::state::{OperationFamily, ensure_running};
 
-#[uniffi::export]
+#[cfg_attr(feature = "ffi", uniffi::export)]
 impl WalletClient {
     /// Emulates a transfer without reading the journal or protected secret.
     ///

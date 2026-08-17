@@ -114,6 +114,7 @@ impl Eq for TonAddressString {}
 #[error("value must be a valid TON internal address")]
 pub struct TonAddressStringError;
 
+#[cfg(feature = "ffi")]
 uniffi::custom_type!(TonAddressString, String);
 
 pub(crate) trait TonAddressExt {
@@ -135,6 +136,7 @@ mod tests {
     use std::str::FromStr;
 
     use ton::ton_core::types::TonAddress;
+    #[cfg(feature = "ffi")]
     use uniffi::{Lift, Lower};
 
     use super::{TonAddressExt as _, TonAddressString};
@@ -170,9 +172,12 @@ mod tests {
         let padded = format!(" {RAW_ADDRESS}");
         assert!(serde_json::from_str::<TonAddressString>(&format!("{padded:?}")).is_err());
 
-        let ffi_value = <String as Lower<crate::UniFfiTag>>::lower("invalid".to_owned());
-        let result = <TonAddressString as Lift<crate::UniFfiTag>>::try_lift(ffi_value);
-        assert!(result.is_err(), "UniFFI accepted an invalid TON address");
+        #[cfg(feature = "ffi")]
+        {
+            let ffi_value = <String as Lower<crate::UniFfiTag>>::lower("invalid".to_owned());
+            let result = <TonAddressString as Lift<crate::UniFfiTag>>::try_lift(ffi_value);
+            assert!(result.is_err(), "UniFFI accepted an invalid TON address");
+        }
     }
 
     #[test]

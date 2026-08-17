@@ -13,7 +13,7 @@ use crate::{
 /// The host must enforce the request timeout while it connects and reads the
 /// response. It owns any local response limits, must reject redirects, and must
 /// return the observed URL in `final_url`.
-#[uniffi::export(foreign)]
+#[cfg_attr(feature = "ffi", uniffi::export(foreign))]
 #[async_trait]
 pub trait WalletHttpHost: Send + Sync {
     /// Executes one complete HTTP request and returns an accepted response.
@@ -34,7 +34,7 @@ pub trait WalletHttpHost: Send + Sync {
 ///
 /// Callback implementations must not call the same client operation
 /// recursively. The engine does not hold its wallet-state lock during calls.
-#[uniffi::export(foreign)]
+#[cfg_attr(feature = "ffi", uniffi::export(foreign))]
 #[async_trait]
 pub trait WalletPlatformHost: Send + Sync {
     /// Reads protected secret bytes after the required user authorization.

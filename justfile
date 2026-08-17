@@ -22,6 +22,7 @@ fmt:
     cargo fmt --manifest-path kotlin-bindgen/Cargo.toml
     cargo fmt --manifest-path wasm-bindings/Cargo.toml
     cargo fmt --manifest-path xtask/Cargo.toml
+    cargo fmt --manifest-path examples/minimal-wallet/Cargo.toml
 
 fmt-check:
     cargo fmt --all --check
@@ -30,9 +31,11 @@ fmt-check:
     cargo fmt --manifest-path kotlin-bindgen/Cargo.toml -- --check
     cargo fmt --manifest-path wasm-bindings/Cargo.toml -- --check
     cargo fmt --manifest-path xtask/Cargo.toml -- --check
+    cargo fmt --manifest-path examples/minimal-wallet/Cargo.toml -- --check
 
 check-build:
     cargo check --locked --all-targets
+    cargo check --locked --no-default-features --all-targets
     cargo check --locked --manifest-path c-bindings/Cargo.toml --all-targets
     cargo check --locked --manifest-path apple-bindgen/Cargo.toml --all-targets
     cargo check --locked --manifest-path kotlin-bindgen/Cargo.toml --all-targets
@@ -41,6 +44,7 @@ check-build:
 
 clippy:
     cargo clippy --locked --all-targets -- -D warnings
+    cargo clippy --locked --no-default-features --all-targets -- -D warnings
     cargo clippy --locked --manifest-path c-bindings/Cargo.toml --all-targets -- -D warnings
     cargo clippy --locked --manifest-path apple-bindgen/Cargo.toml --all-targets -- -D warnings
     cargo clippy --locked --manifest-path kotlin-bindgen/Cargo.toml --all-targets -- -D warnings
@@ -49,6 +53,7 @@ clippy:
 
 test-rust:
     cargo nextest run --locked {{ NEXTEST_PROFILE_ARGS }}
+    cargo nextest run --locked --no-default-features {{ NEXTEST_PROFILE_ARGS }}
     cargo nextest run --locked --manifest-path xtask/Cargo.toml {{ NEXTEST_CONFIG_ARGS }} {{ NEXTEST_PROFILE_ARGS }}
     cargo test --locked --doc
 
@@ -233,6 +238,26 @@ example-tui-test:
 
 tui-check: example-tui-fmt-check example-tui-check example-tui-clippy example-tui-test
 
+example-minimal-wallet-run *args:
+    cargo run --locked --manifest-path examples/minimal-wallet/Cargo.toml -- {{args}}
+
+example-minimal-wallet-fmt:
+    cargo fmt --manifest-path examples/minimal-wallet/Cargo.toml
+
+example-minimal-wallet-fmt-check:
+    cargo fmt --manifest-path examples/minimal-wallet/Cargo.toml -- --check
+
+example-minimal-wallet-check:
+    cargo check --locked --manifest-path examples/minimal-wallet/Cargo.toml --all-targets
+
+example-minimal-wallet-clippy:
+    cargo clippy --locked --manifest-path examples/minimal-wallet/Cargo.toml --all-targets -- -D warnings
+
+example-minimal-wallet-test:
+    cargo nextest run --locked --manifest-path examples/minimal-wallet/Cargo.toml {{ NEXTEST_CONFIG_ARGS }} {{ NEXTEST_PROFILE_ARGS }}
+
+minimal-wallet-check: example-minimal-wallet-fmt-check example-minimal-wallet-check example-minimal-wallet-clippy example-minimal-wallet-test
+
 example-swift-build-macos: bindings-swift
     xcodebuild -project examples/swift/WalletEngineApp.xcodeproj -scheme WalletEngineApp -configuration Debug -destination 'platform=macOS,arch=arm64' -derivedDataPath target/swift-example CODE_SIGNING_ALLOWED=NO build
 
@@ -268,7 +293,7 @@ check-deps:
 
 deps-check: check-deny check-deps
 
-ci: fmt-check check-build clippy test check-wasm check-ios-simulator bindings-swift-check bindings-kotlin-check bindings-wasm-check web-fmt-check web-lint web-build web-test example-web-fmt-check example-web-lint example-web-build example-web-test tui-check
+ci: fmt-check check-build clippy test check-wasm check-ios-simulator bindings-swift-check bindings-kotlin-check bindings-wasm-check web-fmt-check web-lint web-build web-test example-web-fmt-check example-web-lint example-web-build example-web-test tui-check minimal-wallet-check
 
 check: ci deps-check
 
@@ -284,4 +309,5 @@ clean:
     cargo clean --manifest-path apple-bindgen/Cargo.toml
     cargo clean --manifest-path kotlin-bindgen/Cargo.toml
     cargo clean --manifest-path wasm-bindings/Cargo.toml
+    cargo clean --manifest-path examples/minimal-wallet/Cargo.toml
     cargo clean --manifest-path xtask/Cargo.toml

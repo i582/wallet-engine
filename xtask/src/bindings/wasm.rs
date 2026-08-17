@@ -27,13 +27,16 @@ pub(crate) fn generate_wasm(check: bool) -> Result<()> {
         .arg(root.join("wasm-bindings"))
         .arg("--target")
         .arg("web")
-        .arg("--release")
+        .arg("--profile")
+        .arg("release-size")
+        .arg("--no-opt")
         .arg("--out-dir")
         .arg(&generated)
         .arg("--out-name")
         .arg("wallet_engine");
     run_command(&mut command)?;
 
+    optimize_wasm(&generated)?;
     disable_default_wasm_fetch(&generated)?;
     embed_wasm(&generated)?;
     validate_wasm(&generated)?;
@@ -41,6 +44,22 @@ pub(crate) fn generate_wasm(check: bool) -> Result<()> {
         replace_directory(&generated, &output)?;
     }
     Ok(())
+}
+
+fn optimize_wasm(generated: &Path) -> Result<()> {
+    let input = generated.join("wallet_engine_bg.wasm");
+    let output = generated.join("wallet_engine_bg.optimized.wasm");
+    let mut command = Command::new("wasm-opt");
+    command
+        .arg(&input)
+        .arg("-Oz")
+        .arg("--enable-bulk-memory")
+        .arg("--enable-bulk-memory-opt")
+        .arg("--enable-nontrapping-float-to-int")
+        .arg("-o")
+        .arg(&output);
+    run_command(&mut command)?;
+    fs::rename(&output, &input).context("failed to install optimized WASM module")
 }
 
 fn disable_default_wasm_fetch(generated: &Path) -> Result<()> {

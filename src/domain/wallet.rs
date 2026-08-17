@@ -10,7 +10,8 @@ use crate::{NonEmptyString, TonAddressString};
 ///
 /// Each published change increments `revision`. A failed refresh preserves
 /// the last successful resource value and changes its resource state.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 #[serde(rename_all = "camelCase")]
 pub struct WalletSnapshot {
     /// A client-local counter that increases for every published state change.
@@ -64,7 +65,8 @@ impl WalletSnapshot {
 }
 
 /// The terminal result of a wallet client operation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
 #[serde(rename_all = "camelCase")]
 pub enum WalletOperationOutcome {
     /// All requested resources completed successfully.
@@ -82,7 +84,8 @@ pub enum WalletOperationOutcome {
 }
 
 /// The result of a refresh or pagination operation and its resulting snapshot.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 #[serde(rename_all = "camelCase")]
 pub struct WalletUpdate {
     /// The terminal operation outcome.

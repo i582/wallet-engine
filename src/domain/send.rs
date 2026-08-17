@@ -6,7 +6,8 @@ use crate::{
 };
 
 /// The transfer value policy applied by the wallet contract.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Enum)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum SendAmount {
     /// Send one exact nonnegative value and pay network fees separately.
@@ -31,7 +32,8 @@ impl SendAmount {
 }
 
 /// Requests one signed V5R1 transfer.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 #[serde(rename_all = "camelCase")]
 pub struct SendRequest {
     /// A unique idempotency identifier chosen by the application.
@@ -49,7 +51,8 @@ pub struct SendRequest {
 ///
 /// A preview uses fresh account state and a fake signature. It does not reserve
 /// an operation identifier, read the send journal, or request the mnemonic.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 #[serde(rename_all = "camelCase")]
 pub struct SendPreviewRequest {
     /// A friendly or raw TON destination address.
@@ -62,7 +65,8 @@ pub struct SendPreviewRequest {
 }
 
 /// An informational transfer preview produced without unlocking the wallet secret.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 #[serde(rename_all = "camelCase")]
 pub struct SendPreview {
     /// The destination that was emulated.
@@ -83,7 +87,8 @@ pub struct SendPreview {
 }
 
 /// The public phase of the current or last send workflow.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
 #[serde(rename_all = "camelCase")]
 pub enum SendPhase {
     /// No send has started.
@@ -119,7 +124,8 @@ pub enum SendPhase {
 }
 
 /// Why a durable outgoing message cannot yet be resolved to a final outcome.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
 #[serde(rename_all = "camelCase")]
 pub enum PendingReason {
     /// Toncenter still exposes an emulated pending transaction for the message.
@@ -129,7 +135,8 @@ pub enum PendingReason {
 }
 
 /// Chain evidence and retry guidance for a durable outgoing message.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 #[serde(rename_all = "camelCase")]
 pub struct ResolutionInfo {
     /// The confirmed transaction hash, when the message was executed.
@@ -145,7 +152,8 @@ pub struct ResolutionInfo {
 }
 
 /// The observable state of the send workflow.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 #[serde(rename_all = "camelCase")]
 pub struct SendSnapshot {
     /// The active or last operation identifier, if a send started.
@@ -160,7 +168,8 @@ pub struct SendSnapshot {
 }
 
 /// A bounded summary of the Toncenter trace emulated before authorization.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 #[serde(rename_all = "camelCase")]
 pub struct SendEmulation {
     /// The masterchain block used as the emulation state snapshot.
@@ -186,7 +195,8 @@ pub struct SendEmulation {
 ///
 /// `details_json` preserves action-specific fields without making the stable
 /// wallet API depend on Toncenter's growing list of action schemas.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 #[serde(rename_all = "camelCase")]
 pub struct SendEmulationAction {
     /// The validated action identifier in standard padded Base64.
@@ -204,7 +214,8 @@ pub struct SendEmulationAction {
 }
 
 /// The result returned after the send workflow reaches a terminal phase.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 #[serde(rename_all = "camelCase")]
 pub struct SendResult {
     /// The application operation identifier.

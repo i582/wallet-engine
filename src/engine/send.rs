@@ -16,7 +16,7 @@ use super::provider::parse_account;
 use super::resolution::ResolutionRequests;
 use crate::wallet::send::{SendResolution, pending_send_record};
 
-#[uniffi::export]
+#[cfg_attr(feature = "ffi", uniffi::export)]
 impl WalletClient {
     /// Signs, records, and submits one V5R1 transfer.
     ///

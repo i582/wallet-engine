@@ -88,6 +88,7 @@ enum BocErrorKind {
     Ton(#[source] TonCoreError),
 }
 
+#[cfg(feature = "ffi")]
 uniffi::custom_type!(Boc, String);
 
 #[cfg(test)]
