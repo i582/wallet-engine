@@ -6,13 +6,6 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include <time.h>
-
-#if defined(_WIN32)
-#include <windows.h>
-#else
-#include <sched.h>
-#endif
 
 #define TEXT_CAPACITY 256
 
@@ -22,6 +15,7 @@ typedef struct TestContext {
     atomic_size_t stores;
     atomic_size_t completions;
     atomic_bool done;
+    WalletEngineProtectedSecretStoreCompletion *pending_completion;
     bool valid;
     size_t recovery_word_count;
     WalletEngineNetwork network;
@@ -71,7 +65,7 @@ static void release_context(void *context) {
 
 static void store_protected_secret(
     void *context,
-    WalletEngineCompletionId completion_id,
+    WalletEngineProtectedSecretStoreCompletion *completion,
     const WalletEngineProtectedSecretStoreView *request
 ) {
     TestContext *test = context;
@@ -83,10 +77,7 @@ static void store_protected_secret(
         test->valid = false;
     }
 
-    if (wallet_engine_store_protected_secret_complete(completion_id, NULL) !=
-        WALLET_ENGINE_ABI_STATUS_OK) {
-        test->valid = false;
-    }
+    test->pending_completion = completion;
 }
 
 static void create_wallet_complete(
@@ -116,34 +107,6 @@ static void create_wallet_complete(
     atomic_store_explicit(&test->done, true, memory_order_release);
 }
 
-static void yield_thread(void) {
-#if defined(_WIN32)
-    (void)SwitchToThread();
-#else
-    (void)sched_yield();
-#endif
-}
-
-static bool wait_for_bool(atomic_bool *value, bool expected, time_t deadline) {
-    while (atomic_load_explicit(value, memory_order_acquire) != expected) {
-        if (time(NULL) > deadline) {
-            return false;
-        }
-        yield_thread();
-    }
-    return true;
-}
-
-static bool wait_for_size(atomic_size_t *value, size_t expected, time_t deadline) {
-    while (atomic_load_explicit(value, memory_order_acquire) != expected) {
-        if (time(NULL) > deadline) {
-            return false;
-        }
-        yield_thread();
-    }
-    return true;
-}
-
 #define CHECK(condition)                                                       \
     do {                                                                       \
         if (!(condition)) {                                                    \
@@ -165,6 +128,7 @@ int main(void) {
         .stores = 0,
         .completions = 0,
         .done = false,
+        .pending_completion = NULL,
         .valid = true,
     };
     const WalletEnginePlatformHostCallbacks callbacks = {
@@ -188,20 +152,54 @@ int main(void) {
         .record_id = {record_id, sizeof(record_id) - 1},
         .network = WALLET_ENGINE_NETWORK_TESTNET,
     };
+    WalletEngineCreateWalletOperation *operation = NULL;
     CHECK(
-        wallet_engine_lifecycle_create_wallet(
-            lifecycle,
-            &request,
-            &context,
-            create_wallet_complete
-        ) == WALLET_ENGINE_ABI_STATUS_OK
+        wallet_engine_lifecycle_create_wallet_start(lifecycle, &request, &operation) ==
+        WALLET_ENGINE_ABI_STATUS_OK
     );
+    CHECK(operation != NULL);
+    CHECK(atomic_load_explicit(&context.stores, memory_order_acquire) == 0);
+    CHECK(atomic_load_explicit(&context.completions, memory_order_acquire) == 0);
 
     wallet_engine_lifecycle_free(lifecycle);
 
-    const time_t deadline = time(NULL) + 10;
-    CHECK(wait_for_bool(&context.done, true, deadline));
-    CHECK(wait_for_size(&context.releases, 1, deadline));
+    WalletEngineOperationPollState poll_state = WALLET_ENGINE_OPERATION_POLL_STATE_READY;
+    CHECK(
+        wallet_engine_create_wallet_operation_poll(
+            operation,
+            &context,
+            create_wallet_complete,
+            &poll_state
+        ) == WALLET_ENGINE_ABI_STATUS_OK
+    );
+    CHECK(poll_state == WALLET_ENGINE_OPERATION_POLL_STATE_PENDING);
+    CHECK(context.pending_completion != NULL);
+    CHECK(atomic_load_explicit(&context.stores, memory_order_acquire) == 1);
+    CHECK(atomic_load_explicit(&context.completions, memory_order_acquire) == 0);
+
+    CHECK(
+        wallet_engine_protected_secret_store_completion_complete(
+            context.pending_completion,
+            NULL
+        ) == WALLET_ENGINE_ABI_STATUS_OK
+    );
+    wallet_engine_protected_secret_store_completion_free(context.pending_completion);
+    context.pending_completion = NULL;
+    CHECK(atomic_load_explicit(&context.completions, memory_order_acquire) == 0);
+
+    CHECK(
+        wallet_engine_create_wallet_operation_poll(
+            operation,
+            &context,
+            create_wallet_complete,
+            &poll_state
+        ) == WALLET_ENGINE_ABI_STATUS_OK
+    );
+    CHECK(poll_state == WALLET_ENGINE_OPERATION_POLL_STATE_READY);
+    wallet_engine_create_wallet_operation_free(operation);
+
+    CHECK(atomic_load_explicit(&context.done, memory_order_acquire));
+    CHECK(atomic_load_explicit(&context.releases, memory_order_acquire) == 1);
     CHECK(context.valid);
     CHECK(atomic_load_explicit(&context.stores, memory_order_acquire) == 1);
     CHECK(atomic_load_explicit(&context.completions, memory_order_acquire) == 1);

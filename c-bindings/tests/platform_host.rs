@@ -3,14 +3,16 @@
 
 use std::{
     ffi::c_void,
+    future::Future,
     mem::size_of,
+    pin::pin,
     sync::{
-        Mutex, MutexGuard,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+        Arc, Mutex, MutexGuard,
+        atomic::{AtomicPtr, AtomicUsize, Ordering},
     },
+    task::{Context, Poll, Wake, Waker},
 };
 
-use futures::{FutureExt, executor::block_on};
 use wallet_engine::{
     ProtectedSecretHostError, ProtectedSecretHostErrorKind, ProtectedSecretRef,
     ProtectedSecretStore, WalletPlatformHost,
@@ -18,10 +20,11 @@ use wallet_engine::{
 use wallet_engine_c::{
     WALLET_ENGINE_PLATFORM_HOST_CALLBACKS_SIZE,
     WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_UNAVAILABLE, WalletEngineAbiStatus,
-    WalletEngineCompletionId, WalletEnginePlatformHostAdapter, WalletEnginePlatformHostCallbacks,
-    WalletEngineProtectedSecretHostErrorView, WalletEngineProtectedSecretStoreView,
-    WalletEngineStoreProtectedSecretFn, WalletEngineStringView,
-    wallet_engine_store_protected_secret_complete,
+    WalletEnginePlatformHostAdapter, WalletEnginePlatformHostCallbacks,
+    WalletEngineProtectedSecretHostErrorView, WalletEngineProtectedSecretStoreCompletion,
+    WalletEngineProtectedSecretStoreView, WalletEngineStoreProtectedSecretFn,
+    WalletEngineStringView, wallet_engine_protected_secret_store_completion_complete,
+    wallet_engine_protected_secret_store_completion_free,
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -36,15 +39,50 @@ struct TestContext {
     retains: AtomicUsize,
     releases: AtomicUsize,
     stores: AtomicUsize,
-    captured_completion_id: AtomicU64,
+    captured_completion: AtomicPtr<WalletEngineProtectedSecretStoreCompletion>,
     requests: Mutex<Vec<StoredRequest>>,
     completion_statuses: Mutex<Vec<WalletEngineAbiStatus>>,
+}
+
+#[derive(Default)]
+struct WakeCounter {
+    calls: AtomicUsize,
+}
+
+impl Wake for WakeCounter {
+    fn wake(self: Arc<Self>) {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     match mutex.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn poll_once<F: Future>(future: F) -> Option<F::Output> {
+    let mut future = pin!(future);
+    let mut context = Context::from_waker(Waker::noop());
+    match future.as_mut().poll(&mut context) {
+        Poll::Ready(output) => Some(output),
+        Poll::Pending => None,
+    }
+}
+
+fn run_to_completion<F: Future>(future: F) -> F::Output {
+    let mut future = pin!(future);
+    let mut context = Context::from_waker(Waker::noop());
+    loop {
+        match future.as_mut().poll(&mut context) {
+            Poll::Ready(output) => return output,
+            Poll::Pending => std::thread::yield_now(),
+        }
     }
 }
 
@@ -91,39 +129,47 @@ unsafe fn record_request(
 
 unsafe extern "C" fn store_success(
     context: *mut c_void,
-    completion_id: WalletEngineCompletionId,
+    completion: *mut WalletEngineProtectedSecretStoreCompletion,
     request: *const WalletEngineProtectedSecretStoreView,
 ) {
     // SAFETY: The adapter supplies a callback-scoped request.
     unsafe { record_request(context, request) };
     // SAFETY: Null denotes successful completion and does not get dereferenced.
-    let status =
-        unsafe { wallet_engine_store_protected_secret_complete(completion_id, std::ptr::null()) };
+    let status = unsafe {
+        wallet_engine_protected_secret_store_completion_complete(completion, std::ptr::null())
+    };
+    // SAFETY: The host owns this live completion handle and no other call uses
+    // it now.
+    unsafe { wallet_engine_protected_secret_store_completion_free(completion) };
     // SAFETY: The callback table supplies a live `TestContext` pointer.
     lock(&unsafe { test_context(context) }.completion_statuses).push(status);
 }
 
 unsafe extern "C" fn store_async_success(
     context: *mut c_void,
-    completion_id: WalletEngineCompletionId,
+    completion: *mut WalletEngineProtectedSecretStoreCompletion,
     request: *const WalletEngineProtectedSecretStoreView,
 ) {
     // SAFETY: The adapter supplies a callback-scoped request.
     unsafe { record_request(context, request) };
+    let completion_address = completion as usize;
     std::thread::spawn(move || {
+        let completion = completion_address as *mut WalletEngineProtectedSecretStoreCompletion;
         // SAFETY: Null denotes successful completion and does not get
-        // dereferenced. The completion ID remains registered while the host
-        // future is pending.
+        // dereferenced. The host owns the completion handle while the future
+        // is pending.
         let status = unsafe {
-            wallet_engine_store_protected_secret_complete(completion_id, std::ptr::null())
+            wallet_engine_protected_secret_store_completion_complete(completion, std::ptr::null())
         };
         assert_eq!(status, WalletEngineAbiStatus::Ok);
+        // SAFETY: This thread owns the handle and has finished using it.
+        unsafe { wallet_engine_protected_secret_store_completion_free(completion) };
     });
 }
 
 unsafe extern "C" fn store_error(
     context: *mut c_void,
-    completion_id: WalletEngineCompletionId,
+    completion: *mut WalletEngineProtectedSecretStoreCompletion,
     request: *const WalletEngineProtectedSecretStoreView,
 ) {
     // SAFETY: The adapter supplies a callback-scoped request.
@@ -134,14 +180,18 @@ unsafe extern "C" fn store_error(
     };
     // SAFETY: `error` and its literal-backed diagnostic are readable for this
     // call.
-    let status = unsafe { wallet_engine_store_protected_secret_complete(completion_id, &error) };
+    let status =
+        unsafe { wallet_engine_protected_secret_store_completion_complete(completion, &error) };
+    // SAFETY: The host owns this live completion handle and no other call uses
+    // it now.
+    unsafe { wallet_engine_protected_secret_store_completion_free(completion) };
     // SAFETY: The callback table supplies a live `TestContext` pointer.
     lock(&unsafe { test_context(context) }.completion_statuses).push(status);
 }
 
 unsafe extern "C" fn store_invalid_then_success(
     context: *mut c_void,
-    completion_id: WalletEngineCompletionId,
+    completion: *mut WalletEngineProtectedSecretStoreCompletion,
     request: *const WalletEngineProtectedSecretStoreView,
 ) {
     // SAFETY: The adapter supplies a callback-scoped request.
@@ -152,16 +202,22 @@ unsafe extern "C" fn store_invalid_then_success(
     };
     // SAFETY: `invalid_error` is readable and its empty view is not
     // dereferenced.
-    let invalid =
-        unsafe { wallet_engine_store_protected_secret_complete(completion_id, &invalid_error) };
-    // SAFETY: Null denotes success. The invalid attempt above did not consume
-    // the completion ID.
-    let success =
-        unsafe { wallet_engine_store_protected_secret_complete(completion_id, std::ptr::null()) };
-    // SAFETY: The successful attempt consumed the ID, so this call is expected
-    // to reject it without dereferencing the null error.
-    let duplicate =
-        unsafe { wallet_engine_store_protected_secret_complete(completion_id, std::ptr::null()) };
+    let invalid = unsafe {
+        wallet_engine_protected_secret_store_completion_complete(completion, &invalid_error)
+    };
+    // SAFETY: Null denotes success. The invalid attempt above did not complete
+    // the handle.
+    let success = unsafe {
+        wallet_engine_protected_secret_store_completion_complete(completion, std::ptr::null())
+    };
+    // SAFETY: The successful attempt completed the handle, so this call is
+    // expected to reject the duplicate without dereferencing the null error.
+    let duplicate = unsafe {
+        wallet_engine_protected_secret_store_completion_complete(completion, std::ptr::null())
+    };
+    // SAFETY: The host owns this live completion handle and no other call uses
+    // it now.
+    unsafe { wallet_engine_protected_secret_store_completion_free(completion) };
     // SAFETY: The callback table supplies a live `TestContext` pointer.
     lock(&unsafe { test_context(context) }.completion_statuses)
         .extend([invalid, success, duplicate]);
@@ -169,15 +225,27 @@ unsafe extern "C" fn store_invalid_then_success(
 
 unsafe extern "C" fn store_without_completion(
     context: *mut c_void,
-    completion_id: WalletEngineCompletionId,
+    completion: *mut WalletEngineProtectedSecretStoreCompletion,
     request: *const WalletEngineProtectedSecretStoreView,
 ) {
     // SAFETY: The adapter supplies a callback-scoped request.
     unsafe { record_request(context, request) };
     // SAFETY: The callback table supplies a live `TestContext` pointer.
     unsafe { test_context(context) }
-        .captured_completion_id
-        .store(completion_id, Ordering::Relaxed);
+        .captured_completion
+        .store(completion, Ordering::Relaxed);
+}
+
+unsafe extern "C" fn cancel_store(
+    context: *mut c_void,
+    completion: *mut WalletEngineProtectedSecretStoreCompletion,
+    request: *const WalletEngineProtectedSecretStoreView,
+) {
+    // SAFETY: The adapter supplies a callback-scoped request.
+    unsafe { record_request(context, request) };
+    // SAFETY: The host owns this live completion handle and no other call uses
+    // it now. Freeing it without completion reports cancellation.
+    unsafe { wallet_engine_protected_secret_store_completion_free(completion) };
 }
 
 fn callback_table(
@@ -290,7 +358,7 @@ fn store_request_can_complete_synchronously() {
     let host = unsafe { adapter(&callbacks) };
 
     assert_eq!(
-        block_on(host.store_protected_secret(store_request())),
+        run_to_completion(host.store_protected_secret(store_request())),
         Ok(())
     );
     assert_eq!(context.stores.load(Ordering::Relaxed), 1);
@@ -316,7 +384,7 @@ fn store_request_can_complete_from_another_thread() {
     let host = unsafe { adapter(&callbacks) };
 
     assert_eq!(
-        block_on(host.store_protected_secret(store_request())),
+        run_to_completion(host.store_protected_secret(store_request())),
         Ok(())
     );
     assert_eq!(context.stores.load(Ordering::Relaxed), 1);
@@ -330,7 +398,7 @@ fn store_error_is_copied_into_the_core_type() {
     let host = unsafe { adapter(&callbacks) };
 
     assert_eq!(
-        block_on(host.store_protected_secret(store_request())),
+        run_to_completion(host.store_protected_secret(store_request())),
         Err(ProtectedSecretHostError::Failed {
             kind: ProtectedSecretHostErrorKind::Unavailable,
             diagnostic: "keychain unavailable".to_owned(),
@@ -350,7 +418,7 @@ fn invalid_and_duplicate_completions_are_rejected() {
     let host = unsafe { adapter(&callbacks) };
 
     assert_eq!(
-        block_on(host.store_protected_secret(store_request())),
+        run_to_completion(host.store_protected_secret(store_request())),
         Ok(())
     );
     assert_eq!(
@@ -362,25 +430,75 @@ fn invalid_and_duplicate_completions_are_rejected() {
         ]
     );
 
-    // SAFETY: Null is not dereferenced. The ID was never registered.
-    let unknown =
-        unsafe { wallet_engine_store_protected_secret_complete(u64::MAX, std::ptr::null()) };
-    assert_eq!(unknown, WalletEngineAbiStatus::InvalidArgument);
+    // SAFETY: Null is rejected without being dereferenced.
+    let null = unsafe {
+        wallet_engine_protected_secret_store_completion_complete(
+            std::ptr::null_mut(),
+            std::ptr::null(),
+        )
+    };
+    assert_eq!(null, WalletEngineAbiStatus::InvalidArgument);
 }
 
 #[test]
-fn dropping_the_host_future_unregisters_its_completion() {
+fn completion_remains_safe_after_dropping_the_host_future() {
     let context = TestContext::default();
     let callbacks = callback_table(&context, Some(store_without_completion));
     // SAFETY: The callback table and context remain live through this test.
     let host = unsafe { adapter(&callbacks) };
 
-    let result = host.store_protected_secret(store_request()).now_or_never();
+    let result = poll_once(host.store_protected_secret(store_request()));
     assert_eq!(result, None);
-    let completion_id = context.captured_completion_id.load(Ordering::Relaxed);
-    assert_ne!(completion_id, 0);
-    // SAFETY: Null is not dereferenced. Dropping the future removed this ID.
-    let status =
-        unsafe { wallet_engine_store_protected_secret_complete(completion_id, std::ptr::null()) };
+    let completion = context.captured_completion.load(Ordering::Relaxed);
+    assert!(!completion.is_null());
+    // SAFETY: The callback transferred this live handle to the test. The
+    // receiver was dropped with the future, so completion is safely rejected.
+    let status = unsafe {
+        wallet_engine_protected_secret_store_completion_complete(completion, std::ptr::null())
+    };
     assert_eq!(status, WalletEngineAbiStatus::InvalidArgument);
+    // SAFETY: The test owns the handle and has finished using it.
+    unsafe { wallet_engine_protected_secret_store_completion_free(completion) };
+}
+
+#[test]
+fn completion_records_result_without_waking_the_operation() {
+    let context = TestContext::default();
+    let callbacks = callback_table(&context, Some(store_without_completion));
+    // SAFETY: The callback table and context remain live through this test.
+    let host = unsafe { adapter(&callbacks) };
+    let mut future = pin!(host.store_protected_secret(store_request()));
+    let wake_counter = Arc::new(WakeCounter::default());
+    let waker = Waker::from(Arc::clone(&wake_counter));
+    let mut task_context = Context::from_waker(&waker);
+
+    assert_eq!(future.as_mut().poll(&mut task_context), Poll::Pending);
+    let completion = context.captured_completion.load(Ordering::Acquire);
+    assert!(!completion.is_null());
+    // SAFETY: The callback transferred this live handle to the test.
+    let status = unsafe {
+        wallet_engine_protected_secret_store_completion_complete(completion, std::ptr::null())
+    };
+    assert_eq!(status, WalletEngineAbiStatus::Ok);
+    assert_eq!(wake_counter.calls.load(Ordering::Relaxed), 0);
+    assert_eq!(future.as_mut().poll(&mut task_context), Poll::Ready(Ok(())));
+    // SAFETY: Completion returned and this test uniquely owns the handle.
+    unsafe { wallet_engine_protected_secret_store_completion_free(completion) };
+}
+
+#[test]
+fn freeing_without_completion_reports_cancellation() {
+    let context = TestContext::default();
+    let callbacks = callback_table(&context, Some(cancel_store));
+    // SAFETY: The callback table and context remain live through this test.
+    let host = unsafe { adapter(&callbacks) };
+
+    assert_eq!(
+        run_to_completion(host.store_protected_secret(store_request())),
+        Err(ProtectedSecretHostError::Failed {
+            kind: ProtectedSecretHostErrorKind::Cancelled,
+            diagnostic: "protected-secret store completion was released without a result"
+                .to_owned(),
+        })
+    );
 }

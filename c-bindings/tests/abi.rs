@@ -4,8 +4,8 @@
 use std::{ffi::c_char, mem::size_of};
 
 use wallet_engine_c::{
-    ABI_VERSION, WalletEngineAbiStatus, WalletEngineBytesView, WalletEngineStringView,
-    wallet_engine_abi_version,
+    ABI_VERSION, WalletEngineAbiStatus, WalletEngineBytesView, WalletEngineOperationPollState,
+    WalletEngineStringView, wallet_engine_abi_version,
 };
 
 #[test]
@@ -19,7 +19,11 @@ fn status_values_and_layout_are_stable() {
     assert_eq!(WalletEngineAbiStatus::InvalidArgument as u32, 1);
     assert_eq!(WalletEngineAbiStatus::InvalidUtf8 as u32, 2);
     assert_eq!(WalletEngineAbiStatus::Panic as u32, 3);
+    assert_eq!(WalletEngineAbiStatus::OperationBusy as u32, 4);
     assert_eq!(size_of::<WalletEngineAbiStatus>(), 4);
+    assert_eq!(WalletEngineOperationPollState::Pending as u32, 0);
+    assert_eq!(WalletEngineOperationPollState::Ready as u32, 1);
+    assert_eq!(size_of::<WalletEngineOperationPollState>(), 4);
 }
 
 #[test]

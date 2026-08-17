@@ -1,0 +1,10 @@
+#define WALLET_ENGINE_BUILD
+#include "wallet_engine.h"
+{{WIRE_INCLUDES}}
+uint32_t wallet_engine_abi_version(void) {
+    return WALLET_ENGINE_ABI_VERSION;
+}
+
+uint32_t wallet_engine_uniffi_contract_version(void) {
+    return WALLET_ENGINE_UNIFFI_CONTRACT_VERSION;
+}

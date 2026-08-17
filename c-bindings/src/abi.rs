@@ -5,7 +5,7 @@ use std::ffi::c_char;
 /// The major version of the Wallet Engine C ABI.
 ///
 /// A breaking change to exported types or functions must increment this value.
-pub const ABI_VERSION: u32 = 1;
+pub const ABI_VERSION: u32 = 2;
 
 /// The immediate result of a C ABI function call.
 ///
@@ -22,6 +22,8 @@ pub enum WalletEngineAbiStatus {
     InvalidUtf8 = 2,
     /// Rust caught a panic before it crossed the C boundary.
     Panic = 3,
+    /// Another thread is currently polling the same operation handle.
+    OperationBusy = 4,
 }
 
 /// A borrowed, non-NUL-terminated UTF-8 string.

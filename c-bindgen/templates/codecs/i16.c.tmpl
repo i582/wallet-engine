@@ -1,0 +1,21 @@
+
+WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_write_i16(
+    WalletEnginePrivateBufferWriter *writer,
+    int16_t value
+) {
+    uint16_t bits = 0u;
+    memcpy(&bits, &value, sizeof(bits));
+    return wallet_engine_private_write_u16(writer, bits);
+}
+
+WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_read_i16(
+    WalletEnginePrivateBufferReader *reader,
+    int16_t *out_value
+) {
+    uint16_t bits = 0u;
+    WalletEngineAbiStatus status = wallet_engine_private_read_u16(reader, &bits);
+    if (status == WALLET_ENGINE_ABI_STATUS_OK) {
+        memcpy(out_value, &bits, sizeof(bits));
+    }
+    return status;
+}

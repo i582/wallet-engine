@@ -8,7 +8,9 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 use crate::android::{AndroidAbi, build_android};
-use crate::bindings::{generate_c, generate_kotlin, generate_swift, generate_wasm};
+use crate::bindings::{
+    generate_c, generate_c_experimental, generate_kotlin, generate_swift, generate_wasm,
+};
 
 #[derive(Parser)]
 #[command(about = "Wallet Engine repository tasks")]
@@ -39,6 +41,8 @@ enum BindingLanguage {
         #[arg(long)]
         check: bool,
     },
+    /// Run the custom `UniFFI` C backend without replacing production bindings.
+    CExperimental,
     /// Generate Swift sources and the Apple C module.
     Swift {
         /// Verify generation without updating ignored outputs.
@@ -68,6 +72,9 @@ fn run() -> Result<()> {
         Command::Bindings {
             language: BindingLanguage::C { check },
         } => generate_c(check),
+        Command::Bindings {
+            language: BindingLanguage::CExperimental,
+        } => generate_c_experimental(),
         Command::Bindings {
             language: BindingLanguage::Swift { check },
         } => generate_swift(check),

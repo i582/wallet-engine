@@ -13,7 +13,8 @@ use wallet_engine_c::{
     WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_OTHER,
     WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_POLICY_VIOLATION,
     WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_UNAVAILABLE, WalletEngineAbiStatus,
-    WalletEngineCreateWalletRequest, WalletEngineProtectedSecretStoreView, WalletEngineStringView,
+    WalletEngineCreateWalletRequest, WalletEngineImportWalletRequest,
+    WalletEngineProtectedSecretStoreView, WalletEngineStringView, WalletEngineStringViewSlice,
     WalletEngineWalletLifecycleErrorCode, WalletEngineWalletLifecycleErrorView,
     protected_secret_host_error_kind_from_abi, protected_secret_host_error_kind_to_abi,
     with_created_wallet_view,
@@ -35,6 +36,57 @@ fn create_wallet_request_converts_to_the_core_type() {
             network: Network::Testnet,
         })
     );
+}
+
+#[test]
+fn import_wallet_request_copies_words_into_the_core_type() {
+    let word_views = ["section", "garden", "tomato"].map(WalletEngineStringView::from);
+    let request = WalletEngineImportWalletRequest {
+        record_id: WalletEngineStringView::from("wallet-1"),
+        network: WALLET_ENGINE_NETWORK_MAINNET,
+        recovery_words: WalletEngineStringViewSlice::from(word_views.as_slice()),
+    };
+
+    // SAFETY: The request views borrow live string literals and `word_views`.
+    let core = unsafe { request.try_to_core() }.expect("request should convert");
+    assert_eq!(core.record_id, "wallet-1");
+    assert_eq!(core.network, Network::Mainnet);
+    assert_eq!(
+        core.recovery_words,
+        ["section", "garden", "tomato"].map(str::to_owned)
+    );
+}
+
+#[test]
+fn import_wallet_request_rejects_malformed_word_views() {
+    let null_words = WalletEngineImportWalletRequest {
+        record_id: WalletEngineStringView::from("wallet-1"),
+        network: WALLET_ENGINE_NETWORK_TESTNET,
+        recovery_words: WalletEngineStringViewSlice {
+            data: std::ptr::null(),
+            len: 1,
+        },
+    };
+    // SAFETY: Null is rejected before the non-empty array is dereferenced.
+    let result = unsafe { null_words.try_to_core() };
+    assert!(matches!(
+        result,
+        Err(WalletEngineAbiStatus::InvalidArgument)
+    ));
+
+    let invalid_utf8 = [0xff];
+    let word_views = [WalletEngineStringView {
+        data: invalid_utf8.as_ptr().cast(),
+        len: invalid_utf8.len(),
+    }];
+    let invalid_word = WalletEngineImportWalletRequest {
+        record_id: WalletEngineStringView::from("wallet-1"),
+        network: WALLET_ENGINE_NETWORK_TESTNET,
+        recovery_words: WalletEngineStringViewSlice::from(word_views.as_slice()),
+    };
+    // SAFETY: The view array and invalid byte remain readable for this call.
+    let result = unsafe { invalid_word.try_to_core() };
+    assert!(matches!(result, Err(WalletEngineAbiStatus::InvalidUtf8)));
 }
 
 #[test]

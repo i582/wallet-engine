@@ -48,6 +48,9 @@ static int test_status_values(void) {
     CHECK(WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT == 1);
     CHECK(WALLET_ENGINE_ABI_STATUS_INVALID_UTF8 == 2);
     CHECK(WALLET_ENGINE_ABI_STATUS_PANIC == 3);
+    CHECK(WALLET_ENGINE_ABI_STATUS_OPERATION_BUSY == 4);
+    CHECK(WALLET_ENGINE_OPERATION_POLL_STATE_PENDING == 0);
+    CHECK(WALLET_ENGINE_OPERATION_POLL_STATE_READY == 1);
     return 1;
 }
 
@@ -173,11 +176,11 @@ static void release_context(void *context) {
 
 static void store_protected_secret(
     void *context,
-    WalletEngineCompletionId completion_id,
+    WalletEngineProtectedSecretStoreCompletion *completion,
     const WalletEngineProtectedSecretStoreView *request
 ) {
     (void)context;
-    (void)completion_id;
+    (void)completion;
     (void)request;
 }
 
@@ -197,13 +200,10 @@ static int test_platform_host_contract(void) {
     CHECK(callbacks.release != NULL);
     CHECK(callbacks.store_protected_secret != NULL);
     CHECK(
-        wallet_engine_store_protected_secret_complete(0, NULL) ==
+        wallet_engine_protected_secret_store_completion_complete(NULL, NULL) ==
         WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT
     );
-    CHECK(
-        wallet_engine_store_protected_secret_complete(UINT64_MAX, NULL) ==
-        WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT
-    );
+    wallet_engine_protected_secret_store_completion_free(NULL);
     return 1;
 }
 

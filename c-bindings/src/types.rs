@@ -57,8 +57,8 @@ pub use secret::{
     protected_secret_host_error_kind_from_abi, protected_secret_host_error_kind_to_abi,
 };
 pub use wallet::{
-    WalletEngineCreateWalletRequest, WalletEngineCreatedWalletView, WalletEngineRecoveryPhraseView,
-    WalletEngineStringViewSlice, WalletEngineWalletDescriptorView,
-    WalletEngineWalletLifecycleErrorCode, WalletEngineWalletLifecycleErrorView,
-    with_created_wallet_view,
+    WalletEngineCreateWalletRequest, WalletEngineCreatedWalletView,
+    WalletEngineImportWalletRequest, WalletEngineRecoveryPhraseView, WalletEngineStringViewSlice,
+    WalletEngineWalletDescriptorView, WalletEngineWalletLifecycleErrorCode,
+    WalletEngineWalletLifecycleErrorView, with_created_wallet_view,
 };
