@@ -19,6 +19,7 @@ mod http_bridge;
 mod http_session;
 mod js_bridge;
 mod manifest;
+mod protocol;
 mod rpc;
 mod session;
 mod session_state;
@@ -46,14 +47,15 @@ pub use embedded::{
 };
 pub use friendly_address::{FriendlyAddress, FriendlyAddressError};
 pub use http_bridge::{
-    BridgeCodecError, BridgeSseDecoder, BridgeSseMessage, HttpBridgeError, HttpBridgeUrl,
-    PreparedBridgePost,
+    BridgeCodecError, BridgeSseDecoder, BridgeSseMessage, HeartbeatMode, HttpBridgeError,
+    HttpBridgeUrl, PreparedBridgePost,
 };
 pub use http_session::{HttpSessionError, PersistedHttpSession};
 pub use js_bridge::{
     InjectedWalletInfo, JsBridge, JsBridgeContractError, JsBridgeDescriptor, JsBridgeEventListener,
 };
 pub use manifest::{AppManifest, ManifestError};
+pub use protocol::{AppMessage, RpcMethod, RpcMethodError, WalletEvent, WalletMessage};
 pub use rpc::{
     AppRequest, DisconnectRequest, ExtraCurrencies, KnownAppRequest, KnownWalletResponse,
     RawMessage, RawTransactionPayload, RequestContextError, ResponseValidationError, RpcError,

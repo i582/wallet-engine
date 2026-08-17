@@ -40,8 +40,8 @@ pub enum ValueError {
     /// A bridge client identifier was not 32 lowercase-hex bytes.
     #[error("client id must be exactly 64 lowercase hexadecimal characters")]
     InvalidClientId,
-    /// A network ID was not a canonical stringified signed 32-bit integer.
-    #[error("network id must be a canonical stringified signed 32-bit integer")]
+    /// A network ID was not a stringified integer accepted by the wire schema.
+    #[error("network id must be a stringified integer")]
     InvalidNetworkId,
     /// A decimal string contained no digits or a non-decimal character.
     #[error("decimal string must contain one or more ASCII digits")]
@@ -213,9 +213,8 @@ macro_rules! validated_string {
 }
 
 fn valid_network_id(value: &str) -> bool {
-    value
-        .parse::<i32>()
-        .is_ok_and(|parsed| parsed.to_string() == value)
+    let digits = value.strip_prefix('-').unwrap_or(value);
+    !digits.is_empty() && digits.as_bytes().iter().all(u8::is_ascii_digit)
 }
 
 fn valid_decimal(value: &str) -> bool {
@@ -265,7 +264,7 @@ validated_string!(
     NetworkId,
     valid_network_id,
     ValueError::InvalidNetworkId,
-    "A TON signed 32-bit network `global_id` encoded as a canonical decimal string."
+    "A TON network `global_id` encoded as the opaque stringified-integer wire value."
 );
 
 /// An unsigned 64-bit integer serialized as a canonical decimal string.
@@ -447,16 +446,17 @@ mod tests {
     }
 
     #[test]
-    fn network_id_preserves_custom_global_id() {
-        let parsed = NetworkId::try_from("-1234567890");
-        assert_eq!(
-            parsed.map(NetworkId::into_string),
-            Ok("-1234567890".to_owned())
-        );
+    fn network_id_preserves_every_schema_valid_global_id_verbatim() {
+        for original in ["-239", "-0", "00", "2147483648", "999999999999999999999"] {
+            assert_eq!(
+                NetworkId::try_from(original).map(NetworkId::into_string),
+                Ok(original.to_owned())
+            );
+        }
         assert!(NetworkId::try_from("+3").is_err());
         assert!(NetworkId::try_from("-").is_err());
-        assert!(NetworkId::try_from("00").is_err());
-        assert!(NetworkId::try_from("2147483648").is_err());
+        assert!(NetworkId::try_from("").is_err());
+        assert!(NetworkId::try_from("12x").is_err());
     }
 
     #[test]

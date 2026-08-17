@@ -7,18 +7,15 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use ton_core::{
-    cell::{BoC, TonCell, TonHash},
+    cell::{TonCell, TonHash},
     traits::tlb::TLB,
-    types::tlb_core::MsgAddressIntStd,
+    types::tlb_core::{MsgAddressInt, MsgAddressIntStd, MsgAddressIntVar},
 };
-
-use crate::NetworkId;
 
 const TON_PROOF_ITEM_PREFIX: &[u8] = b"ton-proof-item-v2/";
 const TON_CONNECT_PREFIX: &[u8] = b"ton-connect";
 const SIGN_DATA_PREFIX: &[u8] = b"ton-connect/sign-data/";
 const SIGN_DATA_CELL_MAGIC: u32 = 0x7556_9022;
-const SIGNATURE_DOMAIN_L2_TAG: i32 = 0x71b3_4ee1;
 const DNS_SNAKE_CELL_BYTES: usize = 127;
 
 /// Failure to construct or verify a TON Connect signing payload.
@@ -36,9 +33,6 @@ pub enum SigningError {
     /// A byte length cannot be represented by the protocol's 32-bit field.
     #[error("TON Connect signing field exceeds the 32-bit wire length")]
     LengthOverflow,
-    /// A network ID cannot be represented by TON's signed 32-bit global ID.
-    #[error("network global ID does not fit a signed 32-bit integer")]
-    InvalidNetworkId,
     /// A cell-signing domain cannot be encoded as non-empty TEP-81 labels.
     #[error("cell-signing domain contains an empty DNS label")]
     InvalidDomain,
@@ -48,9 +42,6 @@ pub enum SigningError {
     /// A validated signData wire value could not be decoded as base64 bytes.
     #[error("invalid TON Connect signData base64 payload")]
     InvalidBase64Payload,
-    /// The workchain cannot be represented by `MsgAddressIntStd` used by TON Connect signData.
-    #[error("signData cell address workchain does not fit int8")]
-    UnsupportedCellWorkchain,
     /// The Ed25519 public key bytes do not encode a valid verification key.
     #[error("invalid Ed25519 verification key")]
     InvalidVerificationKey,
@@ -265,49 +256,14 @@ impl<'de> Deserialize<'de> for Ed25519Signature {
     }
 }
 
-/// TON signature domain applied by networks outside mainnet and testnet.
+/// Signature domain accepted by TON Connect proof and `signData` verification.
+///
+/// The protocol signs its digest directly on every network. On-chain wallet
+/// signature domains are a separate mechanism and are not valid here.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SignatureDomain {
-    /// Legacy empty signature domain used by mainnet and testnet.
+    /// Direct Ed25519 signature over the protocol digest.
     Empty,
-    /// L2 domain that binds the signature to a custom network global ID.
-    L2 {
-        /// Signed 32-bit network global ID.
-        global_id: i32,
-    },
-}
-
-impl SignatureDomain {
-    /// Selects the protocol signature domain for a network global ID.
-    pub fn for_network(network: &NetworkId) -> Result<Self, SigningError> {
-        let global_id = network
-            .as_str()
-            .parse::<i32>()
-            .map_err(|_| SigningError::InvalidNetworkId)?;
-        if matches!(global_id, -239 | -3) {
-            Ok(Self::Empty)
-        } else {
-            Ok(Self::L2 { global_id })
-        }
-    }
-
-    fn apply(self, payload: &[u8]) -> Vec<u8> {
-        match self {
-            Self::Empty => payload.to_vec(),
-            Self::L2 { global_id } => {
-                let mut encoded_domain = Vec::with_capacity(8);
-                encoded_domain.extend_from_slice(&SIGNATURE_DOMAIN_L2_TAG.to_le_bytes());
-                encoded_domain.extend_from_slice(&global_id.to_le_bytes());
-                let domain_hash = Sha256::digest(encoded_domain);
-
-                let mut signed =
-                    Vec::with_capacity(domain_hash.len().saturating_add(payload.len()));
-                signed.extend_from_slice(&domain_hash);
-                signed.extend_from_slice(payload);
-                signed
-            }
-        }
-    }
 }
 
 /// Borrowed payload used to build a TON Connect `signData` signing digest.
@@ -386,8 +342,6 @@ pub fn sign_data_signing_hash(
 
 /// Verifies an Ed25519 signature over an already constructed TON Connect digest.
 ///
-/// `ton_proof` on custom networks must pass the network's L2 domain. The
-/// `signData` protocol signs its digest directly and therefore uses `Empty`.
 pub fn verify_signature(
     hash: &[u8; 32],
     signature: &Ed25519Signature,
@@ -397,9 +351,10 @@ pub fn verify_signature(
     let verifying_key = VerifyingKey::from_bytes(public_key.as_bytes())
         .map_err(|_| SigningError::InvalidVerificationKey)?;
     let signature = Signature::from_bytes(signature.as_bytes());
-    Ok(verifying_key
-        .verify_strict(&domain.apply(hash), &signature)
-        .is_ok())
+    let signed = match domain {
+        SignatureDomain::Empty => hash,
+    };
+    Ok(verifying_key.verify_strict(signed, &signature).is_ok())
 }
 
 fn text_or_binary_signing_hash(
@@ -433,17 +388,22 @@ fn cell_signing_hash(
     schema: &str,
     boc: &[u8],
 ) -> Result<[u8; 32], SigningError> {
-    let payload_cell = BoC::from_bytes(boc.to_vec())
-        .and_then(BoC::single_root)
-        .map_err(|_| SigningError::InvalidCell)?;
+    let payload_cell =
+        crate::cell_boc::parse_single_root(boc).map_err(|_| SigningError::InvalidCell)?;
     let domain_cell = snake_cell(&tep81_domain(domain)?)?;
-    let workchain =
-        i8::try_from(address.workchain).map_err(|_| SigningError::UnsupportedCellWorkchain)?;
     let address_hash = TonHash::from_slice(&address.hash).map_err(|_| SigningError::InvalidCell)?;
-    let address = MsgAddressIntStd {
-        anycast: None,
-        workchain,
-        address: address_hash,
+    let address = match i8::try_from(address.workchain) {
+        Ok(workchain) => MsgAddressInt::Std(MsgAddressIntStd {
+            anycast: None,
+            workchain,
+            address: address_hash,
+        }),
+        Err(_) => MsgAddressInt::Var(MsgAddressIntVar {
+            anycast: None,
+            addr_bits_len: 256,
+            workchain: address.workchain,
+            address: address.hash.to_vec(),
+        }),
     };
     let schema_hash = Crc::<u32>::new(&CRC_32_ISO_HDLC).checksum(schema.as_bytes());
 
@@ -562,21 +522,18 @@ mod tests {
     }
 
     #[test]
-    fn custom_network_signature_domain_changes_signed_bytes() -> Result<(), SigningError> {
-        let signing_key = SigningKey::from_bytes(&[9_u8; 32]);
-        let public_key = Ed25519PublicKey::from_bytes(signing_key.verifying_key().to_bytes());
-        let hash = [0x44_u8; 32];
-        let domain = SignatureDomain::L2 { global_id: 42 };
-        let signature =
-            Ed25519Signature::from_bytes(signing_key.sign(&domain.apply(&hash)).to_bytes());
+    fn cell_signing_uses_variable_address_for_large_workchain_ids() -> Result<(), SigningError> {
+        let basechain = address();
+        let custom = RawAccountAddress::new(256, [0x11_u8; 32]);
+        let payload = SignDataSigningPayload::Cell {
+            schema: "payload#_ value:uint32 = Payload;",
+            boc: TonCell::EMPTY_BOC,
+        };
 
-        assert!(verify_signature(&hash, &signature, &public_key, domain)?);
-        assert!(!verify_signature(
-            &hash,
-            &signature,
-            &public_key,
-            SignatureDomain::Empty
-        )?);
+        let basechain_hash =
+            sign_data_signing_hash(&basechain, "example.com", 1_700_000_000, payload)?;
+        let custom_hash = sign_data_signing_hash(&custom, "example.com", 1_700_000_000, payload)?;
+        assert_ne!(custom_hash, basechain_hash);
         Ok(())
     }
 

@@ -430,6 +430,12 @@ pub enum KnownAppRequest {
 }
 
 impl KnownAppRequest {
+    /// Returns the protocol method discriminator for this request.
+    #[must_use]
+    pub fn method(&self) -> crate::RpcMethod {
+        self.into()
+    }
+
     /// Returns the exact dApp request identifier.
     #[must_use]
     pub fn id(&self) -> &str {

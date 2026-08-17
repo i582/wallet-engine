@@ -4,7 +4,7 @@ use thiserror::Error;
 
 use crate::{
     ClientId, ConnectRequest, EmbeddedRequest, EmbeddedRequestError, TraceId, ValueError,
-    decode_embedded_request_param,
+    decode_embedded_request_param, encode_embedded_request_param,
 };
 
 const PROTOCOL_VERSION: &str = "2";
@@ -32,6 +32,43 @@ pub struct ConnectLink {
 }
 
 impl ConnectLink {
+    /// Creates a complete connect link value before choosing a wallet-specific
+    /// universal or custom-scheme base URL.
+    #[must_use]
+    pub fn connect(
+        client_id: ClientId,
+        request: ConnectRequest,
+        return_strategy: ReturnStrategy,
+        embedded_request: Option<EmbeddedRequest>,
+        trace_id: Option<TraceId>,
+    ) -> Self {
+        Self {
+            client_id,
+            request: Some(request),
+            return_strategy,
+            embedded_request,
+            trace_id,
+            extensions: Vec::new(),
+        }
+    }
+
+    /// Creates the reduced `id`/`ret` link accepted by compatible wallets.
+    #[must_use]
+    pub fn reduced(
+        client_id: ClientId,
+        return_strategy: ReturnStrategy,
+        trace_id: Option<TraceId>,
+    ) -> Self {
+        Self {
+            client_id,
+            request: None,
+            return_strategy,
+            embedded_request: None,
+            trace_id,
+            extensions: Vec::new(),
+        }
+    }
+
     /// Parses both a full connect link and the protocol's reduced `id`/`ret` link.
     pub fn parse(value: &str) -> Result<Self, ConnectLinkError> {
         let url = url::Url::parse(value)?;
@@ -93,6 +130,67 @@ impl ConnectLink {
         })
     }
 
+    /// Encodes this value against a wallet universal URL, `tc://`, or a
+    /// wallet-specific custom scheme.
+    ///
+    /// Query parameters already present on `base_url` are rejected so caller
+    /// data cannot shadow the protocol's singleton parameters.
+    pub fn to_url(&self, base_url: &str) -> Result<url::Url, ConnectLinkError> {
+        let mut url = url::Url::parse(base_url).map_err(ConnectLinkError::InvalidBaseUrl)?;
+        if url.query().is_some() || url.fragment().is_some() {
+            return Err(ConnectLinkError::BaseUrlContainsQueryOrFragment);
+        }
+
+        let request = self
+            .request
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(ConnectLinkError::EncodeConnectRequest)?;
+        let embedded = self
+            .embedded_request
+            .as_ref()
+            .map(encode_embedded_request_param)
+            .transpose()?;
+        if embedded.is_some() && request.is_none() {
+            return Err(ConnectLinkError::EmbeddedRequestWithoutConnect);
+        }
+        let return_strategy = match &self.return_strategy {
+            ReturnStrategy::Back => "back",
+            ReturnStrategy::None => "none",
+            ReturnStrategy::Custom(value) => {
+                let parsed = url::Url::parse(value)
+                    .map_err(|_| ConnectLinkError::InvalidReturnStrategy(value.clone()))?;
+                if parsed.scheme().is_empty() {
+                    return Err(ConnectLinkError::InvalidReturnStrategy(value.clone()));
+                }
+                value
+            }
+        };
+
+        {
+            let mut query = url.query_pairs_mut();
+            if request.is_some() {
+                let _ = query.append_pair("v", PROTOCOL_VERSION);
+            }
+            let _ = query.append_pair("id", &self.client_id.to_string());
+            if let Some(request) = request.as_deref() {
+                let _ = query.append_pair("r", request);
+            }
+            let _ = query.append_pair("ret", return_strategy);
+            if let Some(trace_id) = &self.trace_id {
+                let _ = query.append_pair("trace_id", trace_id.as_str());
+            }
+            if let Some(embedded) = embedded.as_deref() {
+                let _ = query.append_pair("e", embedded);
+            }
+            for (name, value) in &self.extensions {
+                let _ = query.append_pair(name, value);
+            }
+        }
+        Ok(url)
+    }
+
     /// Returns the dApp's bridge client identifier.
     #[must_use]
     pub const fn client_id(&self) -> ClientId {
@@ -148,6 +246,12 @@ fn parse_return_strategy(value: Option<&str>) -> Result<ReturnStrategy, ConnectL
 /// Failure to parse a TON Connect link.
 #[derive(Debug, Error)]
 pub enum ConnectLinkError {
+    /// A universal, unified, or custom-scheme base URL is malformed.
+    #[error("invalid TON Connect base URL: {0}")]
+    InvalidBaseUrl(url::ParseError),
+    /// A base URL already contains values that could shadow protocol fields.
+    #[error("TON Connect base URL must not contain a query or fragment")]
+    BaseUrlContainsQueryOrFragment,
     /// The outer link itself is not an absolute URL.
     #[error("invalid TON Connect URL: {0}")]
     InvalidUrl(#[from] url::ParseError),
@@ -172,6 +276,9 @@ pub enum ConnectLinkError {
     /// The URL-decoded connect request violates its JSON schema.
     #[error("invalid TON Connect request: {0}")]
     InvalidConnectRequest(#[from] serde_json::Error),
+    /// A typed connect request could not be serialized.
+    #[error("failed to encode TON Connect request: {0}")]
+    EncodeConnectRequest(serde_json::Error),
     /// The compact embedded request is malformed.
     #[error(transparent)]
     InvalidEmbeddedRequest(#[from] EmbeddedRequestError),
@@ -240,5 +347,63 @@ mod tests {
         let parsed = ConnectLink::parse(&format!("tc://?{query}"));
 
         assert!(parsed.is_ok_and(|link| link.embedded_request().is_none()));
+    }
+
+    #[test]
+    fn complete_and_reduced_links_have_canonical_round_trips()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let request = serde_json::from_str::<ConnectRequest>(
+            r#"{
+            "manifestUrl":"https://app.example/tonconnect-manifest.json",
+            "items":[{"name":"ton_addr","network":"00042"}]
+        }"#,
+        )?;
+        let embedded = decode_embedded_request_param(
+            &general_purpose::URL_SAFE_NO_PAD.encode(r#"{"m":"sd","t":"text","tx":"hello"}"#),
+        )?;
+        let trace_id = TraceId::try_from("018f4f84-7b8d-7c3f-8d8e-123456789abc")?;
+        let client_id = CLIENT_ID.parse()?;
+        let link = ConnectLink::connect(
+            client_id,
+            request,
+            ReturnStrategy::Custom("demo-app://return/path".to_owned()),
+            Some(embedded),
+            Some(trace_id),
+        );
+
+        let encoded = link.to_url("tc://")?;
+        assert_eq!(ConnectLink::parse(encoded.as_str())?, link);
+
+        let reduced = ConnectLink::reduced(client_id, ReturnStrategy::None, None);
+        let encoded = reduced.to_url("https://wallet.example/connect")?;
+        assert_eq!(ConnectLink::parse(encoded.as_str())?, reduced);
+        assert!(
+            !encoded
+                .query_pairs()
+                .any(|(name, _)| name == "v" || name == "r")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn link_encoding_rejects_ambiguous_base_and_return_urls()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let client_id = CLIENT_ID.parse()?;
+        let with_query = ConnectLink::reduced(client_id, ReturnStrategy::Back, None);
+        assert!(matches!(
+            with_query.to_url("https://wallet.example/connect?existing=1"),
+            Err(ConnectLinkError::BaseUrlContainsQueryOrFragment)
+        ));
+
+        let bad_return = ConnectLink::reduced(
+            client_id,
+            ReturnStrategy::Custom("relative/path".to_owned()),
+            None,
+        );
+        assert!(matches!(
+            bad_return.to_url("tc://"),
+            Err(ConnectLinkError::InvalidReturnStrategy(_))
+        ));
+        Ok(())
     }
 }

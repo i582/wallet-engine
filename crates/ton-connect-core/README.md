@@ -3,6 +3,28 @@
 Runtime-neutral TON Connect protocol types, session cryptography, replay-safe
 state transitions, proof verification, and HTTP bridge framing.
 
+## Protocol coverage
+
+The crate follows TON Connect specification revision
+`5656a962eee30819a31a9e918e3de0b9614713b6` from May 18, 2026.
+
+| Area | Core support |
+| --- | --- |
+| Session | X25519 client IDs, NaCl box encryption, nonce generation, and persisted key validation |
+| Connect | Requests, item replies, events, capabilities, `ton_proof`, and fixed-account validation |
+| RPC | `sendTransaction`, `signMessage`, `signData`, `disconnect`, typed results, and error codes |
+| Structured items | TON, jetton, NFT, extra currencies, and runtime capability validation |
+| Embedded requests | Compact wire decoding, encoding, capability validation, and responses without an RPC ID |
+| Links | Universal, `tc://`, custom-scheme, reduced, return, trace, and embedded request parameters |
+| HTTP bridge | Endpoint construction, both heartbeat modes, SSE framing, encryption, replay cursor, and trace IDs |
+| JS bridge | Runtime-neutral interface contract, wallet metadata, connection restore, send, and event subscription |
+| Metadata | App manifests and `wallets-v2.json` entries with semantic validation |
+| Account proof | Standard wallet state parsing, address binding, public-key extraction, and signature verification |
+
+The host fetches manifests and wallet lists. The host also owns HTTP I/O,
+cache policy, user prompts, persistence, wallet signing, and transaction submission.
+These operations require platform services and are outside the protocol core.
+
 ## Try the HTTP bridge demo
 
 The included example implements a narrow real wallet flow:

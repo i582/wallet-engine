@@ -8,13 +8,34 @@ use thiserror::Error;
 use url::Url;
 
 use crate::{
-    Base64Value, BridgeMessage, ClientId, SessionCrypto, SessionCryptoError, TraceId, ValueError,
+    AppRequest, Base64Value, BridgeMessage, ClientId, KnownAppRequest, RpcError, SessionCrypto,
+    SessionCryptoError, TraceId, ValueError,
 };
+
+/// Heartbeat representation requested from the bridge SSE endpoint.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum HeartbeatMode {
+    /// Legacy named SSE event, also used when the query parameter is omitted.
+    #[default]
+    Legacy,
+    /// Standard `message` event whose data is the literal `heartbeat`.
+    Message,
+}
+
+impl HeartbeatMode {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Legacy => "legacy",
+            Self::Message => "message",
+        }
+    }
+}
 
 /// Validated base URL of a TON Connect HTTP bridge.
 ///
-/// Both HTTPS and HTTP are accepted because local bridge deployments commonly
-/// use HTTP. Production hosts remain responsible for requiring HTTPS.
+/// Published bridges require HTTPS. Plain HTTP is accepted only for an
+/// explicit loopback host so local conformance tests do not weaken production
+/// transport policy.
 #[derive(Clone, Eq, PartialEq)]
 pub struct HttpBridgeUrl(Url);
 
@@ -33,7 +54,24 @@ impl HttpBridgeUrl {
         last_event_id: Option<&str>,
         trace_id: Option<&TraceId>,
     ) -> Url {
-        self.events_endpoint_for_ids(&client_id.to_string(), last_event_id, trace_id)
+        self.events_endpoint_with_heartbeat(
+            client_id,
+            last_event_id,
+            trace_id,
+            HeartbeatMode::Message,
+        )
+    }
+
+    /// Builds the bridge SSE endpoint with an explicit heartbeat wire format.
+    #[must_use]
+    pub fn events_endpoint_with_heartbeat(
+        &self,
+        client_id: ClientId,
+        last_event_id: Option<&str>,
+        trace_id: Option<&TraceId>,
+        heartbeat: HeartbeatMode,
+    ) -> Url {
+        self.events_endpoint_for_ids(&client_id.to_string(), last_event_id, trace_id, heartbeat)
     }
 
     /// Builds one SSE endpoint subscribing to multiple bridge client IDs.
@@ -51,7 +89,31 @@ impl HttpBridgeUrl {
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(",");
-        Ok(self.events_endpoint_for_ids(&client_ids, last_event_id, trace_id))
+        Ok(self.events_endpoint_for_ids(
+            &client_ids,
+            last_event_id,
+            trace_id,
+            HeartbeatMode::Message,
+        ))
+    }
+
+    /// Builds a multi-client SSE endpoint with an explicit heartbeat format.
+    pub fn events_endpoint_many_with_heartbeat(
+        &self,
+        client_ids: &[ClientId],
+        last_event_id: Option<&str>,
+        trace_id: Option<&TraceId>,
+        heartbeat: HeartbeatMode,
+    ) -> Result<Url, HttpBridgeError> {
+        if client_ids.is_empty() {
+            return Err(HttpBridgeError::EmptySubscription);
+        }
+        let client_ids = client_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        Ok(self.events_endpoint_for_ids(&client_ids, last_event_id, trace_id, heartbeat))
     }
 
     fn events_endpoint_for_ids(
@@ -59,6 +121,7 @@ impl HttpBridgeUrl {
         client_ids: &str,
         last_event_id: Option<&str>,
         trace_id: Option<&TraceId>,
+        heartbeat: HeartbeatMode,
     ) -> Url {
         let mut endpoint = self.endpoint("events");
         {
@@ -70,7 +133,7 @@ impl HttpBridgeUrl {
             if let Some(trace_id) = trace_id {
                 let _ = query.append_pair("trace_id", trace_id.as_str());
             }
-            let _ = query.append_pair("heartbeat", "message");
+            let _ = query.append_pair("heartbeat", heartbeat.as_str());
         }
         endpoint
     }
@@ -123,6 +186,30 @@ impl HttpBridgeUrl {
             url: self.message_endpoint(crypto.client_id(), recipient, ttl, topic, trace_id),
             body,
         })
+    }
+
+    /// Encodes an RPC request and derives the bridge push topic from its method.
+    ///
+    /// This prevents a caller from accidentally publishing a topic that differs
+    /// from the encrypted request and causes an incorrect push notification.
+    pub fn prepare_app_request_post(
+        &self,
+        crypto: &SessionCrypto,
+        recipient: ClientId,
+        ttl: NonZeroU32,
+        trace_id: Option<&TraceId>,
+        request: &KnownAppRequest,
+    ) -> Result<PreparedBridgePost, BridgeCodecError> {
+        let method = request.method();
+        let envelope = AppRequest::encode(request.clone())?;
+        self.prepare_post(
+            crypto,
+            recipient,
+            ttl,
+            Some(method.as_str()),
+            trace_id,
+            &envelope,
+        )
     }
 
     fn endpoint(&self, suffix: &str) -> Url {
@@ -195,11 +282,14 @@ impl TryFrom<&str> for HttpBridgeUrl {
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         let parsed = Url::parse(value).map_err(|_| HttpBridgeError::InvalidUrl)?;
-        if !matches!(parsed.scheme(), "http" | "https")
-            || !parsed.has_host()
-            || parsed.query().is_some()
-            || parsed.fragment().is_some()
-        {
+        let secure = parsed.scheme() == "https" && parsed.has_host();
+        let loopback = parsed.scheme() == "http"
+            && parsed.host().is_some_and(|host| match host {
+                url::Host::Domain(domain) => domain.eq_ignore_ascii_case("localhost"),
+                url::Host::Ipv4(address) => address.is_loopback(),
+                url::Host::Ipv6(address) => address.is_loopback(),
+            });
+        if (!secure && !loopback) || parsed.query().is_some() || parsed.fragment().is_some() {
             return Err(HttpBridgeError::InvalidUrl);
         }
         Ok(Self(parsed))
@@ -260,6 +350,9 @@ pub enum BridgeCodecError {
     /// Plaintext JSON could not be encoded or decoded as the requested type.
     #[error("invalid TON Connect bridge plaintext: {0}")]
     Json(serde_json::Error),
+    /// A typed RPC request could not be encoded into its bridge envelope.
+    #[error(transparent)]
+    Rpc(#[from] RpcError),
     /// Base64 wire data is malformed.
     #[error(transparent)]
     InvalidBase64(#[from] ValueError),
@@ -381,7 +474,7 @@ impl BridgeSseDecoder {
 #[derive(Debug, Error)]
 pub enum HttpBridgeError {
     /// The bridge base is not an absolute HTTP(S) URL without query or fragment.
-    #[error("bridge URL must be an absolute HTTP(S) base without query or fragment")]
+    #[error("bridge URL must be an HTTPS base (or loopback HTTP) without query or fragment")]
     InvalidUrl,
     /// A bridge event subscription contained no client IDs.
     #[error("bridge event subscription must contain at least one client id")]
@@ -419,12 +512,23 @@ mod tests {
                 "0123456789abcdef0123456789abcdef&last_event_id=41&heartbeat=message"
             ))
         );
+        let legacy =
+            bridge.events_endpoint_with_heartbeat(client, None, None, HeartbeatMode::Legacy);
+        assert!(legacy.as_str().contains("heartbeat=legacy"));
 
         let ttl = NonZeroU32::new(300).ok_or("TTL must be non-zero")?;
         let message = bridge.message_endpoint(client, client, ttl, Some("disconnect"), None);
         assert_eq!(message.path(), "/ton/bridge/message");
         assert!(message.as_str().contains("topic=disconnect"));
         Ok(())
+    }
+
+    #[test]
+    fn bridge_transport_requires_https_except_for_explicit_loopback() {
+        assert!(HttpBridgeUrl::try_from("https://bridge.example/bridge").is_ok());
+        assert!(HttpBridgeUrl::try_from("http://127.0.0.1:8080/bridge").is_ok());
+        assert!(HttpBridgeUrl::try_from("http://localhost:8080/bridge").is_ok());
+        assert!(HttpBridgeUrl::try_from("http://bridge.example/bridge").is_err());
     }
 
     #[test]
@@ -509,14 +613,8 @@ mod tests {
         };
         let bridge = HttpBridgeUrl::try_from("https://bridge.example/bridge")?;
         let ttl = NonZeroU32::new(300).ok_or("TTL must be non-zero")?;
-        let post = bridge.prepare_post(
-            &dapp,
-            wallet.client_id(),
-            ttl,
-            Some("disconnect"),
-            None,
-            &request,
-        )?;
+        let known = request.clone().decode()?;
+        let post = bridge.prepare_app_request_post(&dapp, wallet.client_id(), ttl, None, &known)?;
         let envelope = serde_json::json!({
             "from": dapp.client_id().to_string(),
             "message": post.body().as_str()

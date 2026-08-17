@@ -716,13 +716,12 @@ impl TonProof {
         &self,
         address: &RawAccountAddress,
         public_key: &Ed25519PublicKey,
-        network: &NetworkId,
     ) -> Result<bool, SigningError> {
         verify_signature(
             &self.signing_hash(address)?,
             &self.signature,
             public_key,
-            SignatureDomain::for_network(network)?,
+            SignatureDomain::Empty,
         )
     }
 
@@ -733,7 +732,7 @@ impl TonProof {
         account: &TonAddressItemReply,
     ) -> Result<bool, AccountVerificationError> {
         let wallet = account.verify_standard_wallet()?;
-        self.verify(&account.address, wallet.public_key(), &account.network)
+        self.verify(&account.address, wallet.public_key())
             .map_err(Into::into)
     }
 }
@@ -1257,11 +1256,9 @@ mod tests {
         proof.signature = Ed25519Signature::from_bytes(
             signing_key.sign(&proof.signing_hash(&address)?).to_bytes(),
         );
-        let mainnet = NetworkId::try_from("-239")?;
-
-        assert!(proof.verify(&address, &public_key, &mainnet)?);
+        assert!(proof.verify(&address, &public_key)?);
         proof.payload.push_str("-changed");
-        assert!(!proof.verify(&address, &public_key, &mainnet)?);
+        assert!(!proof.verify(&address, &public_key)?);
         Ok(())
     }
 }

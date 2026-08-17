@@ -5,10 +5,7 @@ use std::fmt;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use thiserror::Error;
-use ton_core::{
-    cell::{CellType, TonCell},
-    traits::tlb::TLB as _,
-};
+use ton_core::cell::{CellType, TonCell};
 
 use crate::{Ed25519PublicKey, RawAccountAddress, SigningError};
 
@@ -254,7 +251,7 @@ struct ParsedStateInit {
 }
 
 fn parse_root(boc: &[u8]) -> Result<TonCell, WalletStateError> {
-    TonCell::from_boc(boc.to_vec()).map_err(|_| WalletStateError::InvalidBoc)
+    crate::cell_boc::parse_single_root(boc).map_err(|_| WalletStateError::InvalidBoc)
 }
 
 fn parse_state_init(root: &TonCell) -> Result<ParsedStateInit, WalletStateError> {
@@ -410,6 +407,7 @@ mod tests {
 
     use base64::engine::general_purpose::URL_SAFE;
     use ed25519_dalek::{Signer as _, SigningKey};
+    use ton_core::traits::tlb::TLB as _;
 
     use super::*;
     use crate::{
