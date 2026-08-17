@@ -25,6 +25,10 @@ pub use host::{
     WalletEnginePlatformHostCallbacks, WalletEngineStoreProtectedSecretFn,
     wallet_engine_store_protected_secret_complete,
 };
+#[allow(
+    deprecated,
+    reason = "re-exports the legacy ABI while removing the library-owned runtime"
+)]
 pub use lifecycle::{
     WalletEngineCreateWalletCompletionFn, WalletEngineCreateWalletOperation,
     WalletEngineCreateWalletResultFn, WalletEngineLifecycle, WalletEngineOperationPollState,

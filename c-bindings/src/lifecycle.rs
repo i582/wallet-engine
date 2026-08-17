@@ -12,10 +12,12 @@ use std::{
 use futures::{FutureExt, task::noop_waker_ref};
 use wallet_engine::{CreatedWallet, WalletLifecycle as CoreWalletLifecycle, WalletLifecycleError};
 
+#[allow(deprecated, reason = "used only by the deprecated asynchronous C ABI")]
+use crate::runtime::runtime;
 use crate::{
     WalletEngineAbiStatus, WalletEngineCreateWalletRequest, WalletEngineCreatedWalletView,
     WalletEnginePlatformHostAdapter, WalletEnginePlatformHostCallbacks,
-    WalletEngineWalletLifecycleErrorView, runtime::runtime, with_created_wallet_view,
+    WalletEngineWalletLifecycleErrorView, with_created_wallet_view,
 };
 
 /// Receives the result of an asynchronous wallet-creation operation.
@@ -27,6 +29,9 @@ use crate::{
 ///
 /// All result views and their nested pointers remain valid only until the
 /// callback returns. The callback can run on an arbitrary worker thread.
+#[deprecated(
+    note = "use WalletEngineCreateWalletResultFn with wallet_engine_create_wallet_operation_poll"
+)]
 pub type WalletEngineCreateWalletCompletionFn = Option<
     unsafe extern "C" fn(
         context: *mut c_void,
@@ -395,7 +400,11 @@ pub unsafe extern "C" fn wallet_engine_create_wallet_operation_free(
 /// `completion_context` must remain safe to invoke from an arbitrary worker
 /// thread until the callback returns. The context may be null if the callback
 /// accepts null.
+#[deprecated(
+    note = "use wallet_engine_lifecycle_create_wallet_start, wallet_engine_create_wallet_operation_poll, and wallet_engine_create_wallet_operation_free"
+)]
 #[unsafe(no_mangle)]
+#[allow(deprecated, reason = "implements the deprecated asynchronous C ABI")]
 pub unsafe extern "C" fn wallet_engine_lifecycle_create_wallet(
     lifecycle: *const WalletEngineLifecycle,
     request: *const WalletEngineCreateWalletRequest,
@@ -410,6 +419,7 @@ pub unsafe extern "C" fn wallet_engine_lifecycle_create_wallet(
     .unwrap_or(WalletEngineAbiStatus::Panic)
 }
 
+#[allow(deprecated, reason = "implements the deprecated asynchronous C ABI")]
 unsafe fn lifecycle_create_wallet(
     lifecycle: *const WalletEngineLifecycle,
     request: *const WalletEngineCreateWalletRequest,

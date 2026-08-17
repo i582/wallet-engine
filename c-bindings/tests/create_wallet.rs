@@ -1,5 +1,9 @@
 #![allow(unsafe_code)]
 #![allow(clippy::expect_used)]
+#![allow(
+    deprecated,
+    reason = "keeps coverage for the deprecated async ABI while removing the library-owned runtime"
+)]
 
 use std::{
     ffi::c_void,

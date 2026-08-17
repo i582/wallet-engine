@@ -10,6 +10,8 @@ publish = false
 [dependencies]
 async-trait = "=0.1.89"
 futures = "=0.3.31"
+# Legacy-only dependency of the deprecated fire-and-callback create-wallet
+# entry point. It will be removed as C bindings move away from their own runtime.
 tokio = { version = "=1.53.1", features = ["rt-multi-thread"] }
 wallet-engine = { path = ".." }
 
