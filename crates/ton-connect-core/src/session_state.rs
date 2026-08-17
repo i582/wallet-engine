@@ -3,7 +3,7 @@ use std::{cmp::Ordering, fmt, str::FromStr};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use thiserror::Error;
 
-use crate::AppRequest;
+use crate::{AppRequest, ConnectEvent};
 
 /// A dApp RPC request ID ordered as an arbitrary-precision unsigned integer.
 ///
@@ -351,16 +351,130 @@ pub enum SessionStateError {
     EventIdExhausted,
 }
 
+/// Durable dApp-side cursor for monotonic wallet events.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WalletEventCursor {
+    last_event_id: Option<u64>,
+    terminated: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WalletEventCursorWire {
+    last_event_id: Option<u64>,
+    terminated: bool,
+}
+
+impl<'de> Deserialize<'de> for WalletEventCursor {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = WalletEventCursorWire::deserialize(deserializer)?;
+        if wire.terminated && wire.last_event_id.is_none() {
+            return Err(serde::de::Error::custom(
+                "terminated wallet event cursor requires an accepted event id",
+            ));
+        }
+        Ok(Self {
+            last_event_id: wire.last_event_id,
+            terminated: wire.terminated,
+        })
+    }
+}
+
+impl WalletEventCursor {
+    /// Returns the last accepted wallet event ID.
+    #[must_use]
+    pub const fn last_event_id(&self) -> Option<u64> {
+        self.last_event_id
+    }
+
+    /// Reports whether connect failed or either side disconnected.
+    #[must_use]
+    pub const fn is_terminated(&self) -> bool {
+        self.terminated
+    }
+
+    /// Validates one event and prepares state to persist before publication.
+    pub fn prepare_event(
+        &self,
+        event: &ConnectEvent,
+    ) -> Result<PreparedWalletEventReceipt, WalletEventCursorError> {
+        if self.terminated {
+            return Err(WalletEventCursorError::SessionTerminated);
+        }
+        let id = event.id();
+        if self.last_event_id.is_some_and(|last| id <= last) {
+            return Err(WalletEventCursorError::EventIdNotIncreasing);
+        }
+        Ok(PreparedWalletEventReceipt {
+            event_id: id,
+            next_cursor: Self {
+                last_event_id: Some(id),
+                terminated: event.terminates_session(),
+            },
+        })
+    }
+}
+
+/// Accepted wallet event and cursor that must be persisted first.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreparedWalletEventReceipt {
+    event_id: u64,
+    next_cursor: WalletEventCursor,
+}
+
+impl PreparedWalletEventReceipt {
+    /// Returns the accepted protocol event ID.
+    #[must_use]
+    pub const fn event_id(&self) -> u64 {
+        self.event_id
+    }
+
+    /// Returns the cursor to persist before publishing the event.
+    #[must_use]
+    pub const fn next_cursor(&self) -> &WalletEventCursor {
+        &self.next_cursor
+    }
+
+    /// Consumes the prepared receipt into its durable cursor.
+    #[must_use]
+    pub fn into_cursor(self) -> WalletEventCursor {
+        self.next_cursor
+    }
+}
+
+/// Wallet event is replayed, reordered, or belongs to a terminated session.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+pub enum WalletEventCursorError {
+    /// Event ID is equal to or below the accepted baseline.
+    #[error("wallet event id is not strictly increasing")]
+    EventIdNotIncreasing,
+    /// No event is accepted after a terminal event.
+    #[error("wallet event session is already terminated")]
+    SessionTerminated,
+}
+
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;
 
     use super::*;
+    use crate::{ConnectEventError, ConnectEventErrorCode, EmptyObject};
 
     fn connected() -> Result<WalletSessionState, SessionStateError> {
         WalletSessionState::pending_connect()
             .prepare_event(WalletEventKind::Connect)
             .map(PreparedWalletEvent::into_state)
+    }
+
+    fn disconnect_event(id: u64) -> ConnectEvent {
+        ConnectEvent::Disconnect {
+            id,
+            payload: EmptyObject,
+        }
     }
 
     fn request(id: &str, method: &str, params: Vec<String>) -> AppRequest {
@@ -471,7 +585,7 @@ mod tests {
 
     proptest! {
         #[test]
-        fn every_strictly_increasing_u128_sequence_is_accepted(
+    fn every_strictly_increasing_u128_sequence_is_accepted(
             mut values in proptest::collection::vec(any::<u128>(), 1..64)
         ) {
             values.sort_unstable();
@@ -490,5 +604,53 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn dapp_event_cursor_rejects_replay_and_stops_after_disconnect()
+    -> Result<(), WalletEventCursorError> {
+        let cursor = WalletEventCursor::default();
+        let first = cursor.prepare_event(&disconnect_event(7))?;
+        assert_eq!(first.event_id(), 7);
+        let terminated = first.into_cursor();
+        assert!(terminated.is_terminated());
+        assert_eq!(
+            terminated.prepare_event(&disconnect_event(8)),
+            Err(WalletEventCursorError::SessionTerminated)
+        );
+
+        let active = WalletEventCursor::default()
+            .prepare_event(&ConnectEvent::ConnectError {
+                id: 10,
+                payload: ConnectEventError {
+                    code: ConnectEventErrorCode::Unknown,
+                    message: "failed".to_owned(),
+                },
+            })?
+            .into_cursor();
+        assert_eq!(active.last_event_id(), Some(10));
+        assert!(active.is_terminated());
+        Ok(())
+    }
+
+    #[test]
+    fn dapp_event_cursor_accepts_first_baseline_then_requires_strict_growth() {
+        let first = WalletEventCursor::default()
+            .prepare_event(&disconnect_event(0))
+            .map(PreparedWalletEventReceipt::into_cursor);
+        assert!(first.is_ok());
+
+        let active = WalletEventCursor {
+            last_event_id: Some(5),
+            terminated: false,
+        };
+        assert_eq!(
+            active.prepare_event(&disconnect_event(5)),
+            Err(WalletEventCursorError::EventIdNotIncreasing)
+        );
+        assert_eq!(
+            active.prepare_event(&disconnect_event(4)),
+            Err(WalletEventCursorError::EventIdNotIncreasing)
+        );
     }
 }

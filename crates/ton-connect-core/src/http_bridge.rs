@@ -2,6 +2,7 @@
 
 use std::{fmt, mem, num::NonZeroU32, num::NonZeroUsize};
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use thiserror::Error;
 use url::Url;
 
@@ -15,6 +16,12 @@ use crate::{BridgeMessage, ClientId, TraceId};
 pub struct HttpBridgeUrl(Url);
 
 impl HttpBridgeUrl {
+    /// Returns the validated bridge base URL.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
     /// Builds the bridge SSE endpoint without discarding a base-path segment.
     #[must_use]
     pub fn events_endpoint(
@@ -23,11 +30,37 @@ impl HttpBridgeUrl {
         last_event_id: Option<&str>,
         trace_id: Option<&TraceId>,
     ) -> Url {
+        self.events_endpoint_for_ids(&client_id.to_string(), last_event_id, trace_id)
+    }
+
+    /// Builds one SSE endpoint subscribing to multiple bridge client IDs.
+    pub fn events_endpoint_many(
+        &self,
+        client_ids: &[ClientId],
+        last_event_id: Option<&str>,
+        trace_id: Option<&TraceId>,
+    ) -> Result<Url, HttpBridgeError> {
+        if client_ids.is_empty() {
+            return Err(HttpBridgeError::EmptySubscription);
+        }
+        let client_ids = client_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        Ok(self.events_endpoint_for_ids(&client_ids, last_event_id, trace_id))
+    }
+
+    fn events_endpoint_for_ids(
+        &self,
+        client_ids: &str,
+        last_event_id: Option<&str>,
+        trace_id: Option<&TraceId>,
+    ) -> Url {
         let mut endpoint = self.endpoint("events");
-        let client_id = client_id.to_string();
         {
             let mut query = endpoint.query_pairs_mut();
-            let _ = query.append_pair("client_id", &client_id);
+            let _ = query.append_pair("client_id", client_ids);
             if let Some(last_event_id) = last_event_id {
                 let _ = query.append_pair("last_event_id", last_event_id);
             }
@@ -85,6 +118,31 @@ impl fmt::Debug for HttpBridgeUrl {
             .debug_tuple("HttpBridgeUrl")
             .field(&self.0)
             .finish()
+    }
+}
+
+impl fmt::Display for HttpBridgeUrl {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl Serialize for HttpBridgeUrl {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for HttpBridgeUrl {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::try_from(value.as_str()).map_err(de::Error::custom)
     }
 }
 
@@ -246,6 +304,9 @@ pub enum HttpBridgeError {
     /// The bridge base is not an absolute HTTP(S) URL without query or fragment.
     #[error("bridge URL must be an absolute HTTP(S) base without query or fragment")]
     InvalidUrl,
+    /// A bridge event subscription contained no client IDs.
+    #[error("bridge event subscription must contain at least one client id")]
+    EmptySubscription,
     /// A pending SSE event exceeded the configured memory bound.
     #[error("bridge SSE event exceeded the configured size limit")]
     EventTooLarge,
@@ -286,6 +347,24 @@ mod tests {
         let message = bridge.message_endpoint(client, client, ttl, Some("disconnect"), None);
         assert_eq!(message.path(), "/ton/bridge/message");
         assert!(message.as_str().contains("topic=disconnect"));
+        Ok(())
+    }
+
+    #[test]
+    fn event_endpoint_supports_multiple_client_queues() -> Result<(), Box<dyn Error>> {
+        let bridge = HttpBridgeUrl::try_from("https://bridge.example/bridge")?;
+        let first = ClientId::from_bytes([1_u8; 32]);
+        let second = ClientId::from_bytes([2_u8; 32]);
+        let endpoint = bridge.events_endpoint_many(&[first, second], None, None)?;
+        let client_ids = endpoint
+            .query_pairs()
+            .find_map(|(name, value)| (name == "client_id").then(|| value.into_owned()));
+
+        assert_eq!(client_ids, Some(format!("{first},{second}")));
+        assert!(matches!(
+            bridge.events_endpoint_many(&[], None, None),
+            Err(HttpBridgeError::EmptySubscription)
+        ));
         Ok(())
     }
 

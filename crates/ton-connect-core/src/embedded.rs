@@ -3,9 +3,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    Base64Value, DecimalString, ExtraCurrencies, NetworkId, NonEmptyVec, RawMessage,
-    RawTransactionPayload, SignDataPayload, StructuredItem, StructuredTransactionPayload,
-    TransactionPayload,
+    AccountAddress, Base64Value, CellBoc, DecimalString, ExtraCurrencies, FriendlyAddress,
+    NetworkId, NonEmptyVec, RawMessage, RawTransactionPayload, SignDataPayload, StructuredItem,
+    StructuredTransactionPayload, TransactionPayload, WalletResponseError, WalletResult,
 };
 
 /// An RPC request embedded in a connect link, before a request ID exists.
@@ -17,6 +17,35 @@ pub enum EmbeddedRequest {
     SignMessage(TransactionPayload),
     /// Sign application data after connection approval.
     SignData(SignDataPayload),
+}
+
+/// Method-specific response attached to a successful connect event.
+///
+/// Embedded requests have no dApp-assigned request ID, so this deliberately
+/// differs from the normal [`crate::WalletResponse`] envelope.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum EmbeddedResponse {
+    /// Embedded action completed successfully.
+    Success(EmbeddedResponseSuccess),
+    /// Embedded action returned an error while connect still succeeded.
+    Error(EmbeddedResponseError),
+}
+
+/// Success body for an embedded action.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EmbeddedResponseSuccess {
+    /// Method-specific result identical to a normal wallet response result.
+    pub result: WalletResult,
+}
+
+/// Error body for an embedded action.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EmbeddedResponseError {
+    /// Method-specific error identical to a normal wallet response error.
+    pub error: WalletResponseError,
 }
 
 /// Failure to decode or encode the compact `e` connect-link parameter.
@@ -79,7 +108,7 @@ enum WireTransactionPayload {
 #[serde(deny_unknown_fields)]
 struct WireRawTransaction {
     #[serde(skip_serializing_if = "Option::is_none")]
-    f: Option<String>,
+    f: Option<AccountAddress>,
     #[serde(skip_serializing_if = "Option::is_none")]
     n: Option<NetworkId>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -91,7 +120,7 @@ struct WireRawTransaction {
 #[serde(deny_unknown_fields)]
 struct WireStructuredTransaction {
     #[serde(skip_serializing_if = "Option::is_none")]
-    f: Option<String>,
+    f: Option<AccountAddress>,
     #[serde(skip_serializing_if = "Option::is_none")]
     n: Option<NetworkId>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -102,12 +131,12 @@ struct WireStructuredTransaction {
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct WireMessage {
-    a: String,
+    a: FriendlyAddress,
     am: DecimalString,
     #[serde(skip_serializing_if = "Option::is_none")]
-    p: Option<Base64Value>,
+    p: Option<CellBoc>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    si: Option<Base64Value>,
+    si: Option<CellBoc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ec: Option<ExtraCurrencies>,
 }
@@ -116,12 +145,12 @@ struct WireMessage {
 #[serde(tag = "t", rename_all = "lowercase", deny_unknown_fields)]
 enum WireItem {
     Ton {
-        a: String,
+        a: FriendlyAddress,
         am: DecimalString,
         #[serde(skip_serializing_if = "Option::is_none")]
-        p: Option<Base64Value>,
+        p: Option<CellBoc>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        si: Option<Base64Value>,
+        si: Option<CellBoc>,
         #[serde(skip_serializing_if = "Option::is_none")]
         ec: Option<ExtraCurrencies>,
     },
@@ -136,11 +165,11 @@ enum WireItem {
         #[serde(skip_serializing_if = "Option::is_none")]
         rd: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        cp: Option<Base64Value>,
+        cp: Option<CellBoc>,
         #[serde(skip_serializing_if = "Option::is_none")]
         fa: Option<DecimalString>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        fp: Option<Base64Value>,
+        fp: Option<CellBoc>,
     },
     Nft {
         na: String,
@@ -152,11 +181,11 @@ enum WireItem {
         #[serde(skip_serializing_if = "Option::is_none")]
         rd: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        cp: Option<Base64Value>,
+        cp: Option<CellBoc>,
         #[serde(skip_serializing_if = "Option::is_none")]
         fa: Option<DecimalString>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        fp: Option<Base64Value>,
+        fp: Option<CellBoc>,
     },
 }
 
@@ -172,7 +201,7 @@ struct WireSignDataRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     n: Option<NetworkId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    f: Option<String>,
+    f: Option<AccountAddress>,
     #[serde(flatten)]
     payload: WireSignDataPayload,
 }
@@ -182,7 +211,7 @@ struct WireSignDataRequest {
 enum WireSignDataPayload {
     Text { tx: String },
     Binary { b: Base64Value },
-    Cell { s: String, c: Base64Value },
+    Cell { s: String, c: CellBoc },
 }
 
 #[derive(Deserialize, Serialize)]
@@ -494,17 +523,46 @@ mod tests {
     #[test]
     fn every_supported_embedded_shape_round_trips() {
         let samples = [
-            r#"{"m":"sm","ms":[{"a":"EQ","am":"0"}]}"#,
+            concat!(
+                "{\"m\":\"sm\",\"ms\":[{\"a\":\"",
+                "Ef8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAU",
+                "\",\"am\":\"0\"}]}"
+            ),
             r#"{"m":"sd","n":"-239","t":"text","tx":"Hello"}"#,
             r#"{"m":"sd","t":"binary","b":"AA=="}"#,
-            r#"{"m":"sd","t":"cell","s":"value:uint32 = Value","c":"AA=="}"#,
+            r#"{"m":"sd","t":"cell","s":"value:uint32 = Value","c":"te6ccgEBAQEAAgAAAA=="}"#,
         ];
         for sample in samples {
             let parameter = general_purpose::URL_SAFE_NO_PAD.encode(sample);
             let round_trip = decode_embedded_request_param(&parameter)
                 .and_then(|request| encode_embedded_request_param(&request))
                 .and_then(|encoded| decode_embedded_request_param(&encoded));
-            assert!(round_trip.is_ok());
+            assert!(
+                round_trip.is_ok(),
+                "failed embedded sample {sample}: {round_trip:?}"
+            );
         }
+    }
+
+    #[test]
+    fn embedded_response_has_no_request_id() -> Result<(), Box<dyn std::error::Error>> {
+        let success = EmbeddedResponse::Success(EmbeddedResponseSuccess {
+            result: WalletResult::Object(serde_json::Map::new()),
+        });
+        assert_eq!(serde_json::to_string(&success)?, r#"{"result":{}}"#);
+        assert!(serde_json::from_str::<EmbeddedResponse>(r#"{"result":{},"id":"1"}"#).is_err());
+
+        let error = EmbeddedResponse::Error(EmbeddedResponseError {
+            error: WalletResponseError {
+                code: crate::RpcErrorCode::UserDeclined,
+                message: "declined".to_owned(),
+                data: None,
+            },
+        });
+        assert_eq!(
+            serde_json::to_string(&error)?,
+            r#"{"error":{"code":300,"message":"declined"}}"#
+        );
+        Ok(())
     }
 }

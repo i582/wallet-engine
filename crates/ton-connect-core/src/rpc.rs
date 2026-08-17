@@ -5,9 +5,10 @@ use serde_json::{Map, Value};
 use thiserror::Error;
 
 use crate::{
-    AccountVerificationError, Base64Value, DecimalString, Ed25519PublicKey, Ed25519Signature,
-    NetworkId, NonEmptyVec, RawAccountAddress, SignDataSigningPayload, SignatureDomain,
-    SigningError, TonAddressItemReply, sign_data_signing_hash, verify_signature,
+    AccountAddress, AccountVerificationError, Base64Value, CellBoc, DecimalString,
+    Ed25519PublicKey, Ed25519Signature, FriendlyAddress, NetworkId, NonEmptyVec, RawAccountAddress,
+    SignDataSigningPayload, SignatureDomain, SigningError, TonAddressItemReply,
+    sign_data_signing_hash, verify_signature,
 };
 
 /// Extra-currency identifier to non-negative elementary-unit amount.
@@ -18,15 +19,15 @@ pub type ExtraCurrencies = BTreeMap<u32, DecimalString>;
 #[serde(deny_unknown_fields)]
 pub struct RawMessage {
     /// Destination in TEP-2 user-friendly form.
-    pub address: String,
+    pub address: FriendlyAddress,
     /// Nanocoins represented as a non-negative decimal string.
     pub amount: DecimalString,
     /// Optional base64 one-cell body `BoC`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub payload: Option<Base64Value>,
+    pub payload: Option<CellBoc>,
     /// Optional base64 one-cell `StateInit` `BoC`.
     #[serde(rename = "stateInit", skip_serializing_if = "Option::is_none")]
-    pub state_init: Option<Base64Value>,
+    pub state_init: Option<CellBoc>,
     /// Optional TEP-92 extra currencies.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extra_currency: Option<ExtraCurrencies>,
@@ -39,15 +40,15 @@ pub enum StructuredItem {
     /// Native TON transfer.
     Ton {
         /// Destination address.
-        address: String,
+        address: FriendlyAddress,
         /// Nanocoins to transfer.
         amount: DecimalString,
         /// Optional base64 one-cell body `BoC`.
         #[serde(skip_serializing_if = "Option::is_none")]
-        payload: Option<Base64Value>,
+        payload: Option<CellBoc>,
         /// Optional base64 one-cell `StateInit` `BoC`.
         #[serde(rename = "stateInit", skip_serializing_if = "Option::is_none")]
-        state_init: Option<Base64Value>,
+        state_init: Option<CellBoc>,
         /// Optional TEP-92 extra currencies.
         #[serde(skip_serializing_if = "Option::is_none")]
         extra_currency: Option<ExtraCurrencies>,
@@ -74,13 +75,13 @@ pub enum StructuredItem {
         response_destination: Option<String>,
         /// Optional base64 `custom_payload` cell `BoC`.
         #[serde(rename = "customPayload", skip_serializing_if = "Option::is_none")]
-        custom_payload: Option<Base64Value>,
+        custom_payload: Option<CellBoc>,
         /// Optional forwarded TON amount in nanocoins.
         #[serde(rename = "forwardAmount", skip_serializing_if = "Option::is_none")]
         forward_amount: Option<DecimalString>,
         /// Optional base64 `forward_payload` cell `BoC`.
         #[serde(rename = "forwardPayload", skip_serializing_if = "Option::is_none")]
-        forward_payload: Option<Base64Value>,
+        forward_payload: Option<CellBoc>,
     },
     /// TEP-62 NFT transfer.
     Nft {
@@ -104,13 +105,13 @@ pub enum StructuredItem {
         response_destination: Option<String>,
         /// Optional base64 `custom_payload` cell `BoC`.
         #[serde(rename = "customPayload", skip_serializing_if = "Option::is_none")]
-        custom_payload: Option<Base64Value>,
+        custom_payload: Option<CellBoc>,
         /// Optional forwarded TON amount in nanocoins.
         #[serde(rename = "forwardAmount", skip_serializing_if = "Option::is_none")]
         forward_amount: Option<DecimalString>,
         /// Optional base64 `forward_payload` cell `BoC`.
         #[serde(rename = "forwardPayload", skip_serializing_if = "Option::is_none")]
-        forward_payload: Option<Base64Value>,
+        forward_payload: Option<CellBoc>,
     },
 }
 
@@ -126,7 +127,7 @@ pub struct RawTransactionPayload {
     pub network: Option<NetworkId>,
     /// Optional fixed sender address.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub from: Option<String>,
+    pub from: Option<AccountAddress>,
     /// One or more raw outgoing messages.
     pub messages: NonEmptyVec<RawMessage>,
 }
@@ -143,7 +144,7 @@ pub struct StructuredTransactionPayload {
     pub network: Option<NetworkId>,
     /// Optional fixed sender address.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub from: Option<String>,
+    pub from: Option<AccountAddress>,
     /// One or more structured transfer items.
     pub items: NonEmptyVec<StructuredItem>,
 }
@@ -161,6 +162,34 @@ pub enum TransactionPayload {
     Structured(StructuredTransactionPayload),
 }
 
+impl TransactionPayload {
+    /// Validates time, network, and fixed-sender constraints common to
+    /// `sendTransaction` and `signMessage`.
+    pub fn validate_context(
+        &self,
+        now: u64,
+        active_network: &NetworkId,
+        active_account: &RawAccountAddress,
+    ) -> Result<(), RequestContextError> {
+        let (valid_until, network, from) = match self {
+            Self::Raw(payload) => (
+                payload.valid_until,
+                payload.network.as_ref(),
+                payload.from.as_ref(),
+            ),
+            Self::Structured(payload) => (
+                payload.valid_until,
+                payload.network.as_ref(),
+                payload.from.as_ref(),
+            ),
+        };
+        if valid_until.is_some_and(|valid_until| now > valid_until) {
+            return Err(RequestContextError::Expired);
+        }
+        validate_network_and_account(network, from, active_network, active_account)
+    }
+}
+
 /// Discriminated `signData` payload.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
@@ -174,7 +203,7 @@ pub enum SignDataPayload {
         network: Option<NetworkId>,
         /// Optional fixed signer address.
         #[serde(skip_serializing_if = "Option::is_none")]
-        from: Option<String>,
+        from: Option<AccountAddress>,
     },
     /// Opaque binary bytes.
     Binary {
@@ -185,21 +214,66 @@ pub enum SignDataPayload {
         network: Option<NetworkId>,
         /// Optional fixed signer address.
         #[serde(skip_serializing_if = "Option::is_none")]
-        from: Option<String>,
+        from: Option<AccountAddress>,
     },
     /// A TVM cell interpreted with a TL-B schema.
     Cell {
         /// TL-B schema whose final declaration is the root.
         schema: String,
         /// Base64 cell `BoC`.
-        cell: Base64Value,
+        cell: CellBoc,
         /// Optional target network global ID.
         #[serde(skip_serializing_if = "Option::is_none")]
         network: Option<NetworkId>,
         /// Optional fixed signer address.
         #[serde(skip_serializing_if = "Option::is_none")]
-        from: Option<String>,
+        from: Option<AccountAddress>,
     },
+}
+
+impl SignDataPayload {
+    /// Validates optional network and signer constraints for `signData`.
+    pub fn validate_context(
+        &self,
+        active_network: &NetworkId,
+        active_account: &RawAccountAddress,
+    ) -> Result<(), RequestContextError> {
+        let (network, from) = match self {
+            Self::Text { network, from, .. }
+            | Self::Binary { network, from, .. }
+            | Self::Cell { network, from, .. } => (network.as_ref(), from.as_ref()),
+        };
+        validate_network_and_account(network, from, active_network, active_account)
+    }
+}
+
+/// Request constraints conflict with the wallet's active session context.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+pub enum RequestContextError {
+    /// Transaction `valid_until` is before the observed clock.
+    #[error("TON Connect request has expired")]
+    Expired,
+    /// Explicit request network differs from the active wallet network.
+    #[error("TON Connect request network differs from the active network")]
+    NetworkMismatch,
+    /// Explicit `from` address differs from the session account.
+    #[error("TON Connect request signer differs from the connected account")]
+    AccountMismatch,
+}
+
+fn validate_network_and_account(
+    network: Option<&NetworkId>,
+    from: Option<&AccountAddress>,
+    active_network: &NetworkId,
+    active_account: &RawAccountAddress,
+) -> Result<(), RequestContextError> {
+    if network.is_some_and(|network| network != active_network) {
+        return Err(RequestContextError::NetworkMismatch);
+    }
+    if from.is_some_and(|from| from.raw_address() != *active_account) {
+        return Err(RequestContextError::AccountMismatch);
+    }
+    Ok(())
 }
 
 /// Raw `{ method, params, id }` request envelope received from a dApp.
@@ -488,7 +562,7 @@ pub enum WalletResponse {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SignMessageResult {
     /// Base64 `BoC` of the signed internal message.
-    pub internal_boc: Base64Value,
+    pub internal_boc: CellBoc,
 }
 
 /// Typed success body returned by `signData`.
@@ -528,20 +602,15 @@ impl SignDataResult {
                     SignDataSigningPayload::Binary(&decoded),
                 )
             }
-            SignDataPayload::Cell { schema, cell, .. } => {
-                let decoded = cell
-                    .decode()
-                    .map_err(|_| SigningError::InvalidBase64Payload)?;
-                sign_data_signing_hash(
-                    &self.address,
-                    &self.domain,
-                    self.timestamp,
-                    SignDataSigningPayload::Cell {
-                        schema,
-                        boc: &decoded,
-                    },
-                )
-            }
+            SignDataPayload::Cell { schema, cell, .. } => sign_data_signing_hash(
+                &self.address,
+                &self.domain,
+                self.timestamp,
+                SignDataSigningPayload::Cell {
+                    schema,
+                    boc: cell.as_bytes(),
+                },
+            ),
         }
     }
 
@@ -573,11 +642,11 @@ impl SignDataResult {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum KnownWalletResponse {
     /// Signed and broadcast external-message `BoC`.
-    SendTransaction(Base64Value),
+    SendTransaction(CellBoc),
     /// Signed internal message.
     SignMessage(SignMessageResult),
     /// Application data signature.
-    SignData(SignDataResult),
+    SignData(Box<SignDataResult>),
     /// Successful disconnect acknowledgement.
     Disconnect,
     /// Protocol error valid for the requested method.
@@ -638,7 +707,7 @@ fn validate_success_result(
 ) -> Result<KnownWalletResponse, ResponseValidationError> {
     match (request, result) {
         (KnownAppRequest::SendTransaction(_), WalletResult::String(result)) => {
-            let boc = Base64Value::try_from(result.clone())
+            let boc = CellBoc::try_from(result.clone())
                 .map_err(|_| ResponseValidationError::InvalidResult)?;
             if boc.as_str().is_empty() {
                 return Err(ResponseValidationError::EmptyResult);
@@ -659,7 +728,7 @@ fn validate_success_result(
             if parsed.payload != request.payload {
                 return Err(ResponseValidationError::SignDataPayloadMismatch);
             }
-            Ok(KnownWalletResponse::SignData(parsed))
+            Ok(KnownWalletResponse::SignData(Box::new(parsed)))
         }
         (KnownAppRequest::Disconnect(_), WalletResult::Object(result)) if result.is_empty() => {
             Ok(KnownWalletResponse::Disconnect)
@@ -676,9 +745,12 @@ fn validate_success_result(
 
 #[cfg(test)]
 mod tests {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
     use ed25519_dalek::{Signer as _, SigningKey};
 
     use super::*;
+
+    const FRIENDLY_ADDRESS: &str = "Ef8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAU";
 
     #[test]
     fn transaction_requires_exactly_one_non_empty_body_kind() {
@@ -694,7 +766,7 @@ mod tests {
     fn app_request_decodes_json_string_parameter() {
         let json = r#"{
             "method":"sendTransaction",
-            "params":["{\"valid_until\":1764424242,\"network\":\"-239\",\"messages\":[{\"address\":\"EQD...\",\"amount\":\"100000000\"}]}"],
+            "params":["{\"valid_until\":1764424242,\"network\":\"-239\",\"messages\":[{\"address\":\"Ef8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAU\",\"amount\":\"100000000\"}]}"],
             "id":"42"
         }"#;
         let decoded = serde_json::from_str::<AppRequest>(json).and_then(|request| {
@@ -738,7 +810,9 @@ mod tests {
     fn response_must_match_request_id_and_method_shape() -> Result<(), Box<dyn std::error::Error>> {
         let request = KnownAppRequest::SendTransaction(SendTransactionRequest {
             id: "42".to_owned(),
-            payload: serde_json::from_str(r#"{"messages":[{"address":"EQ","amount":"0"}]}"#)?,
+            payload: serde_json::from_str(&format!(
+                r#"{{"messages":[{{"address":"{FRIENDLY_ADDRESS}","amount":"0"}}]}}"#
+            ))?,
         });
         let wrong_id = WalletResponse::Success(WalletResponseSuccess {
             result: WalletResult::String("AA==".to_owned()),
@@ -785,5 +859,180 @@ mod tests {
         };
         assert!(!result.verify(&public_key)?);
         Ok(())
+    }
+
+    #[test]
+    fn every_normative_rpc_request_variant_decodes() -> Result<(), Box<dyn std::error::Error>> {
+        let boc = "te6ccgEBAQEAAgAAAA==";
+        let raw = serde_json::json!({
+            "valid_until": 1_900_000_000_u64,
+            "network": "-239",
+            "from": "-1:0000000000000000000000000000000000000000000000000000000000000000",
+            "messages": [{
+                "address": FRIENDLY_ADDRESS,
+                "amount": "1",
+                "payload": boc,
+                "stateInit": boc
+            }]
+        });
+        let structured = serde_json::json!({
+            "items": [
+                {"type":"ton","address":FRIENDLY_ADDRESS,"amount":"1"},
+                {"type":"jetton","master":FRIENDLY_ADDRESS,"destination":FRIENDLY_ADDRESS,"amount":"2"},
+                {"type":"nft","nftAddress":FRIENDLY_ADDRESS,"newOwner":FRIENDLY_ADDRESS}
+            ]
+        });
+        let requests = [
+            app_request("sendTransaction", Some(raw.clone()), "1")?,
+            app_request("sendTransaction", Some(structured), "2")?,
+            app_request("signMessage", Some(raw), "3")?,
+            app_request(
+                "signData",
+                Some(serde_json::json!({"type":"text","text":"hello"})),
+                "4",
+            )?,
+            app_request(
+                "signData",
+                Some(serde_json::json!({"type":"binary","bytes":"AA=="})),
+                "5",
+            )?,
+            app_request(
+                "signData",
+                Some(serde_json::json!({
+                    "type":"cell",
+                    "schema":"value:uint32 = Value",
+                    "cell":boc
+                })),
+                "6",
+            )?,
+            app_request("disconnect", None, "7")?,
+        ];
+
+        for request in requests {
+            assert!(request.decode().is_ok());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn every_normative_success_response_matches_its_request()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let boc = "te6ccgEBAQEAAgAAAA==";
+        let transaction = app_request(
+            "sendTransaction",
+            Some(serde_json::json!({
+                "messages":[{"address":FRIENDLY_ADDRESS,"amount":"1"}]
+            })),
+            "1",
+        )?
+        .decode()?;
+        let sign_message = app_request(
+            "signMessage",
+            Some(serde_json::json!({
+                "messages":[{"address":FRIENDLY_ADDRESS,"amount":"1"}]
+            })),
+            "2",
+        )?
+        .decode()?;
+        let sign_data = app_request(
+            "signData",
+            Some(serde_json::json!({"type":"text","text":"hello"})),
+            "3",
+        )?
+        .decode()?;
+        let disconnect = app_request("disconnect", None, "4")?.decode()?;
+        let signature = STANDARD.encode([0_u8; 64]);
+        let responses = [
+            (transaction, serde_json::json!({"result":boc,"id":"1"})),
+            (
+                sign_message,
+                serde_json::json!({"result":{"internalBoc":boc},"id":"2"}),
+            ),
+            (
+                sign_data,
+                serde_json::json!({
+                    "result":{
+                        "signature":signature,
+                        "address":"0:1111111111111111111111111111111111111111111111111111111111111111",
+                        "timestamp":1_800_000_000_u64,
+                        "domain":"example.com",
+                        "payload":{"type":"text","text":"hello"}
+                    },
+                    "id":"3"
+                }),
+            ),
+            (disconnect, serde_json::json!({"result":{},"id":"4"})),
+        ];
+
+        for (request, response) in responses {
+            let response = serde_json::from_value::<WalletResponse>(response)?;
+            assert!(response.validate_for(&request).is_ok());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn request_context_enforces_expiry_network_and_fixed_account()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let active_network = NetworkId::try_from("-239")?;
+        let active_account = RawAccountAddress::new(-1, [0_u8; 32]);
+        let request = app_request(
+            "sendTransaction",
+            Some(serde_json::json!({
+                "valid_until":100,
+                "network":"-239",
+                "from":FRIENDLY_ADDRESS,
+                "messages":[{"address":FRIENDLY_ADDRESS,"amount":"1"}]
+            })),
+            "1",
+        )?
+        .decode()?;
+        let KnownAppRequest::SendTransaction(request) = request else {
+            return Err("expected sendTransaction".into());
+        };
+        assert_eq!(
+            request
+                .payload
+                .validate_context(101, &active_network, &active_account),
+            Err(RequestContextError::Expired)
+        );
+        assert!(
+            request
+                .payload
+                .validate_context(100, &active_network, &active_account)
+                .is_ok()
+        );
+
+        let wrong_network = NetworkId::try_from("-3")?;
+        assert_eq!(
+            request
+                .payload
+                .validate_context(99, &wrong_network, &active_account),
+            Err(RequestContextError::NetworkMismatch)
+        );
+        let wrong_account = RawAccountAddress::new(0, [0_u8; 32]);
+        assert_eq!(
+            request
+                .payload
+                .validate_context(99, &active_network, &wrong_account),
+            Err(RequestContextError::AccountMismatch)
+        );
+        Ok(())
+    }
+
+    fn app_request(
+        method: &str,
+        payload: Option<Value>,
+        id: &str,
+    ) -> Result<AppRequest, serde_json::Error> {
+        Ok(AppRequest {
+            method: method.to_owned(),
+            params: payload
+                .map(|payload| serde_json::to_string(&payload))
+                .transpose()?
+                .into_iter()
+                .collect(),
+            id: id.to_owned(),
+        })
     }
 }

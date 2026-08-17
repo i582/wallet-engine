@@ -4,6 +4,36 @@ use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use thiserror::Error;
 
+/// Protocol object that is valid only when it contains no properties.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct EmptyObject;
+
+impl Serialize for EmptyObject {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        use serde::ser::SerializeMap as _;
+
+        serializer.serialize_map(Some(0))?.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for EmptyObject {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let fields =
+            std::collections::BTreeMap::<String, serde_json::Value>::deserialize(deserializer)?;
+        if fields.is_empty() {
+            Ok(Self)
+        } else {
+            Err(de::Error::custom("object must not contain properties"))
+        }
+    }
+}
+
 /// A failure to validate a protocol scalar value.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum ValueError {
@@ -400,6 +430,13 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+
+    #[test]
+    fn empty_object_rejects_every_property() {
+        assert!(serde_json::to_string(&EmptyObject).is_ok_and(|value| value == "{}"));
+        assert!(serde_json::from_str::<EmptyObject>("{}").is_ok());
+        assert!(serde_json::from_str::<EmptyObject>(r#"{"future":true}"#).is_err());
+    }
 
     #[test]
     fn client_id_requires_canonical_lowercase_hex() {

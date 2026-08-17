@@ -4,9 +4,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use serde_json::Value;
 
 use crate::{
-    AccountVerificationError, Ed25519PublicKey, Ed25519Signature, HttpsUrl, NetworkId, NonEmptyVec,
-    RawAccountAddress, SignatureDomain, SigningError, StandardWalletState, Uint64String,
-    WalletResponse, WalletStateError, WalletStateInit, rpc::numeric_enum_serde,
+    AccountVerificationError, Ed25519PublicKey, Ed25519Signature, EmbeddedResponse, EmptyObject,
+    HttpsUrl, NetworkId, NonEmptyVec, RawAccountAddress, SignatureDomain, SigningError,
+    StandardWalletState, Uint64String, WalletStateError, WalletStateInit, rpc::numeric_enum_serde,
     ton_proof_signing_hash, verify_signature,
 };
 
@@ -25,13 +25,14 @@ pub struct TonProofItem {
 }
 
 /// Data item requested during the initial connect handshake.
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(tag = "name", rename_all = "snake_case", deny_unknown_fields)]
+///
+/// Unknown item names are preserved so a wallet can return the mandatory
+/// per-item error `400` instead of rejecting the complete connect request.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConnectItem {
     /// Connected account address information.
     TonAddr {
         /// Optional desired network global ID.
-        #[serde(skip_serializing_if = "Option::is_none")]
         network: Option<NetworkId>,
     },
     /// Wallet ownership proof.
@@ -39,6 +40,114 @@ pub enum ConnectItem {
         /// Opaque application-provided challenge.
         payload: String,
     },
+    /// A forward-compatible item unsupported by this protocol revision.
+    Unsupported {
+        /// Exact requested item name echoed in the error reply.
+        name: String,
+        /// Unknown item fields retained without interpretation.
+        fields: BTreeMap<String, Value>,
+    },
+}
+
+impl ConnectItem {
+    /// Returns the exact connect-item discriminator.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        match self {
+            Self::TonAddr { .. } => "ton_addr",
+            Self::TonProof { .. } => "ton_proof",
+            Self::Unsupported { name, .. } => name,
+        }
+    }
+
+    /// Creates a forward-compatible item unknown to this crate revision.
+    pub fn unsupported(
+        name: String,
+        fields: BTreeMap<String, Value>,
+    ) -> Result<Self, UnsupportedConnectItemError> {
+        if name.is_empty() || fields.contains_key("name") {
+            return Err(UnsupportedConnectItemError);
+        }
+        Ok(Self::Unsupported { name, fields })
+    }
+}
+
+/// Invalid construction of a forward-compatible connect item.
+#[derive(Clone, Copy, Debug, Eq, thiserror::Error, PartialEq)]
+#[error("unsupported connect item requires a non-empty name outside its fields")]
+pub struct UnsupportedConnectItemError;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TonAddressItemWire {
+    network: Option<NetworkId>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TonProofItemWire {
+    payload: String,
+}
+
+impl Serialize for ConnectItem {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut object = serde_json::Map::new();
+        let _ = object.insert("name".to_owned(), Value::String(self.name().to_owned()));
+        match self {
+            Self::TonAddr { network } => {
+                if let Some(network) = network {
+                    let _ = object.insert(
+                        "network".to_owned(),
+                        serde_json::to_value(network).map_err(serde::ser::Error::custom)?,
+                    );
+                }
+            }
+            Self::TonProof { payload } => {
+                let _ = object.insert("payload".to_owned(), Value::String(payload.clone()));
+            }
+            Self::Unsupported { fields, .. } => {
+                object.extend(fields.clone());
+            }
+        }
+        Value::Object(object).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ConnectItem {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let Value::Object(mut object) = Value::deserialize(deserializer)? else {
+            return Err(de::Error::custom("connect item must be an object"));
+        };
+        let name = object
+            .remove("name")
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| de::Error::custom("connect item name must be a non-empty string"))?;
+        let fields = object.into_iter().collect::<BTreeMap<_, _>>();
+        match name.as_str() {
+            "ton_addr" => serde_json::from_value::<TonAddressItemWire>(
+                serde_json::to_value(fields).map_err(de::Error::custom)?,
+            )
+            .map(|wire| Self::TonAddr {
+                network: wire.network,
+            })
+            .map_err(de::Error::custom),
+            "ton_proof" => serde_json::from_value::<TonProofItemWire>(
+                serde_json::to_value(fields).map_err(de::Error::custom)?,
+            )
+            .map(|wire| Self::TonProof {
+                payload: wire.payload,
+            })
+            .map_err(de::Error::custom),
+            _ => Ok(Self::Unsupported { name, fields }),
+        }
+    }
 }
 
 impl From<TonAddressItem> for ConnectItem {
@@ -115,30 +224,119 @@ pub enum SignDataType {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SendTransactionFeature {
     /// Maximum number of outgoing messages accepted in one request.
-    pub max_messages: u32,
+    max_messages: u32,
     /// Whether TEP-92 extra currencies are supported.
-    pub extra_currency_supported: Option<bool>,
+    extra_currency_supported: Option<bool>,
     /// Structured item kinds accepted by the wallet.
-    pub item_types: Option<Vec<StructuredItemType>>,
+    item_types: Option<Vec<StructuredItemType>>,
+}
+
+impl SendTransactionFeature {
+    /// Creates validated transaction capability limits.
+    pub fn new(
+        max_messages: u32,
+        extra_currency_supported: Option<bool>,
+        item_types: Option<Vec<StructuredItemType>>,
+    ) -> Result<Self, FeatureValidationError> {
+        validate_message_feature(max_messages, item_types.as_deref())?;
+        Ok(Self {
+            max_messages,
+            extra_currency_supported,
+            item_types,
+        })
+    }
+
+    /// Returns the maximum accepted outgoing message count.
+    #[must_use]
+    pub const fn max_messages(&self) -> u32 {
+        self.max_messages
+    }
+
+    /// Returns whether extra currencies are supported when explicitly declared.
+    #[must_use]
+    pub const fn extra_currency_supported(&self) -> Option<bool> {
+        self.extra_currency_supported
+    }
+
+    /// Returns the supported structured item kinds.
+    #[must_use]
+    pub fn item_types(&self) -> Option<&[StructuredItemType]> {
+        self.item_types.as_deref()
+    }
 }
 
 /// Advertised `SignMessage` limits.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SignMessageFeature {
     /// Maximum number of outgoing messages accepted in one request.
-    pub max_messages: u32,
+    max_messages: u32,
     /// Whether TEP-92 extra currencies are supported.
-    pub extra_currency_supported: Option<bool>,
+    extra_currency_supported: Option<bool>,
     /// Structured item kinds accepted by the wallet.
-    pub item_types: Option<Vec<StructuredItemType>>,
+    item_types: Option<Vec<StructuredItemType>>,
+}
+
+impl SignMessageFeature {
+    /// Creates validated message-signing capability limits.
+    pub fn new(
+        max_messages: u32,
+        extra_currency_supported: Option<bool>,
+        item_types: Option<Vec<StructuredItemType>>,
+    ) -> Result<Self, FeatureValidationError> {
+        validate_message_feature(max_messages, item_types.as_deref())?;
+        Ok(Self {
+            max_messages,
+            extra_currency_supported,
+            item_types,
+        })
+    }
+
+    /// Returns the maximum accepted outgoing message count.
+    #[must_use]
+    pub const fn max_messages(&self) -> u32 {
+        self.max_messages
+    }
+
+    /// Returns whether extra currencies are supported when explicitly declared.
+    #[must_use]
+    pub const fn extra_currency_supported(&self) -> Option<bool> {
+        self.extra_currency_supported
+    }
+
+    /// Returns the supported structured item kinds.
+    #[must_use]
+    pub fn item_types(&self) -> Option<&[StructuredItemType]> {
+        self.item_types.as_deref()
+    }
 }
 
 /// Advertised `SignData` variants.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SignDataFeature {
     /// Payload variants accepted by the wallet.
-    pub types: Vec<SignDataType>,
+    types: Vec<SignDataType>,
 }
+
+impl SignDataFeature {
+    /// Creates a non-empty feature with unique payload variants.
+    pub fn new(types: Vec<SignDataType>) -> Result<Self, FeatureValidationError> {
+        if types.is_empty() || !all_unique(&types) {
+            return Err(FeatureValidationError);
+        }
+        Ok(Self { types })
+    }
+
+    /// Returns the supported payload variants.
+    #[must_use]
+    pub fn types(&self) -> &[SignDataType] {
+        &self.types
+    }
+}
+
+/// Feature capability violates the normative schema constraints.
+#[derive(Clone, Copy, Debug, Eq, thiserror::Error, PartialEq)]
+#[error("feature arrays must be non-empty and unique, and maxMessages must be positive")]
+pub struct FeatureValidationError;
 
 /// Wallet capability advertised in `DeviceInfo.features`.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -235,24 +433,44 @@ impl<'de> Deserialize<'de> for Feature {
                 max_messages,
                 extra_currency_supported,
                 item_types,
-            } => Ok(Self::SendTransaction(SendTransactionFeature {
-                max_messages,
-                extra_currency_supported,
-                item_types,
-            })),
-            DetailedFeature::SignData { types } => Ok(Self::SignData(SignDataFeature { types })),
+            } => SendTransactionFeature::new(max_messages, extra_currency_supported, item_types)
+                .map(Self::SendTransaction)
+                .map_err(de::Error::custom),
+            DetailedFeature::SignData { types } => SignDataFeature::new(types)
+                .map(Self::SignData)
+                .map_err(de::Error::custom),
             DetailedFeature::SignMessage {
                 max_messages,
                 extra_currency_supported,
                 item_types,
-            } => Ok(Self::SignMessage(SignMessageFeature {
-                max_messages,
-                extra_currency_supported,
-                item_types,
-            })),
+            } => SignMessageFeature::new(max_messages, extra_currency_supported, item_types)
+                .map(Self::SignMessage)
+                .map_err(de::Error::custom),
             DetailedFeature::EmbeddedRequest => Ok(Self::EmbeddedRequest),
         }
     }
+}
+
+fn validate_message_feature(
+    max_messages: u32,
+    item_types: Option<&[StructuredItemType]>,
+) -> Result<(), FeatureValidationError> {
+    if max_messages == 0
+        || item_types.is_some_and(|values| values.is_empty() || !all_unique(values))
+    {
+        Err(FeatureValidationError)
+    } else {
+        Ok(())
+    }
+}
+
+fn all_unique<T: Eq>(values: &[T]) -> bool {
+    values.iter().enumerate().all(|(index, value)| {
+        values
+            .iter()
+            .skip(index.saturating_add(1))
+            .all(|other| other != value)
+    })
 }
 
 /// Wallet self-description returned in a successful connect event.
@@ -532,8 +750,21 @@ pub enum ConnectItemReply {
     Error(ConnectItemError),
 }
 
+impl ConnectItemReply {
+    /// Creates the protocol-required error for an unsupported requested item.
+    #[must_use]
+    pub fn unsupported(item: &ConnectItem, message: Option<String>) -> Self {
+        Self::Error(ConnectItemError::new(
+            item.name().to_owned(),
+            ConnectItemErrorCode::MethodNotSupported,
+            message,
+        ))
+    }
+}
+
 /// Payload of a successful connect event.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConnectEventPayload {
     /// Replies to the requested connect items.
     pub items: Vec<ConnectItemReply>,
@@ -593,7 +824,7 @@ pub enum ConnectEvent {
         payload: ConnectEventPayload,
         /// Optional response to an embedded request.
         #[serde(skip_serializing_if = "Option::is_none")]
-        response: Option<WalletResponse>,
+        response: Option<EmbeddedResponse>,
     },
     /// Failed connection.
     ConnectError {
@@ -607,8 +838,26 @@ pub enum ConnectEvent {
         /// Monotonic wallet event identifier.
         id: u64,
         /// Reserved object; currently empty.
-        payload: BTreeMap<String, Value>,
+        payload: EmptyObject,
     },
+}
+
+impl ConnectEvent {
+    /// Returns the monotonic wallet event identifier.
+    #[must_use]
+    pub const fn id(&self) -> u64 {
+        match self {
+            Self::Connect { id, .. }
+            | Self::ConnectError { id, .. }
+            | Self::Disconnect { id, .. } => *id,
+        }
+    }
+
+    /// Reports whether this event ends or rejects the session.
+    #[must_use]
+    pub const fn terminates_session(&self) -> bool {
+        matches!(self, Self::ConnectError { .. } | Self::Disconnect { .. })
+    }
 }
 
 #[cfg(test)]
@@ -633,6 +882,44 @@ mod tests {
     }
 
     #[test]
+    fn unknown_connect_item_round_trips_and_can_receive_error_400()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let json = r#"{"name":"future_identity","scope":"read","revision":3}"#;
+        let item = serde_json::from_str::<ConnectItem>(json)?;
+        assert_eq!(item.name(), "future_identity");
+        assert!(matches!(item, ConnectItem::Unsupported { .. }));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&serde_json::to_string(&item)?)?,
+            serde_json::from_str::<serde_json::Value>(json)?
+        );
+
+        let reply = ConnectItemReply::unsupported(&item, None);
+        assert!(matches!(
+            reply,
+            ConnectItemReply::Error(error)
+                if error.name() == "future_identity"
+                    && error.code() == ConnectItemErrorCode::MethodNotSupported
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn known_connect_items_still_reject_unknown_fields() {
+        assert!(
+            serde_json::from_str::<ConnectItem>(
+                r#"{"name":"ton_addr","network":"-239","future":true}"#
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_str::<ConnectItem>(
+                r#"{"name":"ton_proof","payload":"nonce","future":true}"#
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn feature_supports_legacy_and_current_wire_forms() {
         assert!(matches!(
             serde_json::from_str::<Feature>(r#""SendTransaction""#),
@@ -646,6 +933,24 @@ mod tests {
                 ..
             }))
         ));
+    }
+
+    #[test]
+    fn feature_rejects_zero_limits_and_empty_or_duplicate_arrays() {
+        let invalid = [
+            r#"{"name":"SendTransaction","maxMessages":0}"#,
+            r#"{"name":"SendTransaction","maxMessages":1,"itemTypes":[]}"#,
+            r#"{"name":"SendTransaction","maxMessages":1,"itemTypes":["ton","ton"]}"#,
+            r#"{"name":"SignMessage","maxMessages":0}"#,
+            r#"{"name":"SignData","types":[]}"#,
+            r#"{"name":"SignData","types":["text","text"]}"#,
+        ];
+        for value in invalid {
+            assert!(
+                serde_json::from_str::<Feature>(value).is_err(),
+                "accepted {value}"
+            );
+        }
     }
 
     #[test]

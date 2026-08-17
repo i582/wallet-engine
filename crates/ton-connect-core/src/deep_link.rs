@@ -67,10 +67,11 @@ impl ConnectLink {
             return Err(ConnectLinkError::MissingParameter("v"));
         }
 
+        // Malformed or unsupported embedded requests are deliberately ignored.
+        // The dApp SDK then falls back to ordinary bridge RPC after connect.
         let embedded_request = known
             .remove("e")
-            .map(|parameter| decode_embedded_request_param(&parameter))
-            .transpose()?;
+            .and_then(|parameter| decode_embedded_request_param(&parameter).ok());
         if embedded_request.is_some() && request.is_none() {
             return Err(ConnectLinkError::EmbeddedRequestWithoutConnect);
         }
@@ -225,5 +226,19 @@ mod tests {
             ConnectLink::parse(&version),
             Err(ConnectLinkError::UnsupportedVersion(version)) if version == "3"
         ));
+    }
+
+    #[test]
+    fn malformed_embedded_request_is_ignored_for_bridge_fallback() {
+        let request = r#"{"manifestUrl":"https://app.example/tonconnect-manifest.json","items":[{"name":"ton_addr"}]}"#;
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("v", "2")
+            .append_pair("id", CLIENT_ID)
+            .append_pair("r", request)
+            .append_pair("e", "not-base64url")
+            .finish();
+        let parsed = ConnectLink::parse(&format!("tc://?{query}"));
+
+        assert!(parsed.is_ok_and(|link| link.embedded_request().is_none()));
     }
 }
