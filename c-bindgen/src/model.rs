@@ -1,12 +1,32 @@
+use anyhow::{Result, bail};
 use serde::Serialize;
 use uniffi_bindgen::ComponentInterface;
 
-pub(super) const MANIFEST_SCHEMA_VERSION: u32 = 1;
+pub(super) const MANIFEST_SCHEMA_VERSION: u32 = 2;
+const EXPERIMENTAL_ABI_VERSION: u32 = 0;
+const EXPECTED_CRATE_NAME: &str = "wallet_engine";
+const EXPECTED_NAMESPACE: &str = "wallet_engine";
+
+#[derive(Debug)]
+pub(super) struct BindingsModel {
+    abi_version: u32,
+    uniffi_contract_version: u32,
+    manifest: Manifest,
+}
 
 #[derive(Debug, Serialize)]
 pub(super) struct Manifest {
     schema_version: u32,
+    generation: GenerationManifest,
     components: Vec<ComponentManifest>,
+}
+
+#[derive(Debug, Serialize)]
+struct GenerationManifest {
+    phase: &'static str,
+    artifacts: [&'static str; 3],
+    rendered_semantic_operation_count: usize,
+    pending_semantic_operation_count: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -27,14 +47,68 @@ struct ComponentManifest {
     checksum_count: usize,
 }
 
+impl BindingsModel {
+    pub(super) fn from_components(components: &[ComponentInterface]) -> Result<Self> {
+        let [component] = components else {
+            bail!(
+                "C bindings require exactly one UniFFI component, found {}",
+                components.len()
+            );
+        };
+        if component.crate_name() != EXPECTED_CRATE_NAME
+            || (!component.namespace().is_empty() && component.namespace() != EXPECTED_NAMESPACE)
+        {
+            bail!(
+                "expected UniFFI component {EXPECTED_CRATE_NAME}/{EXPECTED_NAMESPACE}, found {}/{}",
+                component.crate_name(),
+                component.namespace()
+            );
+        }
+
+        Ok(Self {
+            abi_version: EXPERIMENTAL_ABI_VERSION,
+            uniffi_contract_version: component.uniffi_contract_version(),
+            manifest: Manifest::from_components(components),
+        })
+    }
+
+    pub(super) const fn abi_version(&self) -> u32 {
+        self.abi_version
+    }
+
+    pub(super) const fn uniffi_contract_version(&self) -> u32 {
+        self.uniffi_contract_version
+    }
+
+    pub(super) const fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+}
+
 impl Manifest {
-    pub(super) fn from_components(components: &[ComponentInterface]) -> Self {
+    fn from_components(components: &[ComponentInterface]) -> Self {
+        let component_manifests = components
+            .iter()
+            .map(ComponentManifest::from_component)
+            .collect::<Vec<_>>();
+        let pending_semantic_operation_count = component_manifests
+            .iter()
+            .map(|component| component.semantic_operation_count)
+            .sum();
+
         Self {
             schema_version: MANIFEST_SCHEMA_VERSION,
-            components: components
-                .iter()
-                .map(ComponentManifest::from_component)
-                .collect(),
+            generation: GenerationManifest {
+                phase: "skeleton",
+                artifacts: [
+                    "wallet_engine.h",
+                    "wallet_engine.c",
+                    "wallet_engine.c-api.json",
+                ],
+                rendered_semantic_operation_count: 0,
+                pending_semantic_operation_count,
+            },
+            components: component_manifests,
         }
     }
 }
@@ -100,17 +174,31 @@ impl ComponentManifest {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Result;
     use uniffi_bindgen::ComponentInterface;
 
-    use super::{MANIFEST_SCHEMA_VERSION, Manifest};
+    use super::{BindingsModel, MANIFEST_SCHEMA_VERSION};
 
     #[test]
-    fn empty_component_still_produces_a_versioned_manifest() {
+    fn empty_component_still_produces_a_versioned_manifest() -> Result<()> {
         let component = ComponentInterface::new("wallet_engine");
-        let manifest = Manifest::from_components(&[component]);
+        let model = BindingsModel::from_components(&[component])?;
+        let manifest = model.manifest();
 
         assert_eq!(manifest.schema_version, MANIFEST_SCHEMA_VERSION);
+        assert_eq!(manifest.generation.rendered_semantic_operation_count, 0);
         assert_eq!(manifest.components.len(), 1);
         assert_eq!(manifest.components[0].crate_name, "wallet_engine");
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_more_than_one_component() {
+        let components = [
+            ComponentInterface::new("wallet_engine"),
+            ComponentInterface::new("another_component"),
+        ];
+
+        assert!(BindingsModel::from_components(&components).is_err());
     }
 }

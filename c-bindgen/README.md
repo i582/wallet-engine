@@ -28,3 +28,9 @@ just bindings-c-experimental
 ```
 
 The output directory is always `bindings/c-experimental`.
+
+The generator already produces a minimal compilable `wallet_engine.h` and
+`wallet_engine.c` there. These files grow incrementally with each supported type
+and callable instead of being postponed until the complete API model is
+implemented. C++ compatibility is deliberately deferred until the C ABI is
+complete and stable.

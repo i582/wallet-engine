@@ -18,7 +18,6 @@ pub use cli::Cli;
 /// rendered into the output directory.
 pub fn run(cli: &Cli) -> Result<()> {
     let components = loader::load_component_interfaces(&cli.library)?;
-    let manifest = model::Manifest::from_components(&components);
-    let _manifest_path = render::write_manifest(&cli.out_dir, &manifest)?;
-    Ok(())
+    let model = model::BindingsModel::from_components(&components)?;
+    render::write_bindings(&cli.out_dir, &model)
 }
