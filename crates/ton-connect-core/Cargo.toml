@@ -6,6 +6,8 @@ edition = "2024"
 rust-version = "1.96.1"
 license = "MIT OR Apache-2.0"
 description = "Runtime-neutral TON Connect protocol types and session cryptography"
+documentation = "https://docs.rs/ton-connect-core"
+readme = "README.md"
 
 [dependencies]
 base64 = "=0.22.1"
@@ -23,7 +25,9 @@ url = "=2.5.7"
 zeroize = "=1.9.0"
 
 [dev-dependencies]
+clap = { version = "=4.6.6", features = ["derive"] }
 proptest = "=1.11.0"
+reqwest = { version = "=0.12.28", default-features = false, features = ["blocking", "rustls-tls"] }
 
 [lints.rust]
 future_incompatible = { level = "deny", priority = -1 }

@@ -11,6 +11,7 @@ mod bridge;
 mod connect;
 mod deep_link;
 mod embedded;
+mod http_bridge;
 mod manifest;
 mod rpc;
 mod session;
@@ -32,6 +33,7 @@ pub use embedded::{
     EmbeddedRequest, EmbeddedRequestError, decode_embedded_request_param,
     encode_embedded_request_param,
 };
+pub use http_bridge::{BridgeSseDecoder, BridgeSseMessage, HttpBridgeError, HttpBridgeUrl};
 pub use manifest::{AppManifest, ManifestError};
 pub use rpc::{
     AppRequest, DisconnectRequest, ExtraCurrencies, KnownAppRequest, KnownWalletResponse,
