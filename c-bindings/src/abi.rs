@@ -22,6 +22,8 @@ pub enum WalletEngineAbiStatus {
     InvalidUtf8 = 2,
     /// Rust caught a panic before it crossed the C boundary.
     Panic = 3,
+    /// Another thread is currently polling the same operation handle.
+    OperationBusy = 4,
 }
 
 /// A borrowed, non-NUL-terminated UTF-8 string.
