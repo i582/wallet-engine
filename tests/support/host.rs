@@ -587,11 +587,23 @@ impl ScenarioHttpHost {
                         "request cancelled",
                     ));
                 }
-                if let Some(outcome) = state
+                if state
                     .submission_gate
                     .as_ref()
-                    .and_then(|gate| gate.outcome.clone())
+                    .is_some_and(|gate| gate.outcome.is_some())
                 {
+                    let gate = state.submission_gate.take().ok_or_else(|| {
+                        host_error(
+                            HttpHostErrorKind::Other,
+                            "submission checkpoint disappeared",
+                        )
+                    })?;
+                    let outcome = gate.outcome.ok_or_else(|| {
+                        host_error(
+                            HttpHostErrorKind::Other,
+                            "submission checkpoint has no outcome",
+                        )
+                    })?;
                     break outcome;
                 }
 
