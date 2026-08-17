@@ -58,7 +58,7 @@ static bool restrict_secret_file_permissions(void) {
 }
 
 static void complete_storage_error(
-    WalletEngineCompletionId completion_id,
+    WalletEngineProtectedSecretStoreCompletion *completion,
     WalletEngineProtectedSecretHostErrorKind kind,
     const char *diagnostic
 ) {
@@ -66,18 +66,19 @@ static void complete_storage_error(
         .kind = kind,
         .diagnostic = {diagnostic, strlen(diagnostic)},
     };
-    (void)wallet_engine_store_protected_secret_complete(completion_id, &error);
+    (void)wallet_engine_protected_secret_store_completion_complete(completion, &error);
+    wallet_engine_protected_secret_store_completion_free(completion);
 }
 
 static void store_protected_secret(
     void *context,
-    WalletEngineCompletionId completion_id,
+    WalletEngineProtectedSecretStoreCompletion *completion,
     const WalletEngineProtectedSecretStoreView *request
 ) {
     (void)context;
     if (request == NULL || request->bytes.data == NULL || request->bytes.len == 0) {
         complete_storage_error(
-            completion_id,
+            completion,
             WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_OTHER,
             "invalid file-storage request"
         );
@@ -87,7 +88,7 @@ static void store_protected_secret(
     FILE *file = fopen(WALLET_SECRETS_FILE, "ab");
     if (file == NULL) {
         complete_storage_error(
-            completion_id,
+            completion,
             WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_UNAVAILABLE,
             "failed to open the secrets file"
         );
@@ -96,7 +97,7 @@ static void store_protected_secret(
     if (!restrict_secret_file_permissions()) {
         (void)fclose(file);
         complete_storage_error(
-            completion_id,
+            completion,
             WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_POLICY_VIOLATION,
             "failed to restrict permissions on the secrets file"
         );
@@ -112,14 +113,15 @@ static void store_protected_secret(
 
     if (!stored) {
         complete_storage_error(
-            completion_id,
+            completion,
             WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_OTHER,
             "failed to append the mnemonic to the secrets file"
         );
         return;
     }
 
-    (void)wallet_engine_store_protected_secret_complete(completion_id, NULL);
+    (void)wallet_engine_protected_secret_store_completion_complete(completion, NULL);
+    wallet_engine_protected_secret_store_completion_free(completion);
 }
 
 static bool append_wallet_metadata(const WalletEngineCreatedWalletView *wallet) {

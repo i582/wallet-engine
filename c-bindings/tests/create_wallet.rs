@@ -24,13 +24,15 @@ use wallet_engine_c::{
     WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_OTHER,
     WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_POLICY_VIOLATION,
     WALLET_ENGINE_PROTECTED_SECRET_HOST_ERROR_KIND_UNAVAILABLE, WalletEngineAbiStatus,
-    WalletEngineCompletionId, WalletEngineCreateWalletRequest, WalletEngineCreatedWalletView,
-    WalletEngineLifecycle, WalletEngineNetwork, WalletEnginePlatformHostCallbacks,
-    WalletEngineProtectedSecretHostErrorView, WalletEngineProtectedSecretStoreView,
-    WalletEngineStoreProtectedSecretFn, WalletEngineStringView,
-    WalletEngineWalletLifecycleErrorCode, WalletEngineWalletLifecycleErrorView,
-    wallet_engine_lifecycle_create_wallet, wallet_engine_lifecycle_free,
-    wallet_engine_lifecycle_new, wallet_engine_store_protected_secret_complete,
+    WalletEngineCreateWalletRequest, WalletEngineCreatedWalletView, WalletEngineLifecycle,
+    WalletEngineNetwork, WalletEnginePlatformHostCallbacks,
+    WalletEngineProtectedSecretHostErrorView, WalletEngineProtectedSecretStoreCompletion,
+    WalletEngineProtectedSecretStoreView, WalletEngineStoreProtectedSecretFn,
+    WalletEngineStringView, WalletEngineWalletLifecycleErrorCode,
+    WalletEngineWalletLifecycleErrorView, wallet_engine_lifecycle_create_wallet,
+    wallet_engine_lifecycle_free, wallet_engine_lifecycle_new,
+    wallet_engine_protected_secret_store_completion_complete,
+    wallet_engine_protected_secret_store_completion_free,
 };
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -147,34 +149,41 @@ unsafe fn record_store_request(
 
 unsafe extern "C" fn store_success(
     context: *mut c_void,
-    completion_id: WalletEngineCompletionId,
+    completion: *mut WalletEngineProtectedSecretStoreCompletion,
     request: *const WalletEngineProtectedSecretStoreView,
 ) {
     // SAFETY: The adapter supplies a callback-scoped request.
     unsafe { record_store_request(context, request) };
     // SAFETY: Null denotes successful completion and is not dereferenced.
-    let _ =
-        unsafe { wallet_engine_store_protected_secret_complete(completion_id, std::ptr::null()) };
+    let _ = unsafe {
+        wallet_engine_protected_secret_store_completion_complete(completion, std::ptr::null())
+    };
+    // SAFETY: The callback owns this handle and has finished using it.
+    unsafe { wallet_engine_protected_secret_store_completion_free(completion) };
 }
 
 unsafe extern "C" fn store_async_success(
     context: *mut c_void,
-    completion_id: WalletEngineCompletionId,
+    completion: *mut WalletEngineProtectedSecretStoreCompletion,
     request: *const WalletEngineProtectedSecretStoreView,
 ) {
     // SAFETY: The adapter supplies a callback-scoped request.
     unsafe { record_store_request(context, request) };
+    let completion_address = completion as usize;
     drop(std::thread::spawn(move || {
+        let completion = completion_address as *mut WalletEngineProtectedSecretStoreCompletion;
         // SAFETY: Null denotes successful completion and is not dereferenced.
         let _ = unsafe {
-            wallet_engine_store_protected_secret_complete(completion_id, std::ptr::null())
+            wallet_engine_protected_secret_store_completion_complete(completion, std::ptr::null())
         };
+        // SAFETY: This thread owns the handle and has finished using it.
+        unsafe { wallet_engine_protected_secret_store_completion_free(completion) };
     }));
 }
 
 unsafe extern "C" fn store_error(
     context: *mut c_void,
-    completion_id: WalletEngineCompletionId,
+    completion: *mut WalletEngineProtectedSecretStoreCompletion,
     request: *const WalletEngineProtectedSecretStoreView,
 ) {
     // SAFETY: The adapter supplies a callback-scoped request.
@@ -186,7 +195,9 @@ unsafe extern "C" fn store_error(
         diagnostic: WalletEngineStringView::from("protected storage failure"),
     };
     // SAFETY: `error` and its diagnostic remain live for this call.
-    let _ = unsafe { wallet_engine_store_protected_secret_complete(completion_id, &error) };
+    let _ = unsafe { wallet_engine_protected_secret_store_completion_complete(completion, &error) };
+    // SAFETY: The callback owns this handle and has finished using it.
+    unsafe { wallet_engine_protected_secret_store_completion_free(completion) };
 }
 
 unsafe fn copy_wallet(wallet: *const WalletEngineCreatedWalletView) -> Option<CreatedWallet> {

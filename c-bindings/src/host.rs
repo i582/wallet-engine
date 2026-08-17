@@ -1,14 +1,10 @@
 //! C callback adapter for platform-owned services.
 
 use std::{
-    collections::{HashMap, hash_map::Entry},
     ffi::c_void,
     mem::size_of,
     panic::{AssertUnwindSafe, catch_unwind},
-    sync::{
-        Arc, Mutex, MutexGuard, OnceLock,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, Mutex},
 };
 
 use futures::channel::oneshot;
@@ -23,9 +19,6 @@ use crate::{
     WalletEngineProtectedSecretStoreView,
 };
 
-/// Identifies one pending asynchronous host completion.
-pub type WalletEngineCompletionId = u64;
-
 /// Retains a consumer-owned callback context.
 pub type WalletEngineContextRetainFn = Option<unsafe extern "C" fn(context: *mut c_void)>;
 
@@ -35,12 +28,15 @@ pub type WalletEngineContextReleaseFn = Option<unsafe extern "C" fn(context: *mu
 /// Requests storage of protected secret bytes.
 ///
 /// The request and all nested views remain valid only until this function
-/// returns. The host must copy data needed by asynchronous storage, then call
-/// `wallet_engine_store_protected_secret_complete` exactly once.
+/// returns. Ownership of `completion` transfers to the host. The host must
+/// eventually release it with
+/// [`wallet_engine_protected_secret_store_completion_free`], optionally after
+/// completing it with
+/// [`wallet_engine_protected_secret_store_completion_complete`].
 pub type WalletEngineStoreProtectedSecretFn = Option<
     unsafe extern "C" fn(
         context: *mut c_void,
-        completion_id: WalletEngineCompletionId,
+        completion: *mut WalletEngineProtectedSecretStoreCompletion,
         request: *const WalletEngineProtectedSecretStoreView,
     ),
 >;
@@ -71,78 +67,55 @@ pub const WALLET_ENGINE_PLATFORM_HOST_CALLBACKS_SIZE: usize =
 type ProtectedSecretStoreResult = Result<(), ProtectedSecretHostError>;
 type ProtectedSecretStoreSender = oneshot::Sender<ProtectedSecretStoreResult>;
 
-static NEXT_COMPLETION_ID: AtomicU64 = AtomicU64::new(1);
-static PROTECTED_SECRET_STORE_COMPLETIONS: OnceLock<
-    Mutex<HashMap<WalletEngineCompletionId, ProtectedSecretStoreSender>>,
-> = OnceLock::new();
-
-fn completions() -> &'static Mutex<HashMap<WalletEngineCompletionId, ProtectedSecretStoreSender>> {
-    PROTECTED_SECRET_STORE_COMPLETIONS.get_or_init(|| Mutex::new(HashMap::new()))
+/// Owned completion for one protected-secret store request.
+///
+/// The handle has no thread affinity. `complete` may be called from any
+/// client-owned thread, but `free` must be externally synchronized with every
+/// other use of the same raw handle.
+pub struct WalletEngineProtectedSecretStoreCompletion {
+    sender: Mutex<Option<ProtectedSecretStoreSender>>,
 }
 
-fn lock_completions()
--> MutexGuard<'static, HashMap<WalletEngineCompletionId, ProtectedSecretStoreSender>> {
-    match completions().lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    }
+fn cancelled_protected_secret_store() -> ProtectedSecretStoreResult {
+    Err(ProtectedSecretHostError::Failed {
+        kind: ProtectedSecretHostErrorKind::Cancelled,
+        diagnostic: "protected-secret store completion was released without a result".to_owned(),
+    })
 }
 
-fn register_completion(sender: ProtectedSecretStoreSender) -> WalletEngineCompletionId {
-    let mut completions = lock_completions();
-    loop {
-        let id = NEXT_COMPLETION_ID.fetch_add(1, Ordering::Relaxed);
-        if id == 0 {
-            continue;
-        }
-
-        if let Entry::Vacant(entry) = completions.entry(id) {
-            entry.insert(sender);
-            return id;
-        }
-    }
-}
-
-fn remove_completion(id: WalletEngineCompletionId) -> Option<ProtectedSecretStoreSender> {
-    lock_completions().remove(&id)
-}
-
-struct PendingCompletion {
-    id: WalletEngineCompletionId,
-}
-
-impl Drop for PendingCompletion {
-    fn drop(&mut self) {
-        remove_completion(self.id);
-    }
-}
-
-/// Completes a protected-secret store request previously issued to C.
+/// Completes a protected-secret store request previously issued to the host.
 ///
 /// Pass a null `error` on success. A non-null error and its diagnostic are
-/// copied before this function returns.
+/// copied before this function returns. Only the first valid completion is
+/// accepted. This function does not release the handle; the host must still
+/// call [`wallet_engine_protected_secret_store_completion_free`]. Completion
+/// only records the result and never schedules or polls the owning operation.
 ///
 /// # Safety
+///
+/// `completion` must point to a live completion handle received by the host
+/// callback and must not be freed for this call.
 ///
 /// When `error` is non-null, it must point to a readable protected-secret host
 /// error view whose diagnostic satisfies the view's safety contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn wallet_engine_store_protected_secret_complete(
-    completion_id: WalletEngineCompletionId,
+pub unsafe extern "C" fn wallet_engine_protected_secret_store_completion_complete(
+    completion: *mut WalletEngineProtectedSecretStoreCompletion,
     error: *const WalletEngineProtectedSecretHostErrorView,
 ) -> WalletEngineAbiStatus {
     catch_unwind(AssertUnwindSafe(|| {
-        // SAFETY: The caller upholds the error pointer and nested-view contract.
-        unsafe { complete_protected_secret_store(completion_id, error) }
+        // SAFETY: The caller upholds the completion-handle, error-pointer, and
+        // nested-view contracts.
+        unsafe { complete_protected_secret_store(completion, error) }
     }))
     .unwrap_or(WalletEngineAbiStatus::Panic)
 }
 
 unsafe fn complete_protected_secret_store(
-    completion_id: WalletEngineCompletionId,
+    completion: *mut WalletEngineProtectedSecretStoreCompletion,
     error: *const WalletEngineProtectedSecretHostErrorView,
 ) -> WalletEngineAbiStatus {
-    if completion_id == 0 {
+    if completion.is_null() {
         return WalletEngineAbiStatus::InvalidArgument;
     }
 
@@ -158,15 +131,55 @@ unsafe fn complete_protected_secret_store(
         }
     };
 
-    let Some(sender) = remove_completion(completion_id) else {
+    // SAFETY: The caller guarantees a live completion handle for this call.
+    let completion = unsafe { &*completion };
+    let mut sender_slot = match completion.sender.lock() {
+        Ok(sender) => sender,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let Some(sender) = sender_slot.take() else {
         return WalletEngineAbiStatus::InvalidArgument;
     };
+    drop(sender_slot);
 
     if sender.send(result).is_ok() {
         WalletEngineAbiStatus::Ok
     } else {
         WalletEngineAbiStatus::InvalidArgument
     }
+}
+
+/// Releases a protected-secret store completion. Passing null is a no-op.
+///
+/// Releasing a completion before a successful `complete` reports cancellation
+/// to the owning operation. It does not poll or schedule that operation. This
+/// function must be externally synchronized with all other uses of the same
+/// raw handle.
+///
+/// # Safety
+///
+/// `completion` must be null or a live completion handle received by the host
+/// callback that has not already been freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn wallet_engine_protected_secret_store_completion_free(
+    completion: *mut WalletEngineProtectedSecretStoreCompletion,
+) {
+    drop(catch_unwind(AssertUnwindSafe(|| {
+        if completion.is_null() {
+            return;
+        }
+
+        // SAFETY: The caller transfers back the unique Box ownership received
+        // by the host callback.
+        let completion = unsafe { Box::from_raw(completion) };
+        let sender = match completion.sender.lock() {
+            Ok(mut sender) => sender.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        if let Some(sender) = sender {
+            drop(sender.send(cancelled_protected_secret_store()));
+        }
+    })));
 }
 
 struct PlatformHostInner {
@@ -274,15 +287,18 @@ impl WalletPlatformHost for WalletEnginePlatformHostAdapter {
             return Err(unsupported_protected_secret("store_protected_secret"));
         };
         let (sender, receiver) = oneshot::channel();
-        let completion_id = register_completion(sender);
-        let _pending = PendingCompletion { id: completion_id };
+        let completion = Box::new(WalletEngineProtectedSecretStoreCompletion {
+            sender: Mutex::new(Some(sender)),
+        });
+        let completion = Box::into_raw(completion);
         {
             let request = WalletEngineProtectedSecretStoreView::from(&request);
 
             // SAFETY: The callback was validated during construction. Its
             // context remains retained by `self.inner`, and `request` lives
-            // until the call returns.
-            unsafe { store(self.inner.callbacks.context, completion_id, &request) };
+            // until the call returns. Ownership of `completion` transfers to
+            // the callback.
+            unsafe { store(self.inner.callbacks.context, completion, &request) };
         }
 
         receiver.await.unwrap_or_else(|_| {

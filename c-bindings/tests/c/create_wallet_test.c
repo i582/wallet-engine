@@ -15,7 +15,7 @@ typedef struct TestContext {
     atomic_size_t stores;
     atomic_size_t completions;
     atomic_bool done;
-    WalletEngineCompletionId pending_completion_id;
+    WalletEngineProtectedSecretStoreCompletion *pending_completion;
     bool valid;
     size_t recovery_word_count;
     WalletEngineNetwork network;
@@ -65,7 +65,7 @@ static void release_context(void *context) {
 
 static void store_protected_secret(
     void *context,
-    WalletEngineCompletionId completion_id,
+    WalletEngineProtectedSecretStoreCompletion *completion,
     const WalletEngineProtectedSecretStoreView *request
 ) {
     TestContext *test = context;
@@ -77,7 +77,7 @@ static void store_protected_secret(
         test->valid = false;
     }
 
-    test->pending_completion_id = completion_id;
+    test->pending_completion = completion;
 }
 
 static void create_wallet_complete(
@@ -128,7 +128,7 @@ int main(void) {
         .stores = 0,
         .completions = 0,
         .done = false,
-        .pending_completion_id = 0,
+        .pending_completion = NULL,
         .valid = true,
     };
     const WalletEnginePlatformHostCallbacks callbacks = {
@@ -173,16 +173,18 @@ int main(void) {
         ) == WALLET_ENGINE_ABI_STATUS_OK
     );
     CHECK(poll_state == WALLET_ENGINE_OPERATION_POLL_STATE_PENDING);
-    CHECK(context.pending_completion_id != 0);
+    CHECK(context.pending_completion != NULL);
     CHECK(atomic_load_explicit(&context.stores, memory_order_acquire) == 1);
     CHECK(atomic_load_explicit(&context.completions, memory_order_acquire) == 0);
 
     CHECK(
-        wallet_engine_store_protected_secret_complete(
-            context.pending_completion_id,
+        wallet_engine_protected_secret_store_completion_complete(
+            context.pending_completion,
             NULL
         ) == WALLET_ENGINE_ABI_STATUS_OK
     );
+    wallet_engine_protected_secret_store_completion_free(context.pending_completion);
+    context.pending_completion = NULL;
     CHECK(atomic_load_explicit(&context.completions, memory_order_acquire) == 0);
 
     CHECK(

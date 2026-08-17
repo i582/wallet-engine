@@ -20,10 +20,11 @@ pub use abi::{
     wallet_engine_abi_version,
 };
 pub use host::{
-    WALLET_ENGINE_PLATFORM_HOST_CALLBACKS_SIZE, WalletEngineCompletionId,
-    WalletEngineContextReleaseFn, WalletEngineContextRetainFn, WalletEnginePlatformHostAdapter,
-    WalletEnginePlatformHostCallbacks, WalletEngineStoreProtectedSecretFn,
-    wallet_engine_store_protected_secret_complete,
+    WALLET_ENGINE_PLATFORM_HOST_CALLBACKS_SIZE, WalletEngineContextReleaseFn,
+    WalletEngineContextRetainFn, WalletEnginePlatformHostAdapter,
+    WalletEnginePlatformHostCallbacks, WalletEngineProtectedSecretStoreCompletion,
+    WalletEngineStoreProtectedSecretFn, wallet_engine_protected_secret_store_completion_complete,
+    wallet_engine_protected_secret_store_completion_free,
 };
 #[allow(
     deprecated,

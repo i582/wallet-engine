@@ -9,21 +9,22 @@ use std::{
     ffi::c_void,
     sync::{
         Arc, Barrier, Mutex, MutexGuard,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicPtr, AtomicUsize, Ordering},
     },
     thread::ThreadId,
 };
 
 use wallet_engine_c::{
     WALLET_ENGINE_NETWORK_TESTNET, WALLET_ENGINE_PLATFORM_HOST_CALLBACKS_SIZE,
-    WalletEngineAbiStatus, WalletEngineCompletionId, WalletEngineCreateWalletOperation,
-    WalletEngineCreateWalletRequest, WalletEngineCreatedWalletView, WalletEngineLifecycle,
-    WalletEngineOperationPollState, WalletEnginePlatformHostCallbacks,
+    WalletEngineAbiStatus, WalletEngineCreateWalletOperation, WalletEngineCreateWalletRequest,
+    WalletEngineCreatedWalletView, WalletEngineLifecycle, WalletEngineOperationPollState,
+    WalletEnginePlatformHostCallbacks, WalletEngineProtectedSecretStoreCompletion,
     WalletEngineProtectedSecretStoreView, WalletEngineStringView,
     WalletEngineWalletLifecycleErrorView, wallet_engine_create_wallet_operation_free,
     wallet_engine_create_wallet_operation_poll, wallet_engine_lifecycle_create_wallet_start,
     wallet_engine_lifecycle_free, wallet_engine_lifecycle_new,
-    wallet_engine_store_protected_secret_complete,
+    wallet_engine_protected_secret_store_completion_complete,
+    wallet_engine_protected_secret_store_completion_free,
 };
 
 #[derive(Default)]
@@ -38,7 +39,7 @@ struct TestContext {
     releases: AtomicUsize,
     stores: AtomicUsize,
     results: AtomicUsize,
-    pending_completion_id: AtomicU64,
+    pending_completion: AtomicPtr<WalletEngineProtectedSecretStoreCompletion>,
     observation: Mutex<PollObservation>,
     store_entered: Option<Barrier>,
     release_store: Option<Barrier>,
@@ -51,7 +52,7 @@ impl TestContext {
             releases: AtomicUsize::new(0),
             stores: AtomicUsize::new(0),
             results: AtomicUsize::new(0),
-            pending_completion_id: AtomicU64::new(0),
+            pending_completion: AtomicPtr::new(std::ptr::null_mut()),
             observation: Mutex::new(PollObservation::default()),
             store_entered: None,
             release_store: None,
@@ -94,13 +95,16 @@ unsafe extern "C" fn release_context(context: *mut c_void) {
         .fetch_add(1, Ordering::Relaxed);
 }
 
-unsafe fn record_store(context: *mut c_void, completion_id: WalletEngineCompletionId) {
+unsafe fn record_store(
+    context: *mut c_void,
+    completion: *mut WalletEngineProtectedSecretStoreCompletion,
+) {
     // SAFETY: The callback table supplies a live `TestContext` pointer.
     let context = unsafe { test_context(context) };
     context.stores.fetch_add(1, Ordering::Relaxed);
     context
-        .pending_completion_id
-        .store(completion_id, Ordering::Relaxed);
+        .pending_completion
+        .store(completion, Ordering::Relaxed);
     lock(&context.observation)
         .host_threads
         .push(std::thread::current().id());
@@ -108,32 +112,35 @@ unsafe fn record_store(context: *mut c_void, completion_id: WalletEngineCompleti
 
 unsafe extern "C" fn store_synchronously(
     context: *mut c_void,
-    completion_id: WalletEngineCompletionId,
+    completion: *mut WalletEngineProtectedSecretStoreCompletion,
     _request: *const WalletEngineProtectedSecretStoreView,
 ) {
-    // SAFETY: The callback table supplies a live context and completion ID.
-    unsafe { record_store(context, completion_id) };
+    // SAFETY: The callback table supplies a live context and completion handle.
+    unsafe { record_store(context, completion) };
     // SAFETY: Null denotes a successful completion and is not dereferenced.
-    let _status =
-        unsafe { wallet_engine_store_protected_secret_complete(completion_id, std::ptr::null()) };
+    let _status = unsafe {
+        wallet_engine_protected_secret_store_completion_complete(completion, std::ptr::null())
+    };
+    // SAFETY: The callback owns this handle and has finished using it.
+    unsafe { wallet_engine_protected_secret_store_completion_free(completion) };
 }
 
 unsafe extern "C" fn store_later(
     context: *mut c_void,
-    completion_id: WalletEngineCompletionId,
+    completion: *mut WalletEngineProtectedSecretStoreCompletion,
     _request: *const WalletEngineProtectedSecretStoreView,
 ) {
-    // SAFETY: The callback table supplies a live context and completion ID.
-    unsafe { record_store(context, completion_id) };
+    // SAFETY: The callback table supplies a live context and completion handle.
+    unsafe { record_store(context, completion) };
 }
 
 unsafe extern "C" fn store_while_blocking_poll(
     context: *mut c_void,
-    completion_id: WalletEngineCompletionId,
+    completion: *mut WalletEngineProtectedSecretStoreCompletion,
     _request: *const WalletEngineProtectedSecretStoreView,
 ) {
-    // SAFETY: The callback table supplies a live context and completion ID.
-    unsafe { record_store(context, completion_id) };
+    // SAFETY: The callback table supplies a live context and completion handle.
+    unsafe { record_store(context, completion) };
     // SAFETY: The callback table supplies a live `TestContext` pointer.
     let context = unsafe { test_context(context) };
     if let Some(entered) = &context.store_entered {
@@ -143,8 +150,11 @@ unsafe extern "C" fn store_while_blocking_poll(
         release.wait();
     }
     // SAFETY: Null denotes a successful completion and is not dereferenced.
-    let _status =
-        unsafe { wallet_engine_store_protected_secret_complete(completion_id, std::ptr::null()) };
+    let _status = unsafe {
+        wallet_engine_protected_secret_store_completion_complete(completion, std::ptr::null())
+    };
+    // SAFETY: The callback owns this handle and has finished using it.
+    unsafe { wallet_engine_protected_secret_store_completion_free(completion) };
 }
 
 unsafe extern "C" fn record_result(
@@ -168,7 +178,7 @@ fn callbacks(
     context: &TestContext,
     store: unsafe extern "C" fn(
         *mut c_void,
-        WalletEngineCompletionId,
+        *mut WalletEngineProtectedSecretStoreCompletion,
         *const WalletEngineProtectedSecretStoreView,
     ),
 ) -> WalletEnginePlatformHostCallbacks {
@@ -473,12 +483,19 @@ fn asynchronous_host_completion_requires_an_explicit_second_poll() {
         );
         assert_eq!(context.results.load(Ordering::Relaxed), 0);
 
-        let completion_id = context.pending_completion_id.load(Ordering::Relaxed);
-        assert_ne!(completion_id, 0);
+        let completion = context.pending_completion.load(Ordering::Relaxed);
+        assert!(!completion.is_null());
+        let completion_address = completion as usize;
         let completion_thread = std::thread::spawn(move || {
-            // SAFETY: The pending operation keeps this completion ID
-            // registered until completion or operation destruction.
-            wallet_engine_store_protected_secret_complete(completion_id, std::ptr::null())
+            let completion = completion_address as *mut WalletEngineProtectedSecretStoreCompletion;
+            // SAFETY: The host owns this live completion handle and may use it
+            // from any client-owned thread.
+            let status = wallet_engine_protected_secret_store_completion_complete(
+                completion,
+                std::ptr::null(),
+            );
+            wallet_engine_protected_secret_store_completion_free(completion);
+            status
         });
         assert_eq!(
             completion_thread
@@ -555,7 +572,7 @@ fn concurrent_poll_returns_operation_busy_without_waiting() {
 }
 
 #[test]
-fn freeing_a_pending_operation_unregisters_its_host_completion() {
+fn host_completion_remains_safe_after_freeing_a_pending_operation() {
     let context = TestContext::regular();
     let callbacks = callbacks(&context, store_later);
     // SAFETY: Handles are used according to their ownership contracts.
@@ -567,14 +584,15 @@ fn freeing_a_pending_operation_unregisters_its_host_completion() {
             poll_operation(operation, &context).1,
             WalletEngineOperationPollState::Pending
         );
-        let completion_id = context.pending_completion_id.load(Ordering::Relaxed);
-        assert_ne!(completion_id, 0);
+        let completion = context.pending_completion.load(Ordering::Relaxed);
+        assert!(!completion.is_null());
 
         wallet_engine_create_wallet_operation_free(operation);
         assert_eq!(
-            wallet_engine_store_protected_secret_complete(completion_id, std::ptr::null()),
+            wallet_engine_protected_secret_store_completion_complete(completion, std::ptr::null(),),
             WalletEngineAbiStatus::InvalidArgument
         );
+        wallet_engine_protected_secret_store_completion_free(completion);
         wallet_engine_create_wallet_operation_free(std::ptr::null_mut());
     }
     assert_eq!(context.results.load(Ordering::Relaxed), 0);
