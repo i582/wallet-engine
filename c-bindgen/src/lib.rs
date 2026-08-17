@@ -5,6 +5,7 @@ mod enum_map;
 mod loader;
 mod model;
 mod naming;
+mod optional_map;
 mod render;
 mod template;
 mod type_map;

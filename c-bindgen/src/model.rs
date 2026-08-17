@@ -4,10 +4,11 @@ use uniffi_bindgen::ComponentInterface;
 
 use crate::{
     enum_map::{FlatEnum, collect_flat_enums},
+    optional_map::{OptionalType, collect_optional_types},
     type_map::{BuiltinType, collect_builtin_types},
 };
 
-pub(super) const MANIFEST_SCHEMA_VERSION: u32 = 4;
+pub(super) const MANIFEST_SCHEMA_VERSION: u32 = 5;
 const EXPERIMENTAL_ABI_VERSION: u32 = 0;
 const EXPECTED_CRATE_NAME: &str = "wallet_engine";
 const EXPECTED_NAMESPACE: &str = "wallet_engine";
@@ -18,6 +19,7 @@ pub(super) struct BindingsModel {
     uniffi_contract_version: u32,
     builtin_types: Vec<BuiltinType>,
     flat_enums: Vec<FlatEnum>,
+    optional_types: Vec<OptionalType>,
     private_ffi: PrivateFfi,
     manifest: Manifest,
 }
@@ -41,6 +43,7 @@ struct GenerationManifest {
     artifacts: [&'static str; 3],
     rendered_builtin_types: Vec<BuiltinTypeManifest>,
     rendered_flat_enums: Vec<FlatEnumManifest>,
+    rendered_optional_types: Vec<OptionalTypeManifest>,
     rendered_semantic_operation_count: usize,
     pending_semantic_operation_count: usize,
 }
@@ -63,6 +66,19 @@ struct FlatEnumVariantManifest {
     rust: String,
     c: String,
     value: u32,
+}
+
+#[derive(Debug, Serialize)]
+struct OptionalTypeManifest {
+    rust: String,
+    c: String,
+    value: OptionalValueManifest,
+}
+
+#[derive(Debug, Serialize)]
+struct OptionalValueManifest {
+    rust: String,
+    c: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -103,7 +119,9 @@ impl BindingsModel {
 
         let builtin_types = collect_builtin_types(component);
         let flat_enums = collect_flat_enums(component)?;
-        let manifest = Manifest::from_components(components, &builtin_types, &flat_enums);
+        let optional_types = collect_optional_types(component, &flat_enums)?;
+        let manifest =
+            Manifest::from_components(components, &builtin_types, &flat_enums, &optional_types);
         let private_ffi = PrivateFfi {
             rustbuffer_alloc: component.ffi_rustbuffer_alloc().name().to_owned(),
             rustbuffer_free: component.ffi_rustbuffer_free().name().to_owned(),
@@ -114,6 +132,7 @@ impl BindingsModel {
             uniffi_contract_version: component.uniffi_contract_version(),
             builtin_types,
             flat_enums,
+            optional_types,
             private_ffi,
             manifest,
         })
@@ -131,8 +150,18 @@ impl BindingsModel {
         self.builtin_types.contains(&builtin)
     }
 
+    /// `Option<T>` uses the private `u8` codec for its `UniFFI` 0/1 presence tag,
+    /// even when no public API value has type `u8` or `i8`.
+    pub(super) fn needs_u8_wire_codec(&self) -> bool {
+        self.has_builtin_type(BuiltinType::UInt8)
+            || self.has_builtin_type(BuiltinType::Int8)
+            || self.has_optional_types()
+    }
+
     pub(super) const fn has_wire_types(&self) -> bool {
-        !self.builtin_types.is_empty() || !self.flat_enums.is_empty()
+        !self.builtin_types.is_empty()
+            || !self.flat_enums.is_empty()
+            || !self.optional_types.is_empty()
     }
 
     pub(super) const fn has_flat_enums(&self) -> bool {
@@ -143,10 +172,19 @@ impl BindingsModel {
         self.has_builtin_type(BuiltinType::String)
             || self.has_builtin_type(BuiltinType::Bytes)
             || self.has_flat_enums()
+            || self.has_optional_types()
     }
 
     pub(super) fn flat_enums(&self) -> &[FlatEnum] {
         &self.flat_enums
+    }
+
+    pub(super) const fn has_optional_types(&self) -> bool {
+        !self.optional_types.is_empty()
+    }
+
+    pub(super) fn optional_types(&self) -> &[OptionalType] {
+        &self.optional_types
     }
 
     pub(super) const fn private_ffi(&self) -> &PrivateFfi {
@@ -163,6 +201,7 @@ impl Manifest {
         components: &[ComponentInterface],
         builtin_types: &[BuiltinType],
         flat_enums: &[FlatEnum],
+        optional_types: &[OptionalType],
     ) -> Self {
         let component_manifests = components
             .iter()
@@ -176,7 +215,7 @@ impl Manifest {
         Self {
             schema_version: MANIFEST_SCHEMA_VERSION,
             generation: GenerationManifest {
-                phase: "flat_enums",
+                phase: "optionals",
                 artifacts: [
                     "wallet_engine.h",
                     "wallet_engine.c",
@@ -188,6 +227,10 @@ impl Manifest {
                     .map(BuiltinTypeManifest::from)
                     .collect(),
                 rendered_flat_enums: flat_enums.iter().map(FlatEnumManifest::from).collect(),
+                rendered_optional_types: optional_types
+                    .iter()
+                    .map(OptionalTypeManifest::from)
+                    .collect(),
                 rendered_semantic_operation_count: 0,
                 pending_semantic_operation_count,
             },
@@ -225,6 +268,19 @@ impl From<&crate::enum_map::FlatEnumVariant> for FlatEnumVariantManifest {
             rust: value.rust_name().to_owned(),
             c: value.c_constant().to_owned(),
             value: value.public_value(),
+        }
+    }
+}
+
+impl From<&OptionalType> for OptionalTypeManifest {
+    fn from(value: &OptionalType) -> Self {
+        Self {
+            rust: value.rust_name().to_owned(),
+            c: value.c_name().to_owned(),
+            value: OptionalValueManifest {
+                rust: value.inner_rust_name().to_owned(),
+                c: value.inner_c_name().to_owned(),
+            },
         }
     }
 }
@@ -315,6 +371,7 @@ mod tests {
         assert_eq!(manifest.generation.rendered_semantic_operation_count, 0);
         assert!(manifest.generation.rendered_builtin_types.is_empty());
         assert!(manifest.generation.rendered_flat_enums.is_empty());
+        assert!(manifest.generation.rendered_optional_types.is_empty());
         assert_eq!(manifest.components.len(), 1);
         assert_eq!(manifest.components[0].crate_name, "wallet_engine");
         Ok(())
@@ -343,11 +400,30 @@ mod tests {
         let manifest = model.manifest();
         let enum_ = &manifest.generation.rendered_flat_enums[0];
 
-        assert_eq!(manifest.generation.phase, "flat_enums");
+        assert_eq!(manifest.generation.phase, "optionals");
         assert_eq!(enum_.rust, "Network");
         assert_eq!(enum_.variants[0].value, 0);
         assert_eq!(enum_.variants[1].value, 1);
         assert!(!serde_json::to_string(manifest)?.contains("wire_tag"));
+        Ok(())
+    }
+
+    #[test]
+    fn manifest_records_public_optional_shape() -> Result<()> {
+        let component = ComponentInterface::from_webidl(
+            r"
+            namespace wallet_engine {};
+            dictionary Example { u64? revision; };
+            ",
+            "wallet_engine",
+        )?;
+        let model = BindingsModel::from_components(&[component])?;
+        let optional = &model.manifest().generation.rendered_optional_types[0];
+
+        assert_eq!(optional.rust, "Option<u64>");
+        assert_eq!(optional.c, "WalletEngineOptionalU64");
+        assert_eq!(optional.value.rust, "u64");
+        assert_eq!(optional.value.c, "uint64_t");
         Ok(())
     }
 }

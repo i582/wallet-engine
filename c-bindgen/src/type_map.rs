@@ -51,7 +51,7 @@ impl BuiltinType {
         }
     }
 
-    const fn from_uniffi_type(type_: &Type) -> Option<Self> {
+    pub(super) const fn from_uniffi_type(type_: &Type) -> Option<Self> {
         match type_ {
             Type::UInt8 => Some(Self::UInt8),
             Type::Int8 => Some(Self::Int8),

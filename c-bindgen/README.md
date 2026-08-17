@@ -12,6 +12,7 @@ The generator currently:
 - discovers the builtin types actually used by the component;
 - generates UniFFI-compatible wire codecs for builtin values;
 - generates public C types and codecs for flat non-error enums;
+- generates public C wrappers and codecs for supported optional values;
 - compiles the generated facade as strict C11 in its test suite.
 
 Compound codecs, callback adapters, and export lists will be added on top of
@@ -40,11 +41,11 @@ and callable instead of being postponed until the complete API model is
 implemented. C++ compatibility is deliberately deferred until the C ABI is
 complete and stable.
 
-The current type slice discovers the builtins and flat non-error enums used by
-the real `ComponentInterface`, records their public Rust-to-C mapping in the
-manifest, and generates borrowed views plus private wire helpers. Tests compile
-the facade with strict C11 warnings and execute its codecs against known UniFFI
-wire values.
+The current type slice discovers the builtins, flat non-error enums, and
+supported optional values used by the real `ComponentInterface`, records their
+public Rust-to-C mapping in the manifest, and generates borrowed views plus
+private wire helpers. Tests compile the facade with strict C11 warnings and
+execute its codecs against known UniFFI wire values.
 
 ## Rust to C mapping
 
@@ -121,6 +122,7 @@ metadata; it never frees Rust-owned memory with the C allocator.
 | `String` | raw UTF-8 `RustBuffer` | big-endian `i32` byte length followed by UTF-8 |
 | `Vec<u8>` / `Bytes` | length-prefixed `RustBuffer` | big-endian `i32` length followed by bytes |
 | flat enum | `RustBuffer` | big-endian `i32` UniFFI discriminant |
+| `Option<T>` | `RustBuffer` | one-byte `0`/`1` tag followed by nested `T` for `Some` |
 
 Lowering rejects malformed views, invalid UTF-8, lengths above `INT32_MAX`
 where UniFFI uses a signed 32-bit length, and arithmetic overflow. Lifting
@@ -128,8 +130,8 @@ checks buffer bounds and rejects trailing data for a complete `Bytes` value.
 
 The pure codec behavior is tested in `tests/codec.c`. That C11 executable
 checks exact wire bytes and write/read round trips for every integer width,
-booleans, strings, bytes, and a flat enum, together with malformed, truncated,
-and unknown enum inputs.
+booleans, strings, bytes, a flat enum, and optional values, together with
+malformed, truncated, trailing, and unknown-tag inputs.
 
 ### Flat enums
 
@@ -161,6 +163,30 @@ The current Wallet Engine component contains 15 supported flat non-error
 enums. Enums with payloads and enums used as declared errors remain planned
 separate slices.
 
+### Optional values
+
+`Option<T>` keeps `None` distinct from every valid `T`, including zero and an
+empty string:
+
+```c
+typedef struct WalletEngineOptionalU64 {
+    bool has_value;
+    uint64_t value;
+} WalletEngineOptionalU64;
+```
+
+`value` is ignored when `has_value` is false. The public struct does not expose
+the private UniFFI representation. Its direct FFI type is a `RustBuffer`
+containing one tag byte: `0` for `None`, or `1` followed by the normal nested
+codec for `T`. Generated readers reject every other tag and complete lifts
+reject trailing bytes.
+
+The implemented slice supports options whose inner value is an implemented
+builtin or flat enum. In the current Wallet Engine component this produces six
+types: `Option<String>`, `Option<u16>`, `Option<i32>`, `Option<u64>`,
+`Option<PendingReason>`, and `Option<HttpHostErrorKind>`. Options over custom
+types and records will be enabled with those type slices.
+
 ### Wallet Engine custom string types
 
 These Rust types use `String` as their UniFFI builtin representation. They will
@@ -181,26 +207,10 @@ and non-empty validation stays in the Rust custom-type lift implementation.
 
 | Rust / UniFFI | Planned public C | Rule |
 |---|---|---|
-| `Option<T>` | `WalletEngineOptionalT { bool has_value; T value; }` | `value` is ignored when `has_value == false`. |
 | `Vec<T>` | `WalletEngineTListView { const T *data; size_t len; }` | Borrowed contiguous sequence. |
 | record `T` | `WalletEngineTView` | Fields are converted recursively. |
 | enum with fields | kind/tag plus generated payload union | Only the payload selected by the tag is active. |
 | error enum `E` | stable error code plus generated payload | Declared errors are separate from immediate ABI failures. |
-
-For example:
-
-```rust
-Option<u64>
-```
-
-will become:
-
-```c
-typedef struct WalletEngineOptionalU64 {
-    bool has_value;
-    uint64_t value;
-} WalletEngineOptionalU64;
-```
 
 ### Objects and callables
 
@@ -222,11 +232,12 @@ The generated header and facade stay compilable after every slice:
 1. Builtin integer, boolean, string, and byte representations — implemented.
 2. Primitive/bool wire codecs and string/bytes lower/lift — implemented.
 3. Flat non-error enums — implemented.
-4. Options and sequences.
-5. Records and nested combinations.
-6. Error and payload enums.
-7. Object handles and synchronous methods.
-8. Async methods and operation runtime.
-9. Foreign callback interfaces.
-10. Packaging and export hygiene.
-11. C++ compatibility, only after the C ABI is complete and stable.
+4. Options over implemented builtins and flat enums — implemented.
+5. Sequences.
+6. Records and nested combinations.
+7. Error and payload enums.
+8. Object handles and synchronous methods.
+9. Async methods and operation runtime.
+10. Foreign callback interfaces.
+11. Packaging and export hygiene.
+12. C++ compatibility, only after the C ABI is complete and stable.

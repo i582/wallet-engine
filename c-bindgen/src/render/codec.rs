@@ -1,6 +1,12 @@
 use std::fmt::Write as _;
 
-use crate::{enum_map::FlatEnum, model::BindingsModel, template, type_map::BuiltinType};
+use crate::{
+    enum_map::FlatEnum,
+    model::BindingsModel,
+    optional_map::{OptionalType, OptionalWireSize},
+    template,
+    type_map::BuiltinType,
+};
 
 const BASE: &str = include_str!("../../templates/codecs/base.c.tmpl");
 const U8_CODEC: &str = include_str!("../../templates/codecs/u8.c.tmpl");
@@ -16,6 +22,7 @@ const RUSTBUFFER_RUNTIME: &str = include_str!("../../templates/codecs/rustbuffer
 const STRING_CODEC: &str = include_str!("../../templates/codecs/string.c.tmpl");
 const BYTES_CODEC: &str = include_str!("../../templates/codecs/bytes.c.tmpl");
 const FLAT_ENUM_CODEC: &str = include_str!("../../templates/codecs/flat_enum.c.tmpl");
+const OPTIONAL_CODEC: &str = include_str!("../../templates/codecs/optional.c.tmpl");
 
 pub(super) fn render(model: &BindingsModel) -> String {
     let mut output = if model.has_wire_types() {
@@ -24,7 +31,7 @@ pub(super) fn render(model: &BindingsModel) -> String {
         String::new()
     };
 
-    if model.has_builtin_type(BuiltinType::UInt8) || model.has_builtin_type(BuiltinType::Int8) {
+    if model.needs_u8_wire_codec() {
         output.push_str(U8_CODEC);
     }
     if model.has_builtin_type(BuiltinType::Int8) {
@@ -71,6 +78,9 @@ pub(super) fn render(model: &BindingsModel) -> String {
     for enum_ in model.flat_enums() {
         output.push_str(&render_flat_enum(enum_));
     }
+    for optional in model.optional_types() {
+        output.push_str(&render_optional(optional));
+    }
 
     output
 }
@@ -107,6 +117,33 @@ fn render_flat_enum(enum_: &FlatEnum) -> String {
             ("C_NAME", enum_.c_name()),
             ("WRITE_CASES", &write_cases),
             ("READ_CASES", &read_cases),
+        ],
+    )
+}
+
+fn render_optional(optional: &OptionalType) -> String {
+    let some_wire_size = match optional.inner_wire_size() {
+        OptionalWireSize::Fixed(inner_size) => {
+            format!("        wire_size = {}u;\n", inner_size + 1)
+        }
+        OptionalWireSize::LengthPrefixedView => String::from(
+            r"        if ((value.value.len != 0u && value.value.data == NULL)
+            || value.value.len > (size_t)INT32_MAX
+            || value.value.len > SIZE_MAX - 5u) {
+            return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
+        }
+        wire_size = value.value.len + 5u;
+",
+        ),
+    };
+
+    template::render(
+        OPTIONAL_CODEC,
+        &[
+            ("FUNCTION_NAME", optional.function_name()),
+            ("C_NAME", optional.c_name()),
+            ("INNER_FUNCTION_NAME", optional.inner_function_name()),
+            ("SOME_WIRE_SIZE", &some_wire_size),
         ],
     )
 }
@@ -169,6 +206,27 @@ mod tests {
         let model = BindingsModel::from_components(&[ComponentInterface::new("wallet_engine")])?;
 
         assert!(render(&model).is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn renders_optional_tag_and_inner_codec_mapping() -> Result<()> {
+        let component = ComponentInterface::from_webidl(
+            r"
+            namespace wallet_engine {};
+            dictionary Example { u64? revision; };
+            ",
+            "wallet_engine",
+        )?;
+        let model = BindingsModel::from_components(&[component])?;
+        let codec = render(&model);
+
+        assert!(codec.contains("wallet_engine_private_write_optional_u64"));
+        assert!(codec.contains("value.has_value ? 1u : 0u"));
+        assert!(codec.contains("wallet_engine_private_write_u64(writer, value.value)"));
+        assert!(codec.contains("wire_size = 9u;"));
+        assert!(codec.contains("wallet_engine_private_lower_optional_u64"));
+        assert!(codec.contains("wallet_engine_private_lift_optional_u64"));
         Ok(())
     }
 }

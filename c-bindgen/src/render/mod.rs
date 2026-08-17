@@ -135,6 +135,9 @@ mod tests {
                 string name;
                 bytes payload;
                 Network network;
+                u64? optional_revision;
+                string? optional_name;
+                Network? optional_network;
             };
 
             enum Network { "mainnet", "testnet" };
