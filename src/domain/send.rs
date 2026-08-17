@@ -40,6 +40,22 @@ pub struct SendRequest {
     pub destination: TonAddressString,
     /// The exact-value or whole-balance transfer policy.
     pub amount: SendAmount,
+    /// Optional caller-selected Unix expiration timestamp in seconds.
+    ///
+    /// When absent, the engine derives expiration from fresh provider time and
+    /// `send_validity_seconds`. TON Connect uses this field to preserve the
+    /// dApp's signed-request validity boundary.
+    #[serde(default)]
+    pub valid_until: Option<u64>,
+    /// Optional caller-built one-cell internal-message body.
+    ///
+    /// This is mutually exclusive with `comment`. It exists for TON Connect
+    /// contract calls whose payload must be preserved byte-for-byte.
+    #[serde(default)]
+    pub payload: Option<Boc>,
+    /// Optional destination-contract `StateInit` for a deploy message.
+    #[serde(default)]
+    pub state_init: Option<Boc>,
     /// An optional plaintext UTF-8 comment attached to the internal message.
     #[serde(default)]
     pub comment: Option<String>,
@@ -211,6 +227,8 @@ pub struct SendResult {
     pub operation_id: NonEmptyString,
     /// The normalized signed external-message hash in standard padded Base64.
     pub message_hash: Base64Hash,
+    /// The exact signed external-message `BoC` submitted to the provider.
+    pub signed_boc: Boc,
     /// The terminal phase. This can be [`SendPhase::SubmissionUnknown`].
     pub phase: SendPhase,
 }

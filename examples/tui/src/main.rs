@@ -1,6 +1,7 @@
 mod app;
 mod http_host;
 mod storage;
+mod ton_connect;
 mod ui;
 
 use std::io::{self, Stdout};
@@ -8,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{self, Event};
+use crossterm::event::{self, DisableBracketedPaste, EnableBracketedPaste, Event};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -31,12 +32,15 @@ async fn main() -> Result<()> {
     let mut terminal = TerminalSession::new()?;
 
     while !app.should_quit() {
+        app.poll_ton_connect().await;
         terminal.draw(|frame| ui::render(frame, &app))?;
 
-        if event::poll(Duration::from_millis(100))?
-            && let Event::Key(key) = event::read()?
-        {
-            app.handle_key(key).await;
+        if event::poll(Duration::from_millis(100))? {
+            match event::read()? {
+                Event::Key(key) => app.handle_key(key).await,
+                Event::Paste(value) => app.handle_paste(&value),
+                Event::FocusGained | Event::FocusLost | Event::Mouse(_) | Event::Resize(_, _) => {}
+            }
         }
     }
 
@@ -51,7 +55,7 @@ struct TerminalSession {
 impl TerminalSession {
     fn new() -> Result<Self> {
         enable_raw_mode()?;
-        execute!(io::stdout(), EnterAlternateScreen)?;
+        execute!(io::stdout(), EnterAlternateScreen, EnableBracketedPaste)?;
         let terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
         Ok(Self { terminal })
     }
@@ -64,7 +68,11 @@ impl TerminalSession {
 impl Drop for TerminalSession {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
-        let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
+        let _ = execute!(
+            self.terminal.backend_mut(),
+            DisableBracketedPaste,
+            LeaveAlternateScreen
+        );
         let _ = self.terminal.show_cursor();
     }
 }

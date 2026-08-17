@@ -12,7 +12,14 @@ The included example implements a narrow real wallet flow:
 - ask for terminal approval;
 - return `ton_addr` and, when requested, `ton_proof`;
 - receive encrypted requests through bridge SSE;
+- approve and submit one raw native `sendTransaction`, including a contract-call payload;
 - acknowledge `disconnect` and end the session.
+
+First create or import the wallet that the example will expose:
+
+```console
+cargo run --manifest-path examples/tui/Cargo.toml
+```
 
 Generate a link while a dApp connector remains open:
 
@@ -31,22 +38,21 @@ const link = connector.connect({
 console.log(link);
 ```
 
-Copy the resulting link into:
+Start the TUI, open the TON Connect dialog with `t`, and paste the resulting
+link:
 
 ```console
-cargo run -p ton-connect-core --example http_bridge_wallet -- \
-  '<connect-link>' \
-  --bridge https://connect.ton.org/bridge \
-  --network testnet
+cargo run --manifest-path examples/tui/Cargo.toml
 ```
 
-Use `--network mainnet` only when the connect request explicitly targets
-mainnet. The example defaults to testnet and refuses an exact network mismatch.
+The network and account come from the stored wallet. The example refuses an
+exact network or `from` mismatch instead of silently switching accounts.
 
-This is intentionally not a funds-capable wallet. It generates an ephemeral
-V5R1 account, keeps both signing and bridge secret keys only in memory, advertises
-no transaction methods, and does not persist the session across process restarts.
-The `--yes` switch exists for automated experiments and skips terminal approval.
+The example loads the wallet created or imported by the terminal example from
+its protected local store. TON Connect proof signing stays inside `wallet-engine`;
+the mnemonic and private key do not cross the API boundary. The `--yes` switch
+exists for automated connection experiments. Transaction approval is always
+interactive.
 
 For compatibility with a link generated from Tonkeeper's wallet source, the
 example reports `DeviceInfo.appName = "tonkeeper"`. Do not ship that identity:

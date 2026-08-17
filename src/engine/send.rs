@@ -34,6 +34,9 @@ impl WalletClient {
     /// is published in `snapshot().send.error_message`.
     pub async fn send(&self, request: SendRequest) -> Result<SendResult, WalletClientError> {
         // Reject malformed input before reserving IDs or changing observable state.
+        if request.payload.is_some() && request.comment.is_some() {
+            return Err(WalletClientError::InvalidSendRequest);
+        }
         // Reserve one send generation and every HTTP ID under the state lock.
         // This makes concurrent sends single-flight and lets late callbacks be ignored safely.
         let (
@@ -204,11 +207,21 @@ impl WalletClient {
 
         // Use synchronized provider time for the real signature. A UI preview
         // can be several blocks old by the time the user confirms it.
-        let valid_until = provider_time
-            .checked_add(config.send_validity_seconds)
-            .ok_or_else(|| {
-                self.send_failed_error(generation, "transfer expiration timestamp overflow")
-            })?;
+        let valid_until = if let Some(valid_until) = request.valid_until {
+            if valid_until <= provider_time {
+                return Err(self.send_failed_error(
+                    generation,
+                    "transfer expiration timestamp is not after fresh provider time",
+                ));
+            }
+            valid_until
+        } else {
+            provider_time
+                .checked_add(config.send_validity_seconds)
+                .ok_or_else(|| {
+                    self.send_failed_error(generation, "transfer expiration timestamp overflow")
+                })?
+        };
 
         let directive = workflow
             .fresh_account_loaded(fresh.clone())
@@ -267,6 +280,7 @@ impl WalletClient {
         .map_err(|error| {
             self.send_failed_error(generation, format!("failed to prepare transfer: {error}"))
         })?;
+        let signed_boc = prepared.signed_boc.clone();
 
         let submit_request =
             build_send_boc_request(&config, submit_request_id, &prepared.signed_boc).map_err(
@@ -367,6 +381,7 @@ impl WalletClient {
         Ok(SendResult {
             operation_id: request.operation_id,
             message_hash,
+            signed_boc,
             phase,
         })
     }

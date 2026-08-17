@@ -37,6 +37,22 @@ pub(crate) fn render(frame: &mut Frame<'_>, app: &App) {
             render_dashboard(frame, body, app);
             render_send_dialog(frame, app);
         }
+        Screen::TonConnectLink => {
+            render_dashboard(frame, body, app);
+            render_ton_connect_link_dialog(frame, app);
+        }
+        Screen::TonConnectConnecting => {
+            render_dashboard(frame, body, app);
+            render_ton_connect_connecting_dialog(frame);
+        }
+        Screen::TonConnectConfirm(prompt) => {
+            render_dashboard(frame, body, app);
+            render_ton_connect_confirmation(frame, prompt);
+        }
+        Screen::TonConnectTransaction(prompt) => {
+            render_dashboard(frame, body, app);
+            render_ton_connect_transaction(frame, prompt);
+        }
         Screen::ConfirmDelete => {
             render_dashboard(frame, body, app);
             render_delete_dialog(frame);
@@ -97,9 +113,14 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
         Screen::Recovery(_) => "[enter] save wallet  [esc] discard",
         Screen::Import => "[enter] import  [esc] cancel",
         Screen::Dashboard => {
-            "[c] copy address  [r] refresh  [l] older  [s] send  [d] delete  [q] quit"
+            "[c] copy  [r] refresh  [l] older  [s] send  [t] TON Connect  [x] stop TC  [d] delete"
         }
         Screen::Send => "[tab] next field  [enter] continue/send  [esc] close",
+        Screen::TonConnectLink => "[enter] connect  [esc] close · paste a complete tc:// link",
+        Screen::TonConnectConnecting => "[esc] cancel TON Connect",
+        Screen::TonConnectConfirm(_) | Screen::TonConnectTransaction(_) => {
+            "[y] approve  [n/esc] decline"
+        }
         Screen::ConfirmDelete => "[y] delete  [n/esc] cancel",
     };
 
@@ -551,6 +572,149 @@ fn render_delete_dialog(frame: &mut Frame<'_>) {
                 .title_style(Style::default().fg(DANGER).add_modifier(Modifier::BOLD))
                 .borders(Borders::ALL)
                 .padding(Padding::horizontal(1)),
+        ),
+        area,
+    );
+}
+
+fn render_ton_connect_link_dialog(frame: &mut Frame<'_>, app: &App) {
+    let area = centered_rect(84, 9, frame.area());
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Block::default()
+            .title(" TON Connect link ")
+            .title_style(Style::default().fg(ACCENT).add_modifier(Modifier::BOLD))
+            .borders(Borders::ALL),
+        area,
+    );
+    let inner = area.inner(ratatui::layout::Margin {
+        horizontal: 2,
+        vertical: 1,
+    });
+    let [input, hint] = Layout::vertical([Constraint::Length(3), Constraint::Min(2)]).areas(inner);
+    render_input(
+        frame,
+        input,
+        "tc:// or universal link",
+        &app.ton_connect_link,
+        true,
+    );
+    frame.render_widget(
+        Paragraph::new("The dApp must remain open while the wallet connects.")
+            .style(Style::default().fg(MUTED)),
+        hint,
+    );
+}
+
+fn render_ton_connect_connecting_dialog(frame: &mut Frame<'_>) {
+    let area = centered_rect(54, 7, frame.area());
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(Text::from(vec![
+            Line::from(Span::styled(
+                "TON Connect",
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            )),
+            Line::default(),
+            Line::from("Loading manifest or waiting for bridge traffic…"),
+        ]))
+        .alignment(Alignment::Center)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .padding(Padding::uniform(1)),
+        ),
+        area,
+    );
+}
+
+fn render_ton_connect_confirmation(
+    frame: &mut Frame<'_>,
+    prompt: &crate::ton_connect::ConnectPrompt,
+) {
+    let area = centered_rect(76, 15, frame.area());
+    frame.render_widget(Clear, area);
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!("Connect to {}?", prompt.dapp_name),
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::default(),
+        Line::from(format!("origin   {}", prompt.origin)),
+        Line::from(format!("domain   {}", prompt.domain)),
+        Line::from(format!("account  {}", compact(&prompt.account, 54))),
+        Line::from(format!("icon     {}", compact(&prompt.icon_url, 54))),
+    ];
+    if let Some(payload) = &prompt.proof_payload {
+        lines.push(Line::from(format!("proof    {}", compact(payload, 54))));
+    }
+    lines.extend([
+        Line::default(),
+        Line::from(Span::styled(
+            "This is an off-chain connection, not a transfer.",
+            Style::default().fg(SUCCESS),
+        )),
+        Line::from("[y] approve    [n] decline"),
+    ]);
+    frame.render_widget(
+        Paragraph::new(Text::from(lines)).block(
+            Block::default()
+                .title(" Confirm TON Connect ")
+                .title_style(Style::default().fg(ACCENT).add_modifier(Modifier::BOLD))
+                .borders(Borders::ALL)
+                .padding(Padding::uniform(1)),
+        ),
+        area,
+    );
+}
+
+fn render_ton_connect_transaction(
+    frame: &mut Frame<'_>,
+    prompt: &crate::ton_connect::TransactionPrompt,
+) {
+    let area = centered_rect(70, 14, frame.area());
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(Text::from(vec![
+            Line::from(Span::styled(
+                format!("{} requests a transaction", prompt.dapp_name),
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::default(),
+            Line::from(format!("destination  {}", compact(&prompt.destination, 48))),
+            Line::from(format!(
+                "amount       {} nanograms",
+                prompt.amount_nanograms
+            )),
+            Line::from(format!(
+                "payload      {}",
+                if prompt.has_payload {
+                    "contract call"
+                } else {
+                    "empty"
+                }
+            )),
+            Line::from(format!(
+                "StateInit    {}",
+                if prompt.deploys_contract {
+                    "deploy contract"
+                } else {
+                    "none"
+                }
+            )),
+            Line::default(),
+            Line::from(Span::styled(
+                "This submits an on-chain transaction and spends network fees.",
+                Style::default().fg(WARNING),
+            )),
+            Line::from("[y] approve and submit    [n] decline"),
+        ]))
+        .block(
+            Block::default()
+                .title(" Confirm transaction ")
+                .title_style(Style::default().fg(WARNING).add_modifier(Modifier::BOLD))
+                .borders(Borders::ALL)
+                .padding(Padding::uniform(1)),
         ),
         area,
     );

@@ -9,7 +9,16 @@ license = "MIT OR Apache-2.0"
 [workspace]
 members = ["crates/ton-connect-core"]
 default-members = [".", "crates/ton-connect-core"]
-exclude = ["vendor/ton"]
+exclude = [
+    "apple-bindgen",
+    "c-bindings",
+    "examples/tui",
+    "kotlin-bindgen",
+    "verification/kani",
+    "vendor/ton",
+    "wasm-bindings",
+    "xtask",
+]
 resolver = "3"
 
 [lib]
@@ -18,6 +27,7 @@ crate-type = ["rlib", "staticlib", "cdylib"]
 [dependencies]
 async-trait = "=0.1.89"
 base64 = "=0.22.1"
+ed25519-dalek = "=2.2.0"
 futures = "=0.3.31"
 getrandom = { version = "=0.3.4", features = ["wasm_js"] }
 num-bigint = "=0.4.8"
@@ -25,6 +35,7 @@ serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 thiserror = "=2.0.17"
 ton = { path = "vendor/ton", version = "=0.1.3", default-features = false }
+ton-connect-core = { path = "crates/ton-connect-core", version = "=0.1.0" }
 uniffi = "=0.32.0"
 url = "=2.5.7"
 zeroize = "=1.9.0"

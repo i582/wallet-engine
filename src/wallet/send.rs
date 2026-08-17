@@ -78,6 +78,12 @@ pub(crate) struct PreparedTransfer {
     /// The optional plaintext comment encoded into the internal message.
     pub comment: Option<String>,
 
+    /// The optional caller-built internal-message body.
+    pub payload: Option<Boc>,
+
+    /// The optional destination-contract deployment state.
+    pub state_init: Option<Boc>,
+
     /// The fresh wallet sequence number signed into the external message.
     pub seqno: u32,
 
@@ -313,6 +319,12 @@ struct DurableSendRecord {
     /// The optional plaintext comment stored with the signed message.
     #[serde(default)]
     comment: Option<String>,
+    /// The optional caller-built internal-message body.
+    #[serde(default)]
+    payload: Option<Boc>,
+    /// The optional destination-contract deployment state.
+    #[serde(default)]
+    state_init: Option<Boc>,
     /// The wallet sequence number signed into the external message.
     seqno: u32,
     /// Reports whether the signed message contains the wallet `StateInit`.
@@ -905,6 +917,8 @@ impl SendWorkflow {
             destination: prepared.destination.clone(),
             amount: prepared.amount.clone(),
             comment: prepared.comment.clone(),
+            payload: prepared.payload.clone(),
+            state_init: prepared.state_init.clone(),
             seqno: prepared.seqno,
             needs_state_init: prepared.needs_state_init,
             valid_until: prepared.valid_until,
@@ -953,6 +967,8 @@ impl SendWorkflow {
             || prepared.destination != self.request.destination
             || prepared.amount != self.request.amount
             || prepared.comment != self.request.comment
+            || prepared.payload != self.request.payload
+            || prepared.state_init != self.request.state_init
             || prepared.seqno != account.seqno
             || prepared.needs_state_init != account.needs_state_init()
         {
@@ -1529,6 +1545,12 @@ mod tests {
                 prepared.amount = SendAmount::exact("2").expect("valid exact amount");
             }),
             Box::new(|prepared| prepared.comment = Some("different".to_owned())),
+            Box::new(|prepared| {
+                prepared.payload = Some(
+                    Boc::try_from(TonCell::EMPTY_BOC.to_vec())
+                        .expect("the empty-cell BOC fixture is valid"),
+                );
+            }),
             Box::new(|prepared| prepared.seqno = 8),
             Box::new(|prepared| prepared.needs_state_init = true),
         ];
@@ -1567,6 +1589,9 @@ mod tests {
             destination: TonAddressString::try_from(RAW_DESTINATION)
                 .expect("valid destination address"),
             amount: SendAmount::exact("1").expect("valid exact amount"),
+            valid_until: None,
+            payload: None,
+            state_init: None,
             comment: None,
         }
     }
@@ -1604,6 +1629,8 @@ mod tests {
             destination: destination(),
             amount: SendAmount::exact("1").expect("valid exact amount"),
             comment: None,
+            payload: None,
+            state_init: None,
             seqno: 7,
             needs_state_init: false,
             valid_until: 1_800_000_300,
@@ -1661,6 +1688,8 @@ mod tests {
             destination: prepared.destination,
             amount: prepared.amount,
             comment: prepared.comment,
+            payload: prepared.payload,
+            state_init: prepared.state_init,
             seqno: prepared.seqno,
             needs_state_init: prepared.needs_state_init,
             valid_until: prepared.valid_until,
