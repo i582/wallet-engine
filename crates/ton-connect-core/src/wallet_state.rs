@@ -623,6 +623,39 @@ mod tests {
         Ok(())
     }
 
+    /// Ported from `tonkeeper/tongo/tonconnect/proof_test.go` at
+    /// `835e443188a680a08100c3a324f68369c1c4f400`.
+    #[test]
+    fn tongo_v4_proofs_verify_against_the_state_bound_key() -> TestResult {
+        for (code, version, secret) in [
+            (V4R1_CODE, StandardWalletVersion::V4R1, [0x41_u8; 32]),
+            (V4R2_CODE, StandardWalletVersion::V4R2, [0x42_u8; 32]),
+        ] {
+            let signing_key = SigningKey::from_bytes(&secret);
+            let public_key = signing_key.verifying_key().to_bytes();
+            let (state_init, address) = standard_wallet_with_key(code, version, public_key)?;
+            let account = TonAddressItemReply::new(
+                address,
+                NetworkId::try_from("-3")?,
+                state_init,
+                Ed25519PublicKey::from_bytes(public_key),
+            );
+            let timestamp = 1_800_000_000_u64;
+            let payload = "some-random-secret";
+            let hash = ton_proof_signing_hash(&address, "web", timestamp, payload)?;
+            let mut proof = TonProof {
+                timestamp: Uint64String::from(timestamp),
+                domain: TonProofDomain::new("web".to_owned())?,
+                payload: payload.to_owned(),
+                signature: Ed25519Signature::from_bytes(signing_key.sign(&hash).to_bytes()),
+            };
+            assert!(proof.verify_with_account(&account)?);
+            proof.payload.push('x');
+            assert!(!proof.verify_with_account(&account)?);
+        }
+        Ok(())
+    }
+
     #[test]
     fn sign_data_verification_is_bound_to_the_connected_address() -> TestResult {
         let signing_key = SigningKey::from_bytes(&[0x55; 32]);

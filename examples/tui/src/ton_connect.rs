@@ -162,7 +162,7 @@ async fn run(
             account: account.address.to_string(),
             proof_payload: request.items.as_slice().iter().find_map(|item| match item {
                 ConnectItem::TonProof { payload } => Some(payload.clone()),
-                ConnectItem::TonAddr { .. } => None,
+                ConnectItem::TonAddr { .. } | ConnectItem::Unsupported { .. } => None,
             }),
             response: Some(approval_tx),
         }))
@@ -317,6 +317,9 @@ async fn connect_event(
                     },
                 )));
             }
+            ConnectItem::Unsupported { .. } => {
+                items.push(ConnectItemReply::unsupported(item, None));
+            }
         }
     }
     Ok(ConnectEvent::Connect {
@@ -328,11 +331,11 @@ async fn connect_event(
                 app_name: DEMO_WALLET_APP_NAME.to_owned(),
                 app_version: env!("CARGO_PKG_VERSION").to_owned(),
                 max_protocol_version: u32::from(ton_connect_core::PROTOCOL_VERSION),
-                features: vec![Feature::SendTransaction(SendTransactionFeature {
-                    max_messages: 1,
-                    extra_currency_supported: Some(false),
-                    item_types: None,
-                })],
+                features: vec![Feature::SendTransaction(SendTransactionFeature::new(
+                    1,
+                    Some(false),
+                    None,
+                )?)],
             },
         },
         response: None,
@@ -602,12 +605,9 @@ fn engine_send_request(
     })
 }
 
-fn decode_boc(value: Option<&ton_connect_core::Base64Value>) -> Result<Option<Boc>, RpcErrorCode> {
+fn decode_boc(value: Option<&ton_connect_core::CellBoc>) -> Result<Option<Boc>, RpcErrorCode> {
     value
-        .map(|value| {
-            let bytes = value.decode().map_err(|_| RpcErrorCode::BadRequest)?;
-            Boc::try_from(bytes).map_err(|_| RpcErrorCode::BadRequest)
-        })
+        .map(|value| Boc::try_from(value.as_bytes().to_vec()).map_err(|_| RpcErrorCode::BadRequest))
         .transpose()
 }
 
@@ -626,8 +626,9 @@ fn validate_transaction_sender(
     {
         return Err(RpcErrorCode::BadRequest);
     }
-    if let Some(from) = payload.from.as_deref() {
-        let from = TonAddressString::try_from(from).map_err(|_| RpcErrorCode::BadRequest)?;
+    if let Some(from) = payload.from.as_ref() {
+        let from =
+            TonAddressString::try_from(from.to_string()).map_err(|_| RpcErrorCode::BadRequest)?;
         if from != descriptor.address {
             return Err(RpcErrorCode::BadRequest);
         }
@@ -721,7 +722,9 @@ const fn current_platform() -> DevicePlatform {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ton_connect_core::{Base64Value, DecimalString, NonEmptyVec, RawMessage};
+    use ton_connect_core::{
+        AccountAddress, CellBoc, DecimalString, FriendlyAddress, NonEmptyVec, RawMessage,
+    };
 
     const EMPTY_CELL_BOC: &str = "te6ccgEBAQEAAgAAAA==";
 
@@ -738,11 +741,13 @@ mod tests {
                 value: "wallet:test-wallet:mnemonic".to_owned(),
             },
         };
+        let destination =
+            FriendlyAddress::try_from("Ef8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAU")?;
         let message = RawMessage {
-            address: descriptor.address.to_string(),
+            address: destination.clone(),
             amount: DecimalString::try_from("1000000")?,
-            payload: Some(Base64Value::try_from(EMPTY_CELL_BOC)?),
-            state_init: Some(Base64Value::try_from(EMPTY_CELL_BOC)?),
+            payload: Some(CellBoc::try_from(EMPTY_CELL_BOC)?),
+            state_init: Some(CellBoc::try_from(EMPTY_CELL_BOC)?),
             extra_currency: None,
         };
         let request = SendTransactionRequest {
@@ -750,7 +755,7 @@ mod tests {
             payload: TransactionPayload::Raw(RawTransactionPayload {
                 valid_until: Some(1_900_000_000),
                 network: Some(NetworkId::try_from("-3")?),
-                from: Some(descriptor.address.to_string()),
+                from: Some(AccountAddress::try_from(descriptor.address.to_string())?),
                 messages: NonEmptyVec::try_from(vec![message])?,
             }),
         };
@@ -759,7 +764,7 @@ mod tests {
             engine_send_request(ClientId::from_bytes([7_u8; 32]), &request, &descriptor)
                 .map_err(|code| anyhow!("unexpected RPC error: {code:?}"))?;
 
-        assert_eq!(converted.destination, descriptor.address);
+        assert_eq!(converted.destination.as_str(), destination.as_str());
         assert_eq!(converted.valid_until, Some(1_900_000_000));
         assert!(converted.payload.is_some());
         assert!(converted.state_init.is_some());
@@ -784,7 +789,9 @@ mod tests {
             network: Some(NetworkId::try_from("-239")?),
             from: None,
             messages: NonEmptyVec::try_from(vec![RawMessage {
-                address: descriptor.address.to_string(),
+                address: FriendlyAddress::try_from(
+                    "Ef8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAU",
+                )?,
                 amount: DecimalString::try_from("1")?,
                 payload: None,
                 state_init: None,

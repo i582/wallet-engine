@@ -12,7 +12,64 @@ use crate::{
 };
 
 /// Extra-currency identifier to non-negative elementary-unit amount.
-pub type ExtraCurrencies = BTreeMap<u32, DecimalString>;
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ExtraCurrencies(BTreeMap<u32, DecimalString>);
+
+impl ExtraCurrencies {
+    /// Creates a map from already typed currency identifiers.
+    #[must_use]
+    pub fn new(values: BTreeMap<u32, DecimalString>) -> Self {
+        Self(values)
+    }
+
+    /// Returns the typed currency map.
+    #[must_use]
+    pub const fn as_map(&self) -> &BTreeMap<u32, DecimalString> {
+        &self.0
+    }
+
+    /// Reports whether the map contains no extra currencies.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl Serialize for ExtraCurrencies {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        use serde::ser::SerializeMap as _;
+
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (currency_id, amount) in &self.0 {
+            map.serialize_entry(&currency_id.to_string(), amount)?;
+        }
+        map.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for ExtraCurrencies {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = BTreeMap::<String, DecimalString>::deserialize(deserializer)?;
+        let mut values = BTreeMap::new();
+        for (currency_id, amount) in wire {
+            let parsed = currency_id
+                .parse::<u32>()
+                .map_err(|_| de::Error::custom("extra-currency id must be an unsigned integer"))?;
+            if parsed.to_string() != currency_id || values.insert(parsed, amount).is_some() {
+                return Err(de::Error::custom(
+                    "extra-currency id must use canonical decimal form",
+                ));
+            }
+        }
+        Ok(Self(values))
+    }
+}
 
 /// A raw outgoing message in `sendTransaction` or `signMessage`.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -23,13 +80,26 @@ pub struct RawMessage {
     /// Nanocoins represented as a non-negative decimal string.
     pub amount: DecimalString,
     /// Optional base64 one-cell body `BoC`.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::value::deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub payload: Option<CellBoc>,
     /// Optional base64 one-cell `StateInit` `BoC`.
-    #[serde(rename = "stateInit", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "stateInit",
+        default,
+        deserialize_with = "crate::value::deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub state_init: Option<CellBoc>,
     /// Optional TEP-92 extra currencies.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::value::deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub extra_currency: Option<ExtraCurrencies>,
 }
 
@@ -44,13 +114,26 @@ pub enum StructuredItem {
         /// Nanocoins to transfer.
         amount: DecimalString,
         /// Optional base64 one-cell body `BoC`.
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         payload: Option<CellBoc>,
         /// Optional base64 one-cell `StateInit` `BoC`.
-        #[serde(rename = "stateInit", skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "stateInit",
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         state_init: Option<CellBoc>,
         /// Optional TEP-92 extra currencies.
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         extra_currency: Option<ExtraCurrencies>,
     },
     /// TEP-74 jetton transfer.
@@ -62,25 +145,52 @@ pub enum StructuredItem {
         /// Jetton elementary-unit amount.
         amount: DecimalString,
         /// Optional attached TON amount in nanocoins.
-        #[serde(rename = "attachAmount", skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "attachAmount",
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         attach_amount: Option<DecimalString>,
         /// Optional application query identifier.
-        #[serde(rename = "queryId", skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "queryId",
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         query_id: Option<String>,
         /// Optional excess-TON refund address.
         #[serde(
             rename = "responseDestination",
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
             skip_serializing_if = "Option::is_none"
         )]
         response_destination: Option<AccountAddress>,
         /// Optional base64 `custom_payload` cell `BoC`.
-        #[serde(rename = "customPayload", skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "customPayload",
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         custom_payload: Option<CellBoc>,
         /// Optional forwarded TON amount in nanocoins.
-        #[serde(rename = "forwardAmount", skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "forwardAmount",
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         forward_amount: Option<DecimalString>,
         /// Optional base64 `forward_payload` cell `BoC`.
-        #[serde(rename = "forwardPayload", skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "forwardPayload",
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         forward_payload: Option<CellBoc>,
     },
     /// TEP-62 NFT transfer.
@@ -92,25 +202,52 @@ pub enum StructuredItem {
         #[serde(rename = "newOwner")]
         new_owner: AccountAddress,
         /// Optional attached TON amount in nanocoins.
-        #[serde(rename = "attachAmount", skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "attachAmount",
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         attach_amount: Option<DecimalString>,
         /// Optional application query identifier.
-        #[serde(rename = "queryId", skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "queryId",
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         query_id: Option<String>,
         /// Optional excess-TON refund address.
         #[serde(
             rename = "responseDestination",
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
             skip_serializing_if = "Option::is_none"
         )]
         response_destination: Option<AccountAddress>,
         /// Optional base64 `custom_payload` cell `BoC`.
-        #[serde(rename = "customPayload", skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "customPayload",
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         custom_payload: Option<CellBoc>,
         /// Optional forwarded TON amount in nanocoins.
-        #[serde(rename = "forwardAmount", skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "forwardAmount",
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         forward_amount: Option<DecimalString>,
         /// Optional base64 `forward_payload` cell `BoC`.
-        #[serde(rename = "forwardPayload", skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "forwardPayload",
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         forward_payload: Option<CellBoc>,
     },
 }
@@ -120,13 +257,25 @@ pub enum StructuredItem {
 #[serde(deny_unknown_fields)]
 pub struct RawTransactionPayload {
     /// Optional Unix expiration time in seconds.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::value::deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub valid_until: Option<u64>,
     /// Optional target network global ID.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::value::deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub network: Option<NetworkId>,
     /// Optional fixed sender address.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::value::deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub from: Option<AccountAddress>,
     /// One or more raw outgoing messages.
     pub messages: NonEmptyVec<RawMessage>,
@@ -137,13 +286,25 @@ pub struct RawTransactionPayload {
 #[serde(deny_unknown_fields)]
 pub struct StructuredTransactionPayload {
     /// Optional Unix expiration time in seconds.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::value::deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub valid_until: Option<u64>,
     /// Optional target network global ID.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::value::deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub network: Option<NetworkId>,
     /// Optional fixed sender address.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::value::deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub from: Option<AccountAddress>,
     /// One or more structured transfer items.
     pub items: NonEmptyVec<StructuredItem>,
@@ -280,10 +441,18 @@ pub enum SignDataPayload {
         /// Text to sign.
         text: String,
         /// Optional target network global ID.
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         network: Option<NetworkId>,
         /// Optional fixed signer address.
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         from: Option<AccountAddress>,
     },
     /// Opaque binary bytes.
@@ -291,10 +460,18 @@ pub enum SignDataPayload {
         /// Base64-encoded bytes to sign.
         bytes: Base64Value,
         /// Optional target network global ID.
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         network: Option<NetworkId>,
         /// Optional fixed signer address.
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         from: Option<AccountAddress>,
     },
     /// A TVM cell interpreted with a TL-B schema.
@@ -304,10 +481,18 @@ pub enum SignDataPayload {
         /// Base64 cell `BoC`.
         cell: CellBoc,
         /// Optional target network global ID.
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         network: Option<NetworkId>,
         /// Optional fixed signer address.
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         from: Option<AccountAddress>,
     },
 }

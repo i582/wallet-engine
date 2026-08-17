@@ -9,6 +9,30 @@ use crate::{
 
 const PROTOCOL_VERSION: &str = "2";
 
+/// Encodes a TON Connect query for Telegram's `startapp` transport.
+#[must_use]
+pub fn encode_telegram_url_parameters(parameters: &str) -> String {
+    parameters
+        .replace('.', "%2E")
+        .replace('-', "%2D")
+        .replace('_', "%5F")
+        .replace('&', "-")
+        .replace('=', "__")
+        .replace('%', "--")
+}
+
+/// Decodes Telegram `startapp` substitutions back to a TON Connect query.
+#[must_use]
+pub fn decode_telegram_url_parameters(parameters: &str) -> String {
+    parameters
+        .replace("--", "%")
+        .replace("__", "=")
+        .replace('-', "&")
+        .replace("%5F", "_")
+        .replace("%2D", "-")
+        .replace("%2E", ".")
+}
+
 /// Action the wallet takes after the connect prompt completes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ReturnStrategy {
@@ -289,6 +313,7 @@ mod tests {
     use base64::{Engine as _, engine::general_purpose};
 
     use super::*;
+    use crate::ConnectItem;
 
     const CLIENT_ID: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -307,6 +332,36 @@ mod tests {
             parsed.as_ref().map(ConnectLink::return_strategy),
             Ok(ReturnStrategy::Back)
         ));
+    }
+
+    /// Ported from Tonkeeper iOS `TCUrlParserTests.swift` at
+    /// `ddd80aa0542079e839c2b9db2b16492d3150d732`.
+    #[test]
+    fn parses_tonkeeper_ios_demo_dapp_vector() -> Result<(), Box<dyn std::error::Error>> {
+        let value = concat!(
+            "tc://?v=2&id=4091db63def30d086acef76cd045a20ca6def5744bad530d2a86766d3e781477",
+            "&r=%7B%22manifestUrl%22%3A%22https%3A%2F%2Fton-connect.github.io%2F",
+            "demo-dapp-with-react-ui%2Ftonconnect-manifest.json%22%2C%22items%22%3A%5B",
+            "%7B%22name%22%3A%22ton_addr%22%7D%2C%7B%22name%22%3A%22ton_proof",
+            "%22%2C%22payload%22%3A%224c9523d2c0017c3e00000000652fc398090082a031a65",
+            "ab99be6209a91c0f818%22%7D%5D%7D"
+        );
+        let link = ConnectLink::parse(value)?;
+        assert_eq!(
+            link.client_id().to_string(),
+            "4091db63def30d086acef76cd045a20ca6def5744bad530d2a86766d3e781477"
+        );
+        let request = link.request().ok_or("full request is required")?;
+        assert_eq!(
+            request.manifest_url.as_str(),
+            "https://ton-connect.github.io/demo-dapp-with-react-ui/tonconnect-manifest.json"
+        );
+        assert!(matches!(
+            request.items.as_slice(),
+            [ConnectItem::TonAddr { .. }, ConnectItem::TonProof { payload }]
+                if payload == "4c9523d2c0017c3e00000000652fc398090082a031a65ab99be6209a91c0f818"
+        ));
+        Ok(())
     }
 
     #[test]
@@ -347,6 +402,34 @@ mod tests {
         let parsed = ConnectLink::parse(&format!("tc://?{query}"));
 
         assert!(parsed.is_ok_and(|link| link.embedded_request().is_none()));
+    }
+
+    /// Ported from both official TypeScript URL suites at
+    /// `273bc3a6050e6024886ca50c12677dc42ae142a9`.
+    #[test]
+    fn telegram_parameter_encoding_matches_typescript_vectors() {
+        for parameters in [
+            concat!(
+                "v=2&id=1a7894bfea897afa462bc8ccc6857c992cc92b0a5ef994ab2f855e764ece4942",
+                "&r=%7B%22manifestUrl%22%3A%22https%3A%2F%2Ftonconnect-sdk-demo-dapp",
+                ".vercel.app%2Ftonconnect-manifest.json%22%2C%22items%22%3A%5B",
+                "%7B%22name%22%3A%22ton_addr%22%7D%5D%7D&ret=none"
+            ),
+            concat!(
+                "id=17b086055e59e7c87fee47797e92be1a51be0dd1a42f2a39131f79cf5169682e",
+                "&ret=back"
+            ),
+            concat!(
+                "v=2&id=7730cae23f454f8d4ba52b07a4ea869773834be331edcadbb5e2da5d94ddfa2d",
+                "&trace_id=019d85ea-ca0e-7129-8155-05c7534ef894&r=%7B%22items%22%3A",
+                "%5B%7B%22name%22%3A%22ton_addr%22%7D%5D%7D"
+            ),
+        ] {
+            let encoded = encode_telegram_url_parameters(parameters);
+            assert_eq!(decode_telegram_url_parameters(&encoded), parameters);
+            assert!(!encoded.contains('&'));
+            assert!(!encoded.contains('='));
+        }
     }
 
     #[test]

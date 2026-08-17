@@ -66,6 +66,10 @@ impl BridgeMessage {
 struct BridgeMessageWire {
     from: ClientId,
     message: Base64Value,
+    #[serde(
+        default,
+        deserialize_with = "crate::value::deserialize_optional_non_null"
+    )]
     trace_id: Option<TraceId>,
     #[serde(flatten)]
     extensions: BTreeMap<String, Value>,

@@ -40,7 +40,10 @@ pub use connect::{
     SignMessageFeature, StructuredItemType, TonAddressItem, TonAddressItemReply, TonProof,
     TonProofDomain, TonProofItem, TonProofItemReply, UnsupportedConnectItemError,
 };
-pub use deep_link::{ConnectLink, ConnectLinkError, ReturnStrategy};
+pub use deep_link::{
+    ConnectLink, ConnectLinkError, ReturnStrategy, decode_telegram_url_parameters,
+    encode_telegram_url_parameters,
+};
 pub use embedded::{
     EmbeddedRequest, EmbeddedRequestError, EmbeddedResponse, EmbeddedResponseError,
     EmbeddedResponseSuccess, decode_embedded_request_param, encode_embedded_request_param,

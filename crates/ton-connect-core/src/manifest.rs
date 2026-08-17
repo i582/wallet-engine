@@ -155,7 +155,15 @@ struct AppManifestWire {
     url: HttpsUrl,
     name: String,
     icon_url: HttpsUrl,
+    #[serde(
+        default,
+        deserialize_with = "crate::value::deserialize_optional_non_null"
+    )]
     terms_of_use_url: Option<HttpsUrl>,
+    #[serde(
+        default,
+        deserialize_with = "crate::value::deserialize_optional_non_null"
+    )]
     privacy_policy_url: Option<HttpsUrl>,
     #[serde(flatten)]
     extensions: BTreeMap<String, Value>,

@@ -426,13 +426,26 @@ fn tep81_domain(domain: &str) -> Result<Vec<u8>, SigningError> {
         return Err(SigningError::InvalidDomain);
     }
 
+    if domain == "." {
+        return Ok(vec![0]);
+    }
+
+    let domain = domain.strip_suffix('.').unwrap_or(domain);
+    let ascii = match url::Host::parse(domain).map_err(|_| SigningError::InvalidDomain)? {
+        url::Host::Domain(domain) => domain,
+        url::Host::Ipv4(_) | url::Host::Ipv6(_) => return Err(SigningError::InvalidDomain),
+    };
+
     let mut encoded = Vec::new();
-    for label in domain.split('.').rev() {
-        if label.is_empty() {
+    for label in ascii.split('.').rev() {
+        if label.is_empty() || label.len() > 63 {
             return Err(SigningError::InvalidDomain);
         }
         encoded.extend_from_slice(label.as_bytes());
         encoded.push(0);
+    }
+    if encoded.len() > 126 {
+        return Err(SigningError::InvalidDomain);
     }
     Ok(encoded)
 }
@@ -461,6 +474,7 @@ fn snake_cell(bytes: &[u8]) -> Result<TonCell, SigningError> {
 #[cfg(test)]
 mod tests {
     use ed25519_dalek::{Signer as _, SigningKey};
+    use proptest::prelude::*;
 
     use super::*;
 
@@ -535,6 +549,71 @@ mod tests {
         let custom_hash = sign_data_signing_hash(&custom, "example.com", 1_700_000_000, payload)?;
         assert_ne!(custom_hash, basechain_hash);
         Ok(())
+    }
+
+    /// Ported from Tonkeeper iOS
+    /// `CellSignDataSignerTests.swift` at
+    /// `ddd80aa0542079e839c2b9db2b16492d3150d732`.
+    #[test]
+    fn tep81_domain_matches_tonkeeper_ios_vectors() -> Result<(), SigningError> {
+        for (domain, expected) in [
+            ("tonkeeper.com", "com\0tonkeeper\0"),
+            ("ton-connect.github.io", "io\0github\0ton-connect\0"),
+            ("tONkEEpEr.CoM", "com\0tonkeeper\0"),
+            ("tonkeeper.com.", "com\0tonkeeper\0"),
+            ("tonkeeper", "tonkeeper\0"),
+            ("tonkeeper.", "tonkeeper\0"),
+            (".", "\0"),
+            ("пример.com", "com\0xn--e1afmkfd\0"),
+            ("example.中国", "xn--fiqs8s\0example\0"),
+            ("اختبار", "xn--mgbachtv\0"),
+        ] {
+            assert_eq!(tep81_domain(domain)?, expected.as_bytes());
+        }
+
+        let label_63 = format!("{}.com", "a".repeat(63));
+        assert!(tep81_domain(&label_63).is_ok());
+        let encoded_126 = format!("{}.{}.com", "a".repeat(63), "b".repeat(57));
+        assert_eq!(tep81_domain(&encoded_126)?.len(), 126);
+        Ok(())
+    }
+
+    /// Negative vectors ported from the same Tonkeeper iOS suite.
+    #[test]
+    fn tep81_domain_rejects_tonkeeper_ios_boundary_cases() {
+        let label_64 = format!("{}.com", "a".repeat(64));
+        let encoded_127 = format!("{}.{}.com", "a".repeat(63), "b".repeat(58));
+        for invalid in [
+            String::new(),
+            "bad..com".to_owned(),
+            "bad domain.com".to_owned(),
+            "bad\u{0007}bell.com".to_owned(),
+            ".com".to_owned(),
+            "  example.com  ".to_owned(),
+            label_64,
+            encoded_127,
+        ] {
+            assert!(tep81_domain(&invalid).is_err(), "accepted {invalid:?}");
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn tep81_domain_reverses_arbitrary_valid_ascii_labels(
+            labels in proptest::collection::vec("[a-z]{1,20}", 1..5),
+            trailing_dot in any::<bool>(),
+        ) {
+            let mut domain = labels.join(".");
+            if trailing_dot {
+                domain.push('.');
+            }
+            let mut expected = Vec::new();
+            for label in labels.iter().rev() {
+                expected.extend_from_slice(label.as_bytes());
+                expected.push(0);
+            }
+            prop_assert_eq!(tep81_domain(&domain), Ok(expected));
+        }
     }
 
     #[test]

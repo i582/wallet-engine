@@ -24,6 +24,39 @@ pub struct FriendlyAddress {
 }
 
 impl FriendlyAddress {
+    /// Encodes a raw basechain or masterchain address in canonical TEP-2 form.
+    pub fn from_raw(
+        raw: RawAccountAddress,
+        bounceable: bool,
+        test_only: bool,
+    ) -> Result<Self, FriendlyAddressError> {
+        let workchain = i8::try_from(raw.workchain()).map_err(|_| FriendlyAddressError)?;
+        if !matches!(workchain, -1 | 0) {
+            return Err(FriendlyAddressError);
+        }
+        let mut tag = if bounceable {
+            BOUNCEABLE_TAG
+        } else {
+            NON_BOUNCEABLE_TAG
+        };
+        if test_only {
+            tag |= TEST_ONLY_TAG;
+        }
+
+        let mut bytes = Vec::with_capacity(FRIENDLY_ADDRESS_BYTES);
+        bytes.push(tag);
+        bytes.extend_from_slice(&workchain.to_be_bytes());
+        bytes.extend_from_slice(raw.hash());
+        let checksum = Crc::<u16>::new(&CRC_16_XMODEM).checksum(&bytes);
+        bytes.extend_from_slice(&checksum.to_be_bytes());
+        Ok(Self {
+            encoded: URL_SAFE_NO_PAD.encode(bytes),
+            raw,
+            bounceable,
+            test_only,
+        })
+    }
+
     /// Returns the exact canonical base64url wire representation.
     #[must_use]
     pub fn as_str(&self) -> &str {
@@ -81,6 +114,9 @@ impl TryFrom<&str> for FriendlyAddress {
             _ => return Err(FriendlyAddressError),
         };
         let workchain = i8::from_be_bytes([*bytes.get(1).ok_or(FriendlyAddressError)?]);
+        if !matches!(workchain, -1 | 0) {
+            return Err(FriendlyAddressError);
+        }
         let hash = <[u8; 32]>::try_from(bytes.get(2..34).ok_or(FriendlyAddressError)?)
             .map_err(|_| FriendlyAddressError)?;
         Ok(Self {
@@ -177,5 +213,97 @@ mod tests {
                 "accepted {value}"
             );
         }
+    }
+
+    /// Ported from `packages/sdk/tests/utils/address.test.ts` in the official
+    /// TypeScript SDK at `beb31b373e0d9db4b7d0bfd55a1ab0d0a439b74a`.
+    #[test]
+    fn matches_all_typescript_friendly_address_vectors() -> Result<(), Box<dyn std::error::Error>> {
+        let hash = [0x33_u8; 32];
+        for (encoded, workchain, bounceable, test_only) in [
+            (
+                "Ef8zMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM0vF",
+                -1,
+                true,
+                false,
+            ),
+            (
+                "Uf8zMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMxYA",
+                -1,
+                false,
+                false,
+            ),
+            (
+                "kf8zMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM_BP",
+                -1,
+                true,
+                true,
+            ),
+            (
+                "0f8zMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM62K",
+                -1,
+                false,
+                true,
+            ),
+            (
+                "EQAzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM7SN",
+                0,
+                true,
+                false,
+            ),
+            (
+                "UQAzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM-lI",
+                0,
+                false,
+                false,
+            ),
+            (
+                "kQAzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMw8H",
+                0,
+                true,
+                true,
+            ),
+            (
+                "0QAzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM1LC",
+                0,
+                false,
+                true,
+            ),
+        ] {
+            let parsed = FriendlyAddress::try_from(encoded)?;
+            assert_eq!(
+                parsed.raw_address(),
+                RawAccountAddress::new(workchain, hash)
+            );
+            assert_eq!(parsed.is_bounceable(), bounceable);
+            assert_eq!(parsed.is_test_only(), test_only);
+            assert_eq!(
+                FriendlyAddress::from_raw(parsed.raw_address(), bounceable, test_only)?,
+                parsed
+            );
+        }
+        Ok(())
+    }
+
+    /// Negative vectors ported from the same TypeScript suite.
+    #[test]
+    fn rejects_all_typescript_friendly_address_error_vectors() {
+        for invalid in [
+            "invalid-base64-address!@#$%",
+            "Ef8zMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM0vG",
+            "Ef8zMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM0v",
+            "Ef8zMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM0vFAA",
+            "UQEzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM2SU",
+            "UAAzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM3Vt",
+        ] {
+            assert!(
+                FriendlyAddress::try_from(invalid).is_err(),
+                "accepted {invalid}"
+            );
+        }
+        assert!(
+            FriendlyAddress::from_raw(RawAccountAddress::new(1, [0x33_u8; 32]), false, false)
+                .is_err()
+        );
     }
 }

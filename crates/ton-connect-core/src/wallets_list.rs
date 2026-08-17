@@ -94,13 +94,25 @@ pub struct WalletInfoConfig {
     /// HTTPS PNG icon URL.
     pub image: HttpsUrl,
     /// Optional reserved TON DNS name.
+    #[serde(
+        default,
+        deserialize_with = "crate::value::deserialize_optional_non_null"
+    )]
     pub tondns: Option<String>,
     /// HTTPS wallet information page.
     pub about_url: HttpsUrl,
     /// HTTPS universal-link base required by an SSE bridge.
+    #[serde(
+        default,
+        deserialize_with = "crate::value::deserialize_optional_non_null"
+    )]
     pub universal_url: Option<HttpsUrl>,
     /// Optional custom wallet deep-link prefix.
-    #[serde(rename = "deepLink")]
+    #[serde(
+        rename = "deepLink",
+        default,
+        deserialize_with = "crate::value::deserialize_optional_non_null"
+    )]
     pub deep_link: Option<String>,
     /// One or two distinct bridge transports.
     pub bridge: NonEmptyVec<WalletBridge>,

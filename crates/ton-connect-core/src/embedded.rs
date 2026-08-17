@@ -178,11 +178,23 @@ impl<'de> Deserialize<'de> for WireTransactionPayload {
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct WireRawTransaction {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::value::deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     f: Option<AccountAddress>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::value::deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     n: Option<NetworkId>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::value::deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     vu: Option<u64>,
     ms: NonEmptyVec<WireMessage>,
 }
@@ -190,11 +202,23 @@ struct WireRawTransaction {
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct WireStructuredTransaction {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::value::deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     f: Option<AccountAddress>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::value::deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     n: Option<NetworkId>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::value::deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     vu: Option<u64>,
     i: NonEmptyVec<WireItem>,
 }
@@ -204,11 +228,23 @@ struct WireStructuredTransaction {
 struct WireMessage {
     a: FriendlyAddress,
     am: DecimalString,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::value::deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     p: Option<CellBoc>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::value::deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     si: Option<CellBoc>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::value::deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     ec: Option<ExtraCurrencies>,
 }
 
@@ -218,44 +254,104 @@ enum WireItem {
     Ton {
         a: FriendlyAddress,
         am: DecimalString,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         p: Option<CellBoc>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         si: Option<CellBoc>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         ec: Option<ExtraCurrencies>,
     },
     Jetton {
         ma: AccountAddress,
         d: AccountAddress,
         am: DecimalString,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         aa: Option<DecimalString>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         qi: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         rd: Option<AccountAddress>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         cp: Option<CellBoc>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         fa: Option<DecimalString>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         fp: Option<CellBoc>,
     },
     Nft {
         na: AccountAddress,
         no: AccountAddress,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         aa: Option<DecimalString>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         qi: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         rd: Option<AccountAddress>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         cp: Option<CellBoc>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         fa: Option<DecimalString>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         fp: Option<CellBoc>,
     },
 }
@@ -269,9 +365,17 @@ enum WireSignDataMethod {
 #[derive(Deserialize, Serialize)]
 struct WireSignDataRequest {
     m: WireSignDataMethod,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::value::deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     n: Option<NetworkId>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::value::deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     f: Option<AccountAddress>,
     #[serde(flatten)]
     payload: WireSignDataPayload,

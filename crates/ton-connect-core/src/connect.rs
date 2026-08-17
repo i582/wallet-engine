@@ -80,6 +80,10 @@ pub struct UnsupportedConnectItemError;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TonAddressItemWire {
+    #[serde(
+        default,
+        deserialize_with = "crate::value::deserialize_optional_non_null"
+    )]
     network: Option<NetworkId>,
 }
 
@@ -362,10 +366,17 @@ enum DetailedFeature {
         max_messages: u32,
         #[serde(
             rename = "extraCurrencySupported",
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
             skip_serializing_if = "Option::is_none"
         )]
         extra_currency_supported: Option<bool>,
-        #[serde(rename = "itemTypes", skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "itemTypes",
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         item_types: Option<Vec<StructuredItemType>>,
     },
     #[serde(rename = "SignData")]
@@ -376,10 +387,17 @@ enum DetailedFeature {
         max_messages: u32,
         #[serde(
             rename = "extraCurrencySupported",
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
             skip_serializing_if = "Option::is_none"
         )]
         extra_currency_supported: Option<bool>,
-        #[serde(rename = "itemTypes", skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "itemTypes",
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         item_types: Option<Vec<StructuredItemType>>,
     },
     #[serde(rename = "EmbeddedRequest")]
@@ -783,7 +801,11 @@ numeric_enum_serde!(ConnectItemErrorCode {
 #[serde(deny_unknown_fields)]
 struct ConnectItemErrorBody {
     code: ConnectItemErrorCode,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::value::deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     message: Option<String>,
 }
 
@@ -919,7 +941,11 @@ pub enum ConnectEvent {
         /// Requested item replies and wallet capabilities.
         payload: ConnectEventPayload,
         /// Optional response to an embedded request.
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "crate::value::deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
         response: Option<EmbeddedResponse>,
     },
     /// Failed connection.

@@ -4,6 +4,17 @@ use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use thiserror::Error;
 
+/// Deserializes a field that can be absent but cannot contain explicit `null`.
+pub(crate) fn deserialize_optional_non_null<'de, D, T>(
+    deserializer: D,
+) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
 /// Protocol object that is valid only when it contains no properties.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct EmptyObject;
@@ -465,6 +476,40 @@ mod tests {
         assert!(Base64Value::try_from("-_8").is_ok());
         assert!(Base64Value::try_from("+/8_").is_err());
         assert!(Base64Value::try_from("a==").is_err());
+    }
+
+    /// Ported from both TypeScript Base64 suites at
+    /// `beb31b373e0d9db4b7d0bfd55a1ab0d0a439b74a`.
+    #[test]
+    fn decodes_all_applicable_typescript_base64_vectors() -> Result<(), ValueError> {
+        let text = "test=string example: { a: \"_b&%\" }";
+        let encoded = Base64Value::try_from("dGVzdD1zdHJpbmcgZXhhbXBsZTogeyBhOiAiX2ImJSIgfQ==")?;
+        assert_eq!(encoded.decode()?, text.as_bytes());
+
+        let object =
+            Base64Value::try_from("eyJhIjoiMTIzJiQlLT0iLCJiIjpbMSwyXSwiYyI6eyJ4IjpudWxsfX0=")?;
+        assert_eq!(
+            object.decode()?,
+            br#"{"a":"123&$%-=","b":[1,2],"c":{"x":null}}"#
+        );
+
+        let bytes = [
+            186, 172, 126, 137, 246, 202, 196, 52, 232, 0, 13, 167, 173, 31, 102, 124, 154, 83,
+            137, 111, 255, 109, 138, 217, 10, 134, 120, 9, 141, 24, 133, 33,
+        ];
+        let encoded = general_purpose::STANDARD.encode(bytes);
+        assert_eq!(Base64Value::try_from(encoded)?.decode()?, bytes);
+
+        for normalized_by_sdk in ["te6ccAA-", "AQ", "AQI", "AQID"] {
+            assert!(
+                Base64Value::try_from(normalized_by_sdk).is_ok(),
+                "rejected {normalized_by_sdk}"
+            );
+        }
+        // The SDK's `normalizeBase64` is only a textual normalizer and accepts
+        // this value. The protocol decoder rejects its non-zero trailing bits.
+        assert!(Base64Value::try_from("te6cc-_").is_err());
+        Ok(())
     }
 
     #[test]
