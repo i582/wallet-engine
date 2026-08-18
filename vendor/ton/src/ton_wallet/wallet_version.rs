@@ -19,6 +19,7 @@ pub enum WalletVersion {
     V4R1,
     V4R2,
     V5R1,
+    Wallet,
     HLV1R1,
     HLV1R2,
     HLV2,
@@ -38,6 +39,7 @@ impl WalletVersion {
             V3R1 | V3R2 => WalletV3Data::new(wallet_id, public_key).to_cell(),
             V4R1 | V4R2 => WalletV4Data::new(wallet_id, public_key).to_cell(),
             V5R1 => WalletV5Data::new(wallet_id, public_key).to_cell(),
+            Wallet => WalletData::new(wallet_id, public_key).to_cell(),
             HLV2R2 => WalletHLV2R2Data::new(wallet_id, public_key).to_cell(),
             HLV1R1 | HLV1R2 | HLV2 | HLV2R1 => {
                 bail_ton_core!("initial_data for {version:?} is unsupported");
@@ -104,7 +106,7 @@ impl WalletVersion {
                 msgs,
             }
             .to_cell(),
-            V5R1 => WalletV5ExtMsgBody {
+            V5R1 | Wallet => WalletV5ExtMsgBody {
                 wallet_id,
                 valid_until,
                 msg_seqno,
@@ -126,7 +128,7 @@ impl WalletVersion {
     ) -> Result<TonCell, TonError> {
         match version {
             // different order
-            V5R1 => {
+            V5R1 | Wallet => {
                 let mut builder = TonCell::builder();
                 builder.write_cell(msg_cell)?;
                 builder.write_bits(sign, sign.len() * 8)?;

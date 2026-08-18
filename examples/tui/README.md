@@ -6,7 +6,7 @@ Swift, Kotlin, TypeScript, or generated bindings.
 
 The application can:
 
-- create a V5R1 testnet wallet;
+- create a testnet wallet;
 - import 24 recovery words;
 - restore the wallet after a restart;
 - refresh the balance and activity;

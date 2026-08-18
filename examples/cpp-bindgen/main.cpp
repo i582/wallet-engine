@@ -1669,7 +1669,7 @@ private:
         add_divider(stats, card);
         add_stat(stats, QStringLiteral("2"), QStringLiteral("NETWORKS"), card);
         add_divider(stats, card);
-        add_stat(stats, QStringLiteral("V5R1"), QStringLiteral("WALLET VERSION"), card);
+        add_stat(stats, QStringLiteral("Wallet"), QStringLiteral("CONTRACT"), card);
         stats->addStretch();
         layout->addLayout(stats);
         layout->addSpacing(8);
@@ -1737,7 +1737,7 @@ private:
         title->setObjectName(QStringLiteral("cardTitle"));
         layout->addWidget(title);
         auto *subtitle = new QLabel(
-            QStringLiteral("A new V5R1 wallet and recovery phrase"),
+            QStringLiteral("A new wallet and recovery phrase"),
             card
         );
         subtitle->setObjectName(QStringLiteral("muted"));

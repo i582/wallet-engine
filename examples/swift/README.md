@@ -5,7 +5,7 @@ Wallet Engine API directly. It does not depend on the previous wallet runtime.
 
 The application can:
 
-- create a testnet V5R1 wallet;
+- create a testnet wallet;
 - store its recovery phrase in Keychain;
 - show the balance and recent activity;
 - load older transactions;

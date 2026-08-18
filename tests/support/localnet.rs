@@ -211,7 +211,7 @@ impl LocalnetHttpHost {
             .and_then(|mnemonic| mnemonic.to_key_pair())
             .map_err(|error| error.to_string())?;
         let wallet = TonWallet::new_with_params(
-            WalletVersion::V5R1,
+            WalletVersion::Wallet,
             key_pair,
             0,
             WALLET_V5R1_ID_DEFAULT_TESTNET,

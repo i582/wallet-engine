@@ -92,7 +92,7 @@ struct SettingsView: View {
 
             Section("Network") {
                 LabeledContent("Network", value: "Testnet")
-                LabeledContent("Wallet version", value: "V5R1")
+                LabeledContent("Contract", value: "Wallet")
             }
 
             Section("Wallet data") {

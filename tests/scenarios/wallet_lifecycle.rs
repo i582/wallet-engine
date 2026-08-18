@@ -23,7 +23,7 @@ fn importing_known_words_derives_the_expected_testnet_wallet() {
     let fixture = test_wallet();
     let words = fixture.recovery_words();
 
-    wallet_lifecycle_scenario("known recovery words derive a stable V5R1 address")
+    wallet_lifecycle_scenario("known recovery words derive a stable wallet address")
         .when(import_wallet(
             "import",
             "imported-wallet",
@@ -31,10 +31,7 @@ fn importing_known_words_derives_the_expected_testnet_wallet() {
             words.clone(),
         ))
         .then(descriptor_is("import", "imported-wallet", Network::Testnet))
-        .then(descriptor_address_is(
-            "import",
-            fixture.testnet_v5_address(),
-        ))
+        .then(descriptor_address_is("import", fixture.testnet_address()))
         .then(protected_secret_is_stored("import"))
         .when(reveal_wallet("reveal", "import"))
         .then(phrase_is("reveal", words))
@@ -43,10 +40,10 @@ fn importing_known_words_derives_the_expected_testnet_wallet() {
 }
 
 #[test]
-fn network_changes_the_v5r1_contract_address() {
+fn network_changes_the_wallet_contract_address() {
     let words = test_wallet().recovery_words();
 
-    wallet_lifecycle_scenario("the same key uses a network-specific V5R1 wallet id")
+    wallet_lifecycle_scenario("the same key uses a network-specific wallet id")
         .when(import_wallet(
             "testnet",
             "testnet-wallet",

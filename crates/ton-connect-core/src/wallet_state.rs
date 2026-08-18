@@ -176,6 +176,8 @@ pub enum StandardWalletVersion {
     V4R2,
     /// Wallet V5 revision 1.
     V5R1,
+    /// The wallet-engine contract with one-time public-key rotation.
+    Wallet,
 }
 
 /// Public state extracted from a recognized standard wallet `StateInit`.
@@ -350,6 +352,9 @@ fn version_from_code(code: &TonCell) -> Result<Option<StandardWalletVersion>, Wa
         "20834b7b72b112147e1b2fb457b84e74d1a30f04f737d4f62a668e9552d2b72f" => {
             Some(StandardWalletVersion::V5R1)
         }
+        "99cca09ed5dfc604fbfe67e1d2d69a00ba74852b2365a23b49628b5633797898" => {
+            Some(StandardWalletVersion::Wallet)
+        }
         _ => None,
     })
 }
@@ -373,7 +378,7 @@ fn extract_public_key(
         | StandardWalletVersion::V3R2
         | StandardWalletVersion::V4R1
         | StandardWalletVersion::V4R2 => 64,
-        StandardWalletVersion::V5R1 => 65,
+        StandardWalletVersion::V5R1 | StandardWalletVersion::Wallet => 65,
     };
     let _ = parser
         .read_bits(prefix_bits)
@@ -386,7 +391,10 @@ fn extract_public_key(
 
     if matches!(
         version,
-        StandardWalletVersion::V4R1 | StandardWalletVersion::V4R2 | StandardWalletVersion::V5R1
+        StandardWalletVersion::V4R1
+            | StandardWalletVersion::V4R2
+            | StandardWalletVersion::V5R1
+            | StandardWalletVersion::Wallet
     ) && parser
         .read_bit()
         .map_err(|_| WalletStateError::InvalidWalletData)?
@@ -394,6 +402,13 @@ fn extract_public_key(
         let _ = parser
             .read_next_ref()
             .map_err(|_| WalletStateError::InvalidWalletData)?;
+    }
+    if matches!(version, StandardWalletVersion::Wallet)
+        && parser
+            .read_bit()
+            .map_err(|_| WalletStateError::InvalidWalletData)?
+    {
+        return Err(WalletStateError::InvalidWalletData);
     }
     parser
         .ensure_empty()
@@ -426,6 +441,7 @@ mod tests {
     const V4R1_CODE: &str = include_str!("testdata/wallet_v4r1.code");
     const V4R2_CODE: &str = include_str!("testdata/wallet_v4r2.code");
     const V5R1_CODE: &str = include_str!("testdata/wallet_v5.code");
+    const WALLET_CODE: &str = include_str!("testdata/wallet_v5_experimental.code");
 
     type TestResult = Result<(), Box<dyn Error>>;
 
@@ -469,7 +485,7 @@ mod tests {
                 builder.write_num(&0_u32, 32)?;
                 builder.write_num(&0x29a9_a317_u32, 32)?;
             }
-            StandardWalletVersion::V5R1 => {
+            StandardWalletVersion::V5R1 | StandardWalletVersion::Wallet => {
                 builder.write_bit(true)?;
                 builder.write_num(&0_u32, 32)?;
                 builder.write_num(&0x7fff_ff11_u32, 32)?;
@@ -478,8 +494,14 @@ mod tests {
         builder.write_bits(public_key, 256)?;
         if matches!(
             version,
-            StandardWalletVersion::V4R1 | StandardWalletVersion::V4R2 | StandardWalletVersion::V5R1
+            StandardWalletVersion::V4R1
+                | StandardWalletVersion::V4R2
+                | StandardWalletVersion::V5R1
+                | StandardWalletVersion::Wallet
         ) {
+            builder.write_bit(false)?;
+        }
+        if matches!(version, StandardWalletVersion::Wallet) {
             builder.write_bit(false)?;
         }
         Ok(builder.build()?)
@@ -510,6 +532,7 @@ mod tests {
             (V4R1_CODE, StandardWalletVersion::V4R1),
             (V4R2_CODE, StandardWalletVersion::V4R2),
             (V5R1_CODE, StandardWalletVersion::V5R1),
+            (WALLET_CODE, StandardWalletVersion::Wallet),
         ];
 
         for (code, version) in fixtures {

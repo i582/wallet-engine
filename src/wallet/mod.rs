@@ -1,4 +1,4 @@
-//! Wallet lifecycle, key derivation, and V5R1 transfer construction.
+//! Wallet lifecycle, key derivation, and transfer construction.
 //!
 //! The public API creates and imports wallets while the host stores recovery
 //! words. Private submodules derive wallet keys and build signed transfers.
@@ -11,7 +11,7 @@ use std::sync::Arc;
 use ton::ton_core::types::TonAddress;
 
 use self::crypto::{
-    SensitiveMnemonic, derive_v5r1_public_state, derive_v5r1_wallet, generate_mnemonic,
+    SensitiveMnemonic, derive_wallet, derive_wallet_public_state, generate_mnemonic,
 };
 use crate::TonAddressString;
 use crate::domain::{
@@ -31,7 +31,7 @@ pub struct WalletDescriptor {
     pub record_id: String,
     /// The derived friendly non-bounceable TON address.
     pub address: TonAddressString,
-    /// The raw 32-byte Ed25519 public key used by the V5R1 contract.
+    /// The raw 32-byte Ed25519 public key used by the wallet contract.
     ///
     /// This is safe to persist. It lets the engine emulate a first deployment
     /// before it asks the host to unlock the recovery phrase.
@@ -42,7 +42,7 @@ pub struct WalletDescriptor {
     pub secret_ref: ProtectedSecretRef,
 }
 
-/// Requests generation of a new V5R1 wallet.
+/// Requests generation of a new wallet account.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateWalletRequest {
@@ -114,7 +114,7 @@ pub enum WalletLifecycleError {
     /// The recovery phrase is not a valid 24-word TON mnemonic.
     #[error("invalid recovery phrase")]
     InvalidRecoveryPhrase,
-    /// Rust cannot construct the requested V5R1 wallet address.
+    /// Rust cannot construct the requested wallet address.
     #[error("wallet address derivation failed")]
     AddressDerivationFailed,
     /// The protected mnemonic derives a different address from the descriptor.
@@ -162,7 +162,7 @@ impl WalletLifecycle {
         Arc::new(Self { platform_host })
     }
 
-    /// Generates and derives a V5R1 wallet, then stores its mnemonic through the host.
+    /// Generates and derives a wallet account, then stores its mnemonic.
     ///
     /// Persist `descriptor` after this method succeeds. Present the recovery
     /// phrase once, then release all application copies of it.
@@ -186,7 +186,7 @@ impl WalletLifecycle {
         })
     }
 
-    /// Validates and imports an entered mnemonic as a V5R1 wallet.
+    /// Validates and imports an entered mnemonic as a wallet account.
     ///
     /// The host stores the phrase with a user-presence requirement. The result
     /// contains only metadata that is safe for normal application storage.
@@ -282,7 +282,7 @@ fn derive_descriptor(
     let phrase = secret
         .as_str()
         .map_err(|_| WalletLifecycleError::InvalidRecoveryPhrase)?;
-    let wallet = derive_v5r1_wallet(phrase, network)
+    let wallet = derive_wallet(phrase, network)
         .map_err(|_| WalletLifecycleError::AddressDerivationFailed)?;
 
     Ok(WalletDescriptor {
@@ -303,7 +303,7 @@ fn derive_address(
         .as_str()
         .map_err(|_| WalletLifecycleError::InvalidRecoveryPhrase)?;
 
-    let wallet = derive_v5r1_wallet(phrase, network)
+    let wallet = derive_wallet(phrase, network)
         .map_err(|_| WalletLifecycleError::AddressDerivationFailed)?;
 
     Ok(wallet.address.clone())
@@ -327,8 +327,9 @@ fn secret_ref_for(record_id: &str) -> ProtectedSecretRef {
 fn validate_descriptor(descriptor: &WalletDescriptor) -> Result<(), WalletLifecycleError> {
     validate_record_id(&descriptor.record_id)?;
 
-    let (derived_address, _) = derive_v5r1_public_state(&descriptor.public_key, descriptor.network)
-        .map_err(|_| WalletLifecycleError::InvalidRecordId)?;
+    let (derived_address, _) =
+        derive_wallet_public_state(&descriptor.public_key, descriptor.network)
+            .map_err(|_| WalletLifecycleError::InvalidRecordId)?;
 
     if descriptor.secret_ref != secret_ref_for(&descriptor.record_id)
         || descriptor.address.as_address() != &derived_address
@@ -401,7 +402,7 @@ mod tests {
     fn valid_descriptor() -> WalletDescriptor {
         let record_id = "wallet-record";
         let public_key = vec![0; 32];
-        let (address, _) = derive_v5r1_public_state(&public_key, Network::Testnet)
+        let (address, _) = derive_wallet_public_state(&public_key, Network::Testnet)
             .expect("32-byte public key derives a wallet");
 
         WalletDescriptor {

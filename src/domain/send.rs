@@ -30,7 +30,7 @@ impl SendAmount {
     }
 }
 
-/// Requests one signed V5R1 transfer.
+/// Requests one signed wallet transfer.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct SendRequest {
@@ -71,7 +71,7 @@ pub struct SendPreview {
     pub amount: SendAmount,
     /// The optional plaintext comment encoded into the emulated message.
     pub comment: Option<String>,
-    /// The V5R1 message expiration timestamp used only by this emulation.
+    /// The wallet message expiration timestamp used only by this emulation.
     /// A real send calculates a new timestamp from fresh provider state.
     pub valid_until: u64,
     /// The complete fake-signed external message submitted for emulation.

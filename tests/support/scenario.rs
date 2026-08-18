@@ -1485,7 +1485,7 @@ impl ScenarioRunner {
             }
 
             let host = Arc::new(LocalnetHttpHost::start(
-                test_wallet().testnet_v5_address(),
+                test_wallet().testnet_address(),
                 &wallet.balance_nanograms,
             )?);
             let provider_base_url = host.provider_base_url();
@@ -1515,7 +1515,7 @@ impl ScenarioRunner {
         let client_config = WalletClientConfig {
             record_id: NonEmptyString::try_from(TEST_RECORD_ID)
                 .expect("scenario record identifier is valid"),
-            address: TonAddressString::try_from(test_wallet().testnet_v5_address())
+            address: TonAddressString::try_from(test_wallet().testnet_address())
                 .expect("scenario wallet address is valid"),
             public_key: test_wallet().public_key(),
             local_secret_ref,
@@ -1543,7 +1543,7 @@ impl ScenarioRunner {
             scripted_http_host: scripted_host,
             localnet_http_host: localnet_host,
             secret_ref,
-            address: test_wallet().testnet_v5_address().to_owned(),
+            address: test_wallet().testnet_address().to_owned(),
             operations: HashMap::new(),
             results: HashMap::new(),
             activity_cursors: HashMap::new(),

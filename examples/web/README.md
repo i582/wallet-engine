@@ -1,7 +1,7 @@
 # Web wallet example
 
 This example shows the smallest complete browser flow for `@ton/wallet-engine`.
-It creates a Wallet V5R1 testnet wallet. Then it loads the account and activity
+It creates a testnet wallet. Then it loads the account and activity
 snapshot through the browser host callbacks.
 
 The send screen calls `previewSend` before confirmation. It shows Toncenter

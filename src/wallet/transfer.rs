@@ -1,4 +1,4 @@
-//! V5R1 transfer construction and signing.
+//! Wallet transfer construction and signing.
 //!
 //! The wallet client passes mnemonic bytes to this private module only after
 //! host authorization. The module returns a signed BOC and its normalized
@@ -25,7 +25,7 @@ use crate::{
     SendRequest, TonAddressString,
 };
 
-use super::crypto::{WalletCryptoError, derive_v5r1_public_state, derive_v5r1_wallet};
+use super::crypto::{WalletCryptoError, derive_wallet, derive_wallet_public_state};
 use super::send::{FreshSendAccount, PreparedTransfer};
 
 const EXACT_AMOUNT_SEND_MODE: u8 = SEND_MODE_PAY_FEES_SEPARATELY | SEND_MODE_IGNORE_ERRORS;
@@ -69,7 +69,7 @@ pub(crate) fn prepare_transfer(
     valid_until: u64,
 ) -> Result<PreparedTransfer, TransferError> {
     let mnemonic = std::str::from_utf8(mnemonic_bytes).map_err(TransferError::MnemonicEncoding)?;
-    let wallet = derive_v5r1_wallet(mnemonic, network).map_err(TransferError::WalletDerivation)?;
+    let wallet = derive_wallet(mnemonic, network).map_err(TransferError::WalletDerivation)?;
     let destination = request.destination.clone();
 
     let (internal, send_mode) = build_internal_message(
@@ -118,7 +118,7 @@ pub(crate) fn prepare_transfer(
     })
 }
 
-/// Builds a complete V5R1 transfer with a placeholder signature.
+/// Builds a complete wallet transfer with a placeholder signature.
 ///
 /// Toncenter validates the message body and actions with `ignore_chksig=true`.
 /// An uninitialized wallet also receives its deterministic `StateInit`, derived
@@ -145,7 +145,7 @@ pub(crate) fn prepare_transfer_emulation(
         u32::try_from(valid_until).map_err(|_| TransferError::ExpirationOutOfRange)?;
 
     let body = WalletVersion::build_ext_in_body_with_modes(
-        WalletVersion::V5R1,
+        WalletVersion::Wallet,
         wallet_valid_until,
         account.seqno,
         wallet_id,
@@ -172,7 +172,7 @@ pub(crate) fn prepare_transfer_emulation(
 
     let mut external = Msg::new(info, signed);
     if account.needs_state_init() {
-        let (derived_source, state_init) = derive_v5r1_public_state(public_key, network)
+        let (derived_source, state_init) = derive_wallet_public_state(public_key, network)
             .map_err(TransferError::WalletDerivation)?;
         if &derived_source != source.as_address() {
             return Err(TransferError::PublicKeyMismatch);
@@ -234,7 +234,7 @@ pub(crate) fn derive_source(
     network: Network,
 ) -> Result<TonAddress, TransferError> {
     let mnemonic = std::str::from_utf8(mnemonic_bytes).map_err(TransferError::MnemonicEncoding)?;
-    let wallet = derive_v5r1_wallet(mnemonic, network).map_err(TransferError::WalletDerivation)?;
+    let wallet = derive_wallet(mnemonic, network).map_err(TransferError::WalletDerivation)?;
     Ok(wallet.address.clone())
 }
 
@@ -336,7 +336,7 @@ mod tests {
 
     #[test]
     fn undeployed_preview_rejects_a_public_key_for_another_source() {
-        let (source, _) = derive_v5r1_public_state(&[1_u8; 32], Network::Testnet)
+        let (source, _) = derive_wallet_public_state(&[1_u8; 32], Network::Testnet)
             .expect("source public key must derive");
         let source = TonAddressString::from_address(&source, Network::Testnet);
         let request = SendPreviewRequest {
