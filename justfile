@@ -222,6 +222,13 @@ example-c-build: bindings-c build-c
 example-c-run: example-c-build
     ./target/c-example/wallet_engine_c_example
 
+example-cpp-bindgen-build: bindings-cpp
+    cmake -S examples/cpp-bindgen -B target/cpp-bindgen-example
+    cmake --build target/cpp-bindgen-example
+
+example-cpp-bindgen-run: example-cpp-bindgen-build
+    ./target/cpp-bindgen-example/wallet_engine_cpp_bindgen_example
+
 c-check: test-c-abi-rust test-c example-c-build
 
 example-tui-run:
