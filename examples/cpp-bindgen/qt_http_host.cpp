@@ -118,8 +118,8 @@ wallet_engine::HttpResponse QtHttpHost::execute_http(
     }
 
     QUrl safe_url = url;
-    safe_url.setQuery({});
-    safe_url.setFragment({});
+    safe_url.setQuery(QString{});
+    safe_url.setFragment(QString{});
     const auto method = request.method == HttpMethod::kGet ?
         QStringLiteral("GET") : QStringLiteral("POST");
     app_log(
