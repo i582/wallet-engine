@@ -870,7 +870,7 @@ impl EngineWalletHarness {
         let account = lifecycle.ton_connect_account(descriptor.clone())?;
         let expected_account = engine_account_info()?;
         if account != expected_account
-            || descriptor.address.as_str() != test_wallet().testnet_v5_address()
+            || descriptor.address.as_str() != test_wallet().testnet_address()
         {
             return Err(failure(format!(
                 "wallet lifecycle derived unexpected localnet account: {account:?}"
@@ -2531,7 +2531,7 @@ fn wallet_account(wallet: &WalletFixture) -> TestResult<TonAddressItemReply> {
 
 /// Derives the public TON Connect account material used by the wallet-engine localnet profile.
 fn engine_account_info() -> TestResult<TonConnectAccountInfo> {
-    let (state, public_key) = test_v5_state(test_wallet().recovery_phrase_bytes())?;
+    let (state, public_key) = test_wallet_state(test_wallet().recovery_phrase_bytes())?;
     Ok(TonConnectAccountInfo {
         address: state.derive_address(0)?.to_string(),
         network: TON_TESTNET_NETWORK_ID.to_owned(),
@@ -2540,9 +2540,9 @@ fn engine_account_info() -> TestResult<TonConnectAccountInfo> {
     })
 }
 
-/// Derives a second V5R1 wallet `StateInit` used as a deterministic deployable contract.
+/// Derives a second wallet `StateInit` used as a deterministic deployable contract.
 fn test_deployment_target() -> TestResult<DeploymentTarget> {
-    let (state, _) = test_v5_state(test_wallet().other_recovery_phrase_bytes())?;
+    let (state, _) = test_wallet_state(test_wallet().other_recovery_phrase_bytes())?;
     let address = FriendlyAddress::from_raw(state.derive_address(0)?, true, true)?;
     Ok(DeploymentTarget {
         address: address.as_str().to_owned(),
@@ -2550,13 +2550,13 @@ fn test_deployment_target() -> TestResult<DeploymentTarget> {
     })
 }
 
-/// Builds a canonical testnet V5R1 `StateInit` and public key from one mnemonic.
-fn test_v5_state(mnemonic: &[u8]) -> TestResult<(WalletStateInit, Vec<u8>)> {
+/// Builds the testnet wallet `StateInit` and public key from one mnemonic.
+fn test_wallet_state(mnemonic: &[u8]) -> TestResult<(WalletStateInit, Vec<u8>)> {
     let mnemonic = std::str::from_utf8(mnemonic)?;
     let key_pair = Mnemonic::from_str(mnemonic, None)?.to_key_pair()?;
-    let code = WalletVersion::get_code(WalletVersion::V5R1)?.clone();
+    let code = WalletVersion::get_code(WalletVersion::Wallet)?.clone();
     let data = WalletVersion::get_default_data(
-        WalletVersion::V5R1,
+        WalletVersion::Wallet,
         &key_pair,
         WALLET_V5R1_ID_DEFAULT_TESTNET,
     )?;

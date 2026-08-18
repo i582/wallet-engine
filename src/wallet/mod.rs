@@ -435,7 +435,7 @@ fn sign_ton_connect_proof(
     let phrase = secret
         .as_str()
         .map_err(|_| WalletLifecycleError::InvalidRecoveryPhrase)?;
-    let wallet = derive_v5r1_wallet(phrase, request.descriptor.network)
+    let wallet = derive_wallet(phrase, request.descriptor.network)
         .map_err(|_| WalletLifecycleError::AddressDerivationFailed)?;
     if wallet.address != *request.descriptor.address.as_address()
         || wallet.key_pair.public_key.as_slice() != request.descriptor.public_key
@@ -469,7 +469,7 @@ fn derive_ton_connect_account(
 ) -> Result<TonConnectAccountInfo, WalletLifecycleError> {
     validate_descriptor(&descriptor)?;
     let (address, state_init) =
-        derive_v5r1_public_state(&descriptor.public_key, descriptor.network)
+        derive_wallet_public_state(&descriptor.public_key, descriptor.network)
             .map_err(|_| WalletLifecycleError::AddressDerivationFailed)?;
     let wallet_state_init = state_init
         .to_boc_base64()
@@ -647,7 +647,7 @@ mod tests {
         assert_eq!(info.network, "-3");
         assert_eq!(
             verified.version(),
-            ton_connect_core::StandardWalletVersion::V5R1
+            ton_connect_core::StandardWalletVersion::Wallet
         );
         Ok(())
     }

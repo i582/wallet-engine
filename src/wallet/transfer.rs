@@ -426,7 +426,7 @@ mod tests {
     #[test]
     fn preview_emulation_preserves_payload_and_state_init() {
         let public_key = [1_u8; 32];
-        let (source, _) = derive_v5r1_public_state(&public_key, Network::Testnet)
+        let (source, _) = derive_wallet_public_state(&public_key, Network::Testnet)
             .expect("source public key must derive");
         let source = TonAddressString::from_address(&source, Network::Testnet);
         let destination =
