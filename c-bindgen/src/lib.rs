@@ -2,6 +2,7 @@
 
 mod cli;
 mod enum_map;
+mod error_map;
 mod loader;
 mod model;
 mod naming;

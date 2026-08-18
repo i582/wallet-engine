@@ -1,0 +1,14 @@
+            {
+                size_t field_size = 0u;
+                WalletEngineAbiStatus status = wallet_engine_private_measure_{{FIELD_CODEC_NAME}}(
+                    value.payload.{{PAYLOAD_MEMBER_NAME}}.{{FIELD_C_NAME}},
+                    &field_size
+                );
+                if (status != WALLET_ENGINE_ABI_STATUS_OK
+                    || field_size > SIZE_MAX - wire_size) {
+                    return status != WALLET_ENGINE_ABI_STATUS_OK
+                        ? status
+                        : WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
+                }
+                wire_size += field_size;
+            }

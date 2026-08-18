@@ -168,6 +168,15 @@ impl TypeRegistry {
         self.register(key, registered)
     }
 
+    pub(super) fn reserve_c_name(&mut self, c_name: &str) -> Result<()> {
+        ensure!(
+            !self.c_names.contains(c_name),
+            "C type {c_name} is already registered"
+        );
+        self.c_names.insert(c_name.to_owned());
+        Ok(())
+    }
+
     pub(super) fn has_builtin_type(&self, builtin: BuiltinType) -> bool {
         self.builtin_types.contains(&builtin)
     }

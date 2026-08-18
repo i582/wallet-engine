@@ -1,0 +1,6 @@
+        case {{TAG_CONSTANT}}:
+            status = wallet_engine_private_write_i32(writer, INT32_C({{WIRE_TAG}}));
+            if (status != WALLET_ENGINE_ABI_STATUS_OK) {
+                return status;
+            }
+{{WRITE_FIELDS}}            return WALLET_ENGINE_ABI_STATUS_OK;

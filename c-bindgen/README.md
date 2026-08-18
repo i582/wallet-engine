@@ -15,11 +15,12 @@ The generator currently:
 - generates public C wrappers and codecs for supported optional values;
 - generates borrowed C list views and codecs for supported sequences;
 - generates field-for-field C views and codecs for supported records;
+- generates tag-plus-payload C values and codecs for supported rich errors;
 - compiles the generated facade as strict C11 in its test suite.
 
-Compound codecs, callback adapters, and export lists will be added on top of
-the normalized component model. The crate intentionally has no dependency on
-the `wallet-engine` or `c-bindings` crates.
+Remaining compound types, callback adapters, and export lists will be added on
+top of the normalized component model. The crate intentionally has no
+dependency on the `wallet-engine` or `c-bindings` crates.
 
 From the repository root, the experimental recipe builds the library and runs
 the generator without touching the production `bindings/c` output:
@@ -54,10 +55,11 @@ implemented. C++ compatibility is deliberately deferred until the C ABI is
 complete and stable.
 
 The current type slice discovers the builtins, flat non-error enums, supported
-optional values, sequences, and records used by the real `ComponentInterface`,
-records their public Rust-to-C mapping in the manifest, and generates borrowed
-views plus private wire helpers. Tests compile the facade with strict C11
-warnings and execute its codecs against known UniFFI wire values.
+optional values, sequences, records, and rich declared errors used by the real
+`ComponentInterface`, records their public Rust-to-C mapping in the manifest,
+and generates borrowed views plus private wire helpers. Tests compile the
+facade with strict C11 warnings and execute its codecs against known UniFFI
+wire values.
 
 ## Rust to C mapping
 
@@ -137,6 +139,7 @@ metadata; it never frees Rust-owned memory with the C allocator.
 | `Option<T>` | `RustBuffer` | one-byte `0`/`1` tag followed by nested `T` for `Some` |
 | `Vec<T>` / `Sequence<T>` | `RustBuffer` | big-endian `i32` item count followed by each nested `T` |
 | record | `RustBuffer` | fields serialized in their declared order without C padding |
+| rich error | `RustBuffer` | big-endian one-based `i32` variant tag followed by the selected payload fields |
 
 Lowering rejects malformed views, invalid UTF-8, lengths above `INT32_MAX`
 where UniFFI uses a signed 32-bit length, and arithmetic overflow. Lifting
@@ -144,10 +147,10 @@ checks buffer bounds and rejects trailing data for a complete `Bytes` value.
 
 The pure codec behavior is tested in `tests/codec.c`. That C11 executable
 checks exact wire bytes and write/read round trips for every integer width,
-booleans, strings, bytes, a flat enum, optional values, and sequences of
-scalars, strings, and flat enums, plus direct and nested records. The malformed
-cases cover truncated and trailing data, invalid UTF-8, impossible lengths,
-and unknown tags.
+booleans, strings, bytes, a flat enum, optional values, sequences of scalars,
+strings, and flat enums, direct and nested records, and a rich error with both
+fieldless and payload variants. The malformed cases cover truncated and
+trailing data, invalid UTF-8, impossible lengths, and unknown tags.
 
 ### Flat enums
 
@@ -176,8 +179,8 @@ directions, so an unknown public value or wire tag is rejected instead of being
 passed through accidentally.
 
 The current Wallet Engine component contains 15 supported flat non-error
-enums. Enums with payloads and enums used as declared errors remain planned
-separate slices.
+enums. Fielded non-error enums and flat declared errors remain separate planned
+slices; rich declared errors are described below.
 
 ### Optional values
 
@@ -226,7 +229,7 @@ and non-empty validation stays in the Rust custom-type lift implementation.
 | `Vec<T>` | `WalletEngineTListView { const T *data; size_t len; }` | Implemented for builtin and flat-enum items | Borrowed contiguous sequence. |
 | record `T` | `WalletEngineTView` | Implemented when every field type is registered | Fields are converted recursively. |
 | enum with fields | kind/tag plus generated payload union | Planned | Only the payload selected by the tag is active. |
-| error enum `E` | stable error code plus generated payload | Planned | Declared errors are separate from immediate ABI failures. |
+| rich error enum `E` | stable tag plus generated payload union | Implemented when every payload field type is registered | Declared errors are separate from immediate ABI failures. |
 
 For example, `Vec<String>` becomes `WalletEngineStringListView` containing
 `const WalletEngineStringView *data` and `size_t len`. UniFFI sequence results
@@ -259,6 +262,50 @@ The real Wallet Engine metadata currently produces 13 record views:
 `JournalCompareExchange`, and `ProtectedSecretRead`. Remaining records depend
 on custom types, payload enums, `Option<Record>`, or `Sequence<Record>` and are
 enabled by those later type slices.
+
+### Declared rich errors
+
+An error gets into the C model only when it is a local, non-remote enum that
+UniFFI reports as a declared `throws` type. `thiserror::Error` alone is not
+enough: the Rust type must also be exported with `uniffi::Error`. Errors from
+dependency crates that are not part of the Wallet Engine `ComponentInterface`
+are never generated.
+
+The public C representation uses a stable zero-based tag and a named payload
+union. For example:
+
+```c
+typedef uint32_t WalletEngineHttpHostErrorTag;
+#define WALLET_ENGINE_HTTP_HOST_ERROR_FAILED ((WalletEngineHttpHostErrorTag)0u)
+
+typedef struct WalletEngineHttpHostErrorFailedPayload {
+    WalletEngineHttpHostErrorKind kind;
+    WalletEngineStringView diagnostic;
+} WalletEngineHttpHostErrorFailedPayload;
+
+typedef union WalletEngineHttpHostErrorPayload {
+    WalletEngineHttpHostErrorFailedPayload failed;
+} WalletEngineHttpHostErrorPayload;
+
+typedef struct WalletEngineHttpHostError {
+    WalletEngineHttpHostErrorTag tag;
+    WalletEngineHttpHostErrorPayload payload;
+} WalletEngineHttpHostError;
+```
+
+The private codec explicitly maps that tag to UniFFI's one-based `i32` wire
+tag and serializes only the selected payload. Unknown public and wire tags,
+malformed nested fields, truncation, trailing bytes, and size overflow are
+rejected. Payload views lifted from Rust remain valid only while the owning
+`RustBuffer` is alive; the later callable wrapper will keep it alive through
+the result callback.
+
+The real metadata currently produces four rich error types:
+`HttpHostError`, `JournalHostError`, `ProtectedSecretHostError`, and
+`WalletLifecycleError`. `WalletClientError` is deliberately not generated
+partially: several variants contain `UnsignedDecimalString`, so the complete
+error becomes available after the custom-type slice. The fielded non-error
+`SendAmount` is also still pending.
 
 ### Objects and callables
 

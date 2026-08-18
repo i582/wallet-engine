@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 
-use crate::{model::BindingsModel, template, type_map::BuiltinType};
+use crate::{error_map::ErrorType, model::BindingsModel, template, type_map::BuiltinType};
 
 const HEADER_TEMPLATE: &str = include_str!("../../templates/header.h.tmpl");
 const STRING_VIEW_TEMPLATE: &str = include_str!("../../templates/types/string_view.h.tmpl");
@@ -12,6 +12,11 @@ const RECORD_TEMPLATE: &str = include_str!("../../templates/types/record.h.tmpl"
 const RECORD_FIELD_TEMPLATE: &str = include_str!("../../templates/types/record_field.h.tmpl");
 const EMPTY_RECORD_FIELD_TEMPLATE: &str =
     include_str!("../../templates/types/empty_record_field.h.tmpl");
+const ERROR_TEMPLATE: &str = include_str!("../../templates/types/error.h.tmpl");
+const ERROR_PAYLOAD_STRUCT_TEMPLATE: &str =
+    include_str!("../../templates/types/error_payload_struct.h.tmpl");
+const ERROR_PAYLOAD_MEMBER_TEMPLATE: &str =
+    include_str!("../../templates/types/error_payload_member.h.tmpl");
 
 pub(super) fn render(model: &BindingsModel) -> String {
     let abi_version = model.abi_version().to_string();
@@ -97,6 +102,9 @@ pub(super) fn render(model: &BindingsModel) -> String {
             ],
         ));
     }
+    for error in model.error_types() {
+        type_declarations.push_str(&render_error(error));
+    }
 
     template::render(
         HEADER_TEMPLATE,
@@ -104,6 +112,65 @@ pub(super) fn render(model: &BindingsModel) -> String {
             ("ABI_VERSION", &abi_version),
             ("UNIFFI_CONTRACT_VERSION", &uniffi_contract_version),
             ("TYPE_DECLARATIONS", &type_declarations),
+        ],
+    )
+}
+
+fn render_error(error: &ErrorType) -> String {
+    let mut tag_constants = String::new();
+    let mut payload_structs = String::new();
+    let mut payload_members = String::new();
+    for (index, variant) in error.variants().iter().enumerate() {
+        if index != 0 {
+            tag_constants.push('\n');
+        }
+        let _ = write!(
+            tag_constants,
+            "#define {} (({}){}u)",
+            variant.c_constant(),
+            error.tag_c_name(),
+            variant.public_value(),
+        );
+        let Some(payload_c_name) = variant.payload_c_name() else {
+            continue;
+        };
+        let payload_member_name = variant.payload_member_name();
+        let fields = variant
+            .fields()
+            .iter()
+            .map(|field| {
+                template::render(
+                    RECORD_FIELD_TEMPLATE,
+                    &[
+                        ("FIELD_C_TYPE", field.c_type_name()),
+                        ("FIELD_C_NAME", field.c_name()),
+                    ],
+                )
+            })
+            .collect::<String>();
+        payload_structs.push_str(&template::render(
+            ERROR_PAYLOAD_STRUCT_TEMPLATE,
+            &[("PAYLOAD_C_NAME", payload_c_name), ("FIELDS", &fields)],
+        ));
+        payload_members.push_str(&template::render(
+            ERROR_PAYLOAD_MEMBER_TEMPLATE,
+            &[
+                ("PAYLOAD_C_NAME", payload_c_name),
+                ("PAYLOAD_MEMBER_NAME", payload_member_name),
+            ],
+        ));
+    }
+
+    template::render(
+        ERROR_TEMPLATE,
+        &[
+            ("RUST_NAME", error.rust_name()),
+            ("TAG_C_NAME", error.tag_c_name()),
+            ("TAG_CONSTANTS", &tag_constants),
+            ("PAYLOAD_STRUCTS", &payload_structs),
+            ("PAYLOAD_C_NAME", error.payload_c_name()),
+            ("PAYLOAD_MEMBERS", &payload_members),
+            ("C_NAME", error.c_name()),
         ],
     )
 }
@@ -233,6 +300,35 @@ mod tests {
                 "} WalletEngineInnerView;\n\n/* A borrowed view of Rust record `Outer`. */"
             )
         );
+        Ok(())
+    }
+
+    #[test]
+    fn renders_rich_error_as_tag_and_named_payload_union() -> Result<()> {
+        let component = ComponentInterface::from_webidl(
+            r"
+            namespace wallet_engine { [Throws=HostFailure] void call_host(); };
+            [Error]
+            interface HostFailure {
+                Cancelled();
+                Failed(u64 code, string diagnostic);
+            };
+            ",
+            "wallet_engine",
+        )?;
+        let model = BindingsModel::from_components(&[component])?;
+        let header = render(&model);
+
+        assert!(header.contains("typedef uint32_t WalletEngineHostFailureTag;"));
+        assert!(header.contains(
+            "#define WALLET_ENGINE_HOST_FAILURE_CANCELLED ((WalletEngineHostFailureTag)0u)"
+        ));
+        assert!(header.contains("typedef struct WalletEngineHostFailureFailedPayload"));
+        assert!(header.contains("uint64_t code;"));
+        assert!(header.contains("WalletEngineStringView diagnostic;"));
+        assert!(header.contains("typedef union WalletEngineHostFailurePayload"));
+        assert!(header.contains("WalletEngineHostFailureFailedPayload failed;"));
+        assert!(header.contains("WalletEngineHostFailureTag tag;"));
         Ok(())
     }
 }

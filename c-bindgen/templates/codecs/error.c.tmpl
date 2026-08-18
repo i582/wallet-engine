@@ -1,0 +1,93 @@
+WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_measure_{{FUNCTION_NAME}}(
+    {{C_NAME}} value,
+    size_t *out_size
+) {
+    size_t wire_size = 4u;
+    if (out_size == NULL) {
+        return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
+    }
+    switch (value.tag) {
+{{MEASURE_CASES}}        default:
+            return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
+    }
+    *out_size = wire_size;
+    return WALLET_ENGINE_ABI_STATUS_OK;
+}
+
+WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_write_{{FUNCTION_NAME}}(
+    WalletEnginePrivateBufferWriter *writer,
+    {{C_NAME}} value
+) {
+    WalletEngineAbiStatus status;
+    switch (value.tag) {
+{{WRITE_CASES}}        default:
+            return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
+    }
+}
+
+WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_read_{{FUNCTION_NAME}}(
+    WalletEnginePrivateBufferReader *reader,
+    {{C_NAME}} *out_value
+) {
+    int32_t wire_tag = 0;
+    WalletEngineAbiStatus status;
+    if (reader == NULL || out_value == NULL) {
+        return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
+    }
+    *out_value = ({{C_NAME}}){0};
+    status = wallet_engine_private_read_i32(reader, &wire_tag);
+    if (status != WALLET_ENGINE_ABI_STATUS_OK) {
+        return status;
+    }
+    switch (wire_tag) {
+{{READ_CASES}}        default:
+            return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
+    }
+}
+
+WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_lower_{{FUNCTION_NAME}}(
+    {{C_NAME}} value,
+    WalletEnginePrivateRustBuffer *out_buffer
+) {
+    size_t wire_size = 0u;
+    WalletEnginePrivateBufferWriter writer;
+    WalletEngineAbiStatus status = wallet_engine_private_measure_{{FUNCTION_NAME}}(
+        value,
+        &wire_size
+    );
+    if (status != WALLET_ENGINE_ABI_STATUS_OK) {
+        return status;
+    }
+    status = wallet_engine_private_rustbuffer_alloc(wire_size, out_buffer);
+    if (status != WALLET_ENGINE_ABI_STATUS_OK) {
+        return status;
+    }
+    writer = (WalletEnginePrivateBufferWriter){out_buffer->data, wire_size, 0u};
+    status = wallet_engine_private_write_{{FUNCTION_NAME}}(&writer, value);
+    if (status == WALLET_ENGINE_ABI_STATUS_OK && writer.offset != writer.len) {
+        status = WALLET_ENGINE_ABI_STATUS_PANIC;
+    }
+    if (status != WALLET_ENGINE_ABI_STATUS_OK) {
+        wallet_engine_private_rustbuffer_free(*out_buffer);
+        *out_buffer = (WalletEnginePrivateRustBuffer){0};
+    }
+    return status;
+}
+
+WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_lift_{{FUNCTION_NAME}}(
+    const WalletEnginePrivateRustBuffer *buffer,
+    {{C_NAME}} *out_value
+) {
+    WalletEnginePrivateBufferReader reader;
+    WalletEngineAbiStatus status;
+    if (out_value == NULL || !wallet_engine_private_rustbuffer_is_valid(buffer)) {
+        return WALLET_ENGINE_ABI_STATUS_PANIC;
+    }
+    reader = (WalletEnginePrivateBufferReader){buffer->data, (size_t)buffer->len, 0u};
+    status = wallet_engine_private_read_{{FUNCTION_NAME}}(&reader, out_value);
+    if (status != WALLET_ENGINE_ABI_STATUS_OK || reader.offset != reader.len) {
+        *out_value = ({{C_NAME}}){0};
+        return WALLET_ENGINE_ABI_STATUS_PANIC;
+    }
+    return WALLET_ENGINE_ABI_STATUS_OK;
+}

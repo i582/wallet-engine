@@ -4,6 +4,7 @@ use uniffi_bindgen::ComponentInterface;
 
 use crate::{
     enum_map::FlatEnum,
+    error_map::{ErrorType, collect_error_types},
     optional_map::{OptionalType, collect_optional_types},
     record_map::{RecordType, collect_record_types},
     sequence_map::{SequenceType, collect_sequence_types},
@@ -11,7 +12,7 @@ use crate::{
     type_registry::TypeRegistry,
 };
 
-pub(super) const MANIFEST_SCHEMA_VERSION: u32 = 7;
+pub(super) const MANIFEST_SCHEMA_VERSION: u32 = 8;
 const EXPERIMENTAL_ABI_VERSION: u32 = 0;
 const EXPECTED_CRATE_NAME: &str = "wallet_engine";
 const EXPECTED_NAMESPACE: &str = "wallet_engine";
@@ -24,6 +25,7 @@ pub(super) struct BindingsModel {
     optional_types: Vec<OptionalType>,
     sequence_types: Vec<SequenceType>,
     record_types: Vec<RecordType>,
+    error_types: Vec<ErrorType>,
     private_ffi: PrivateFfi,
     manifest: Manifest,
 }
@@ -50,6 +52,7 @@ struct GenerationManifest {
     rendered_optional_types: Vec<OptionalTypeManifest>,
     rendered_sequence_types: Vec<SequenceTypeManifest>,
     rendered_record_types: Vec<RecordTypeManifest>,
+    rendered_error_types: Vec<ErrorTypeManifest>,
     rendered_semantic_operation_count: usize,
     pending_semantic_operation_count: usize,
 }
@@ -116,6 +119,31 @@ struct RecordFieldManifest {
 }
 
 #[derive(Debug, Serialize)]
+struct ErrorTypeManifest {
+    rust: String,
+    c: String,
+    tag_c: String,
+    variants: Vec<ErrorVariantManifest>,
+}
+
+#[derive(Debug, Serialize)]
+struct ErrorVariantManifest {
+    rust: String,
+    c: String,
+    value: u32,
+    payload_c: Option<String>,
+    fields: Vec<ErrorFieldManifest>,
+}
+
+#[derive(Debug, Serialize)]
+struct ErrorFieldManifest {
+    rust: String,
+    c: String,
+    rust_type: String,
+    c_type: String,
+}
+
+#[derive(Debug, Serialize)]
 struct ComponentManifest {
     crate_name: String,
     namespace: String,
@@ -161,6 +189,7 @@ impl BindingsModel {
             type_registry.register_type(sequence.uniffi_type(), sequence.registered_type())?;
         }
         let record_types = collect_record_types(component, &mut type_registry)?;
+        let error_types = collect_error_types(component, &mut type_registry)?;
         let manifest = Manifest::from_components(
             components,
             type_registry.builtin_types(),
@@ -168,6 +197,7 @@ impl BindingsModel {
             &optional_types,
             &sequence_types,
             &record_types,
+            &error_types,
         );
         let private_ffi = PrivateFfi {
             rustbuffer_alloc: component.ffi_rustbuffer_alloc().name().to_owned(),
@@ -181,6 +211,7 @@ impl BindingsModel {
             optional_types,
             sequence_types,
             record_types,
+            error_types,
             private_ffi,
             manifest,
         })
@@ -211,12 +242,15 @@ impl BindingsModel {
         self.has_builtin_type(BuiltinType::Int32)
             || self.has_flat_enums()
             || self.has_sequence_types()
+            || self.has_error_types()
     }
 
     pub(super) fn has_wire_types(&self) -> bool {
         !self.type_registry.is_empty()
             || !self.optional_types.is_empty()
             || !self.sequence_types.is_empty()
+            || !self.record_types.is_empty()
+            || !self.error_types.is_empty()
     }
 
     pub(super) const fn has_flat_enums(&self) -> bool {
@@ -230,10 +264,13 @@ impl BindingsModel {
             || self.has_optional_types()
             || self.has_sequence_types()
             || self.has_record_types()
+            || self.has_error_types()
     }
 
-    pub(super) const fn needs_output_arena(&self) -> bool {
-        self.has_sequence_types() || self.has_record_types()
+    pub(super) fn needs_output_arena(&self) -> bool {
+        self.has_sequence_types()
+            || self.has_record_types()
+            || self.error_types.iter().any(ErrorType::read_needs_arena)
     }
 
     pub(super) fn flat_enums(&self) -> &[FlatEnum] {
@@ -264,6 +301,14 @@ impl BindingsModel {
         &self.record_types
     }
 
+    pub(super) const fn has_error_types(&self) -> bool {
+        !self.error_types.is_empty()
+    }
+
+    pub(super) fn error_types(&self) -> &[ErrorType] {
+        &self.error_types
+    }
+
     pub(super) const fn private_ffi(&self) -> &PrivateFfi {
         &self.private_ffi
     }
@@ -281,6 +326,7 @@ impl Manifest {
         optional_types: &[OptionalType],
         sequence_types: &[SequenceType],
         record_types: &[RecordType],
+        error_types: &[ErrorType],
     ) -> Self {
         let component_manifests = components
             .iter()
@@ -294,7 +340,7 @@ impl Manifest {
         Self {
             schema_version: MANIFEST_SCHEMA_VERSION,
             generation: GenerationManifest {
-                phase: "records",
+                phase: "rich-errors",
                 artifacts: [
                     "wallet_engine.h",
                     "wallet_engine.c",
@@ -315,6 +361,7 @@ impl Manifest {
                     .map(SequenceTypeManifest::from)
                     .collect(),
                 rendered_record_types: record_types.iter().map(RecordTypeManifest::from).collect(),
+                rendered_error_types: error_types.iter().map(ErrorTypeManifest::from).collect(),
                 rendered_semantic_operation_count: 0,
                 pending_semantic_operation_count,
             },
@@ -395,6 +442,36 @@ impl From<&RecordType> for RecordTypeManifest {
                     c: field.c_name().to_owned(),
                     rust_type: field.rust_type_name().to_owned(),
                     c_type: field.c_type_name().to_owned(),
+                })
+                .collect(),
+        }
+    }
+}
+
+impl From<&ErrorType> for ErrorTypeManifest {
+    fn from(value: &ErrorType) -> Self {
+        Self {
+            rust: value.rust_name().to_owned(),
+            c: value.c_name().to_owned(),
+            tag_c: value.tag_c_name().to_owned(),
+            variants: value
+                .variants()
+                .iter()
+                .map(|variant| ErrorVariantManifest {
+                    rust: variant.rust_name().to_owned(),
+                    c: variant.c_constant().to_owned(),
+                    value: variant.public_value(),
+                    payload_c: variant.payload_c_name().map(str::to_owned),
+                    fields: variant
+                        .fields()
+                        .iter()
+                        .map(|field| ErrorFieldManifest {
+                            rust: field.rust_name().to_owned(),
+                            c: field.c_name().to_owned(),
+                            rust_type: field.rust_type_name().to_owned(),
+                            c_type: field.c_type_name().to_owned(),
+                        })
+                        .collect(),
                 })
                 .collect(),
         }
@@ -490,6 +567,7 @@ mod tests {
         assert!(manifest.generation.rendered_optional_types.is_empty());
         assert!(manifest.generation.rendered_sequence_types.is_empty());
         assert!(manifest.generation.rendered_record_types.is_empty());
+        assert!(manifest.generation.rendered_error_types.is_empty());
         assert_eq!(manifest.components.len(), 1);
         assert_eq!(manifest.components[0].crate_name, "wallet_engine");
         Ok(())
@@ -518,7 +596,7 @@ mod tests {
         let manifest = model.manifest();
         let enum_ = &manifest.generation.rendered_flat_enums[0];
 
-        assert_eq!(manifest.generation.phase, "records");
+        assert_eq!(manifest.generation.phase, "rich-errors");
         assert_eq!(enum_.rust, "Network");
         assert_eq!(enum_.variants[0].value, 0);
         assert_eq!(enum_.variants[1].value, 1);
@@ -582,6 +660,37 @@ mod tests {
         assert_eq!(record.fields[0].c_type, "WalletEngineStringView");
         assert_eq!(record.fields[1].rust_type, "u64");
         assert_eq!(record.fields[1].c_type, "uint64_t");
+        Ok(())
+    }
+
+    #[test]
+    fn manifest_records_public_error_variants_without_private_wire_tags() -> Result<()> {
+        let component = ComponentInterface::from_webidl(
+            r"
+            namespace wallet_engine { [Throws=HostFailure] void call_host(); };
+            [Error]
+            interface HostFailure {
+                Cancelled();
+                Failed(u64 code, string diagnostic);
+            };
+            ",
+            "wallet_engine",
+        )?;
+        let model = BindingsModel::from_components(&[component])?;
+        let error = &model.manifest().generation.rendered_error_types[0];
+
+        assert_eq!(error.rust, "HostFailure");
+        assert_eq!(error.c, "WalletEngineHostFailure");
+        assert_eq!(error.tag_c, "WalletEngineHostFailureTag");
+        assert_eq!(error.variants[0].value, 0);
+        assert!(error.variants[0].payload_c.is_none());
+        assert_eq!(error.variants[1].value, 1);
+        assert_eq!(
+            error.variants[1].payload_c.as_deref(),
+            Some("WalletEngineHostFailureFailedPayload")
+        );
+        assert_eq!(error.variants[1].fields[0].c_type, "uint64_t");
+        assert!(!serde_json::to_string(model.manifest())?.contains("wire_tag"));
         Ok(())
     }
 }

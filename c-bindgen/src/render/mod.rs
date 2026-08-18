@@ -129,7 +129,10 @@ mod tests {
     fn builtin_fixture() -> Result<ComponentInterface> {
         ComponentInterface::from_webidl(
             r#"
-            namespace wallet_engine {};
+            namespace wallet_engine {
+                [Throws=ExampleError]
+                void fail();
+            };
 
             dictionary Example {
                 u8 unsigned_byte;
@@ -167,6 +170,13 @@ mod tests {
             dictionary EmptyRecordFixture {};
 
             enum Network { "mainnet", "testnet" };
+
+            [Error]
+            interface ExampleError {
+                Cancelled();
+                Failed(Network kind, string diagnostic, u64? retry_after_ms);
+                Many(sequence<string> diagnostics);
+            };
             "#,
             "wallet_engine",
         )
