@@ -564,7 +564,7 @@ CreateResult create_wallet(
 QString format_ton(const std::string &nanograms, int maximum_decimals = 4) {
     auto digits = QString::fromStdString(nanograms);
     while (digits.size() > 1 && digits.startsWith('0')) {
-        digits.removeFirst();
+        digits.remove(0, 1);
     }
     while (digits.size() <= 9) {
         digits.prepend('0');
@@ -610,7 +610,7 @@ std::optional<std::string> parse_ton_amount(
     fraction = fraction.leftJustified(9, '0');
     auto nanograms = whole + fraction;
     while (nanograms.size() > 1 && nanograms.startsWith('0')) {
-        nanograms.removeFirst();
+        nanograms.remove(0, 1);
     }
     if (nanograms == QStringLiteral("0")) {
         error = QStringLiteral("The amount must be greater than zero.");
