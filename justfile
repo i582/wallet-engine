@@ -160,19 +160,9 @@ test-c-tsan: bindings-c build-c
     cmake --build target/c-tests-tsan
     ctest --test-dir target/c-tests-tsan --output-on-failure
 
-build-cpp: bindings-c
-    cmake -S cpp-bindings -B target/cpp-bindings -DBUILD_TESTING=OFF
-    cmake --build target/cpp-bindings
+build-cpp: example-cpp-bindgen-build
 
-test-cpp: bindings-c
-    cmake -S cpp-bindings -B target/cpp-bindings -DBUILD_TESTING=ON
-    cmake --build target/cpp-bindings
-    ctest --test-dir target/cpp-bindings --output-on-failure
-
-test-cpp-sanitized: bindings-c
-    cmake -S cpp-bindings -B target/cpp-bindings-sanitized -DBUILD_TESTING=ON -DWALLET_ENGINE_CPP_ENABLE_SANITIZERS=ON
-    cmake --build target/cpp-bindings-sanitized
-    ctest --test-dir target/cpp-bindings-sanitized --output-on-failure
+test-cpp: example-cpp-bindgen-build
 
 web-install:
     bun install --cwd web --frozen-lockfile
