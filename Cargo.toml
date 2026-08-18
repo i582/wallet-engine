@@ -11,6 +11,7 @@ members = ["crates/ton-connect-client", "crates/ton-connect-core"]
 default-members = [".", "crates/ton-connect-client", "crates/ton-connect-core"]
 exclude = [
     "apple-bindgen",
+    "c-bindgen",
     "c-bindings",
     "examples/tui",
     "kotlin-bindgen",

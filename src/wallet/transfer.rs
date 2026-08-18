@@ -139,8 +139,8 @@ pub(crate) fn prepare_transfer_emulation(
     let (internal, send_mode) = build_internal_message(
         destination,
         &request.amount,
-        None,
-        None,
+        request.payload.as_ref(),
+        request.state_init.as_ref(),
         request.comment.as_deref(),
     )?;
     let wallet_id = match network {
@@ -400,6 +400,9 @@ mod tests {
             destination: TonAddressString::try_from(DESTINATION)
                 .expect("valid preview destination"),
             amount: SendAmount::exact("1").expect("valid exact amount"),
+            valid_until: None,
+            payload: None,
+            state_init: None,
             comment: None,
         };
         let account = FreshSendAccount {
@@ -418,5 +421,68 @@ mod tests {
             ),
             Err(TransferError::PublicKeyMismatch)
         ));
+    }
+
+    #[test]
+    fn preview_emulation_preserves_payload_and_state_init() {
+        let public_key = [1_u8; 32];
+        let (source, _) = derive_v5r1_public_state(&public_key, Network::Testnet)
+            .expect("source public key must derive");
+        let source = TonAddressString::from_address(&source, Network::Testnet);
+        let destination =
+            TonAddressString::try_from(DESTINATION).expect("valid preview destination");
+        let amount = SendAmount::exact("1").expect("valid exact amount");
+        let account = FreshSendAccount {
+            status: crate::AccountStatus::Active,
+            seqno: 7,
+        };
+
+        let plain = SendPreviewRequest {
+            destination,
+            amount,
+            valid_until: None,
+            payload: None,
+            state_init: None,
+            comment: None,
+        };
+        let mut payload = TonCell::builder();
+        payload
+            .write_num(&0x1234_5678_u32, 32)
+            .expect("payload opcode fits");
+        let payload = Boc::try_from(
+            payload
+                .build()
+                .expect("payload cell builds")
+                .to_boc()
+                .expect("payload BOC encodes"),
+        )
+        .expect("payload BOC validates");
+        let state_init = StateInit::new(TonCell::empty().clone(), TonCell::empty().clone());
+        let state_init = Boc::try_from(state_init.to_boc().expect("StateInit BOC encodes"))
+            .expect("StateInit BOC validates");
+        let with_payload = SendPreviewRequest {
+            payload: Some(payload),
+            ..plain.clone()
+        };
+        let with_state_init = SendPreviewRequest {
+            state_init: Some(state_init),
+            ..plain.clone()
+        };
+
+        let emulate = |request: &SendPreviewRequest| {
+            prepare_transfer_emulation(
+                &source,
+                &public_key,
+                Network::Testnet,
+                request,
+                &account,
+                1_900_000_000,
+            )
+            .expect("preview message builds")
+        };
+        let plain_boc = emulate(&plain);
+
+        assert_ne!(emulate(&with_payload), plain_boc);
+        assert_ne!(emulate(&with_state_init), plain_boc);
     }
 }

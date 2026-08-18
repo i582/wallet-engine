@@ -38,7 +38,7 @@ import type {
   TonConnectWalletEvent,
   TonConnectWalletOptions,
 } from "./ton-connect-types"
-import type {SendResult, WalletDescriptor} from "./types"
+import type {SendPreview, SendResult, WalletDescriptor} from "./types"
 import type {WalletClient} from "./wallet-client"
 import type {WalletLifecycle} from "./wallet-lifecycle"
 
@@ -341,7 +341,22 @@ export class TonConnectWallet {
       })
       return
     }
-    const approved: boolean = await this.requestApproval(prepared.interaction)
+    let preview: SendPreview
+    try {
+      preview = await this.walletClient.previewTonConnect(prepared.sendRequest)
+    } catch (cause) {
+      const diagnostic: string = errorMessage(cause)
+      this.emit({kind: "error", message: `Transaction preview failed: ${diagnostic}`})
+      await this.postRpcError({
+        id: request.id,
+        code: 0,
+        message: `Transaction preview failed: ${diagnostic}`,
+        topic: request.method,
+        traceId,
+      })
+      return
+    }
+    const approved: boolean = await this.requestApproval({...prepared.interaction, preview})
     if (!approved) {
       await this.postRpcError({
         id: request.id,

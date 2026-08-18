@@ -236,6 +236,9 @@ export interface SendRequest {
 export interface SendPreviewRequest {
   readonly destination: string
   readonly amount: SendAmount
+  readonly validUntil?: number
+  readonly payload?: string
+  readonly stateInit?: string
   /** Optional plaintext UTF-8 comment. */
   readonly comment?: string
 }

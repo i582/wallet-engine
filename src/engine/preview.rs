@@ -5,7 +5,7 @@ use crate::wallet::send::FreshSendAccount;
 use crate::wallet::transfer::prepare_transfer_emulation;
 use crate::{
     AccountStatus, DomainError, HttpRequest, HttpRequestId, SendAmount, SendPreview,
-    SendPreviewRequest, WalletClientError,
+    SendPreviewRequest, SendRequest, WalletClientError,
 };
 
 use super::WalletClient;
@@ -27,6 +27,9 @@ impl WalletClient {
         &self,
         request: SendPreviewRequest,
     ) -> Result<SendPreview, WalletClientError> {
+        if request.payload.is_some() && request.comment.is_some() {
+            return Err(WalletClientError::InvalidSendRequest);
+        }
         let (
             generation,
             config,
@@ -123,16 +126,30 @@ impl WalletClient {
         };
 
         let provider_time = account.sync_utime;
-        let valid_until = provider_time
-            .checked_add(config.send_validity_seconds)
-            .ok_or_else(|| {
-                self.preview_error(
+        let valid_until = if let Some(valid_until) = request.valid_until {
+            if valid_until <= provider_time {
+                return Err(self.preview_error(
                     generation,
                     WalletClientError::SendPreviewFailed {
-                        diagnostic: "transfer expiration timestamp overflow".to_owned(),
+                        diagnostic:
+                            "transfer expiration timestamp is not after fresh provider time"
+                                .to_owned(),
                     },
-                )
-            })?;
+                ));
+            }
+            valid_until
+        } else {
+            provider_time
+                .checked_add(config.send_validity_seconds)
+                .ok_or_else(|| {
+                    self.preview_error(
+                        generation,
+                        WalletClientError::SendPreviewFailed {
+                            diagnostic: "transfer expiration timestamp overflow".to_owned(),
+                        },
+                    )
+                })?
+        };
 
         let fresh = FreshSendAccount {
             status: account.status,
@@ -223,6 +240,25 @@ impl WalletClient {
         };
         self.finish_preview(generation)?;
         Ok(preview)
+    }
+
+    /// Emulates the exact transfer fields supplied by a TON Connect request.
+    ///
+    /// This reuses the regular preview pipeline while preserving the dApp's
+    /// validity boundary, payload, and destination `StateInit` byte-for-byte.
+    pub async fn preview_ton_connect(
+        &self,
+        request: SendRequest,
+    ) -> Result<SendPreview, WalletClientError> {
+        self.preview_send(SendPreviewRequest {
+            destination: request.destination,
+            amount: request.amount,
+            valid_until: request.valid_until,
+            payload: request.payload,
+            state_init: request.state_init,
+            comment: request.comment,
+        })
+        .await
     }
 
     /// Cancels the current send preview and its active HTTP request.

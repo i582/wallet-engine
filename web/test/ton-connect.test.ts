@@ -1,4 +1,4 @@
-import {SessionCrypto} from "@tonconnect/protocol"
+import {Base64, SessionCrypto, hexToByteArray} from "@tonconnect/protocol"
 import {describe, expect, test} from "bun:test"
 
 import {
@@ -13,10 +13,10 @@ import type {WalletLifecycle} from "../src/wallet-lifecycle"
 
 const CLIENT_ID: string = "01".repeat(32)
 
-function connectLink(): string {
+function connectLink(clientId: string = CLIENT_ID): string {
   const parameters = new URLSearchParams({
     v: "2",
-    id: CLIENT_ID,
+    id: clientId,
     r: JSON.stringify({
       manifestUrl: "https://app.example/tonconnect-manifest.json",
       items: [{name: "ton_addr", network: "-3"}],
@@ -167,6 +167,141 @@ describe("TON Connect wallet runtime", () => {
     expect(JSON.parse(storage.value ?? "null").pendingPost).toBeUndefined()
     await wallet.close()
   })
+
+  test("emulates the exact TON Connect request before asking for approval", async () => {
+    const dappCrypto = new SessionCrypto()
+    const order: string[] = []
+    const previewRequests: unknown[] = []
+    let walletClientId: string | undefined
+    let requestSent: boolean = false
+    const fetch = Object.assign(
+      async (input: string | URL | Request): Promise<Response> => {
+        const url = new URL(input instanceof Request ? input.url : input.toString())
+        if (url.hostname === "app.example") {
+          return Response.json({
+            url: "https://app.example",
+            name: "Example dApp",
+            iconUrl: "https://app.example/icon.png",
+          })
+        }
+        if (url.pathname.endsWith("/message")) {
+          walletClientId = url.searchParams.get("client_id") ?? undefined
+          return new Response(undefined, {status: 200})
+        }
+        if (!requestSent && walletClientId) {
+          requestSent = true
+          const request = {
+            method: "sendTransaction",
+            id: "7",
+            params: [
+              JSON.stringify({
+                network: "-3",
+                from: `0:${"11".repeat(32)}`,
+                valid_until: 1_900_000_000,
+                messages: [
+                  {
+                    address: "EQDestination",
+                    amount: "1000000",
+                    payload: "te6ccgEBAQEAAgAAAA==",
+                    stateInit: "te6ccgEBAQEAAgAAAA==",
+                  },
+                ],
+              }),
+            ],
+          }
+          const encrypted = dappCrypto.encrypt(
+            JSON.stringify(request),
+            hexToByteArray(walletClientId),
+          )
+          const envelope = JSON.stringify({
+            from: dappCrypto.sessionId,
+            message: Base64.encode(encrypted),
+          })
+          return new Response(`id: 1\nevent: message\ndata: ${envelope}\n\n`, {
+            status: 200,
+            headers: {"content-type": "text/event-stream"},
+          })
+        }
+        return new Response(undefined, {status: 200})
+      },
+      {preconnect: () => undefined},
+    ) as typeof globalThis.fetch
+    const walletClient = {
+      previewTonConnect: async (request: unknown) => {
+        order.push("preview")
+        previewRequests.push(request)
+        return {
+          destination: "EQDestination",
+          amount: {kind: "exact", nanograms: "1000000"},
+          validUntil: 1_900_000_000,
+          messageBocBase64: "te6ccgEBAQEAAgAAAA==",
+          emulation: {
+            mcBlockSeqno: 1,
+            walletFeesNanograms: "11",
+            traceFeesNanograms: "18",
+            transactionCount: 2,
+            actions: [],
+            traceSucceeded: true,
+            isIncomplete: false,
+          },
+        }
+      },
+    } as unknown as WalletClient
+    const lifecycle = {
+      tonConnectAccount: () => ({
+        address: `0:${"11".repeat(32)}`,
+        network: "-3",
+        walletStateInit: "state-init",
+        publicKey: Array.from({length: 32}, () => 1),
+      }),
+    } as unknown as WalletLifecycle
+    const wallet = new TonConnectWallet({
+      descriptor: {
+        recordId: "preview-wallet",
+        address: "0QWallet",
+        publicKey: Array.from({length: 32}, () => 1),
+        network: "testnet",
+        secretRef: {value: "wallet-secret"},
+      },
+      walletClient,
+      lifecycle,
+      bridgeUrl: "https://bridge.example/bridge",
+      fetch,
+      storage: new MemoryTonConnectStorage(undefined),
+    })
+    let transactionPreview: unknown
+    wallet.onEvent(event => {
+      if (event.kind !== "interaction") {
+        return
+      }
+      if (event.interaction.kind === "connect") {
+        wallet.respond(event.interaction.id, true)
+      } else {
+        order.push("interaction")
+        transactionPreview = event.interaction.preview
+        wallet.respond(event.interaction.id, false)
+      }
+    })
+
+    await wallet.start(connectLink(dappCrypto.sessionId))
+    await Bun.sleep(20)
+
+    expect(order).toEqual(["preview", "interaction"])
+    expect(previewRequests).toEqual([
+      expect.objectContaining({
+        validUntil: 1_900_000_000,
+        payload: "te6ccgEBAQEAAgAAAA==",
+        stateInit: "te6ccgEBAQEAAgAAAA==",
+      }),
+    ])
+    expect(transactionPreview).toEqual(
+      expect.objectContaining({
+        validUntil: 1_900_000_000,
+        emulation: expect.objectContaining({transactionCount: 2}),
+      }),
+    )
+    await wallet.close()
+  })
 })
 
 describe("TON Connect transaction mapping", () => {
@@ -265,7 +400,7 @@ class DelayedTonConnectStorage implements TonConnectStorage {
 class MemoryTonConnectStorage implements TonConnectStorage {
   value: string | undefined
 
-  constructor(value: string) {
+  constructor(value: string | undefined) {
     this.value = value
   }
 

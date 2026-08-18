@@ -1670,6 +1670,9 @@ impl ScenarioRunner {
                         let request = SendPreviewRequest {
                             destination,
                             amount: action.amount,
+                            valid_until: None,
+                            payload: None,
+                            state_init: None,
                             comment: action.comment,
                         };
                         std::thread::spawn(move || {

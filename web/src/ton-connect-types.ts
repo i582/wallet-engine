@@ -1,6 +1,6 @@
 import type {KeyPair} from "@tonconnect/protocol"
 
-import type {WalletDescriptor} from "./types"
+import type {SendPreview, WalletDescriptor} from "./types"
 import type {WalletClient} from "./wallet-client"
 import type {WalletLifecycle} from "./wallet-lifecycle"
 
@@ -142,6 +142,7 @@ export type TonConnectInteraction =
       readonly amountNanograms: string
       readonly deploysContract: boolean
       readonly hasPayload: boolean
+      readonly preview: SendPreview
     }
 
 /** Observable event emitted by the TON Connect wallet runtime. */

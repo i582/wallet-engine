@@ -234,6 +234,8 @@ pub enum WalletEngineWalletLifecycleErrorCode {
     SecretWalletMismatch = 3,
     /// The protected-storage host reported a failure.
     ProtectedSecretHost = 4,
+    /// TON Connect proof signing failed.
+    TonConnectSigningFailed = 5,
 }
 
 /// A borrowed wallet lifecycle failure.
@@ -277,6 +279,11 @@ impl From<&WalletLifecycleError> for WalletEngineWalletLifecycleErrorView {
                 WalletEngineWalletLifecycleErrorCode::ProtectedSecretHost,
                 Some(protected_secret_host_error_kind_to_abi(*kind)),
                 Some(diagnostic.as_str()),
+            ),
+            WalletLifecycleError::TonConnectSigningFailed => (
+                WalletEngineWalletLifecycleErrorCode::TonConnectSigningFailed,
+                None,
+                None,
             ),
         };
 

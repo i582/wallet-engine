@@ -72,6 +72,17 @@ pub struct SendPreviewRequest {
     pub destination: TonAddressString,
     /// The exact-value or whole-balance transfer policy.
     pub amount: SendAmount,
+    /// Optional caller-selected Unix expiration timestamp in seconds.
+    #[serde(default)]
+    pub valid_until: Option<u64>,
+    /// Optional caller-built one-cell internal-message body.
+    ///
+    /// This is mutually exclusive with `comment`.
+    #[serde(default)]
+    pub payload: Option<Boc>,
+    /// Optional destination-contract `StateInit` for a deploy message.
+    #[serde(default)]
+    pub state_init: Option<Boc>,
     /// An optional plaintext UTF-8 comment attached to the emulated message.
     #[serde(default)]
     pub comment: Option<String>,

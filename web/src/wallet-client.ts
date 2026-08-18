@@ -79,6 +79,11 @@ export class WalletClient {
     return (await this.raw.previewSend(request)) as SendPreview
   }
 
+  async previewTonConnect(request: SendRequest): Promise<SendPreview> {
+    this.assertOpen()
+    return (await this.raw.previewTonConnect(request)) as SendPreview
+  }
+
   async cancelSendPreview(): Promise<void> {
     this.assertOpen()
     await this.raw.cancelSendPreview()

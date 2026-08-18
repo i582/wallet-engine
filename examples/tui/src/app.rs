@@ -568,6 +568,9 @@ impl App {
             .preview_send(SendPreviewRequest {
                 destination: destination.clone(),
                 amount: amount.clone(),
+                valid_until: None,
+                payload: None,
+                state_init: None,
                 comment: None,
             })
             .await

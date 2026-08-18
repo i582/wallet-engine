@@ -11,7 +11,10 @@ import type {SendRequest, WalletDescriptor} from "./types"
 export type PreparedTransaction =
   | {
       readonly ok: true
-      readonly interaction: TonConnectInteraction & {readonly kind: "transaction"}
+      readonly interaction: Omit<
+        Extract<TonConnectInteraction, {readonly kind: "transaction"}>,
+        "preview"
+      >
       readonly sendRequest: SendRequest
     }
   | {

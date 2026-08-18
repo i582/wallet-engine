@@ -3,6 +3,7 @@ import {type ReactElement, useId, useState} from "react"
 
 import {Button} from "@/components/ui/button"
 import {Input} from "@/components/ui/input"
+import {TransferPreview} from "@/components/transfer-preview"
 import {compactAddress, formatNanogramBalance} from "@/lib/format"
 
 export interface TonConnectDialogProps {
@@ -201,17 +202,12 @@ function ApprovalContent({
       <h2 className="mt-2 text-xl font-semibold tracking-[-0.03em]" id={titleId}>
         {interaction.dappName} wants to send
       </h2>
-      <div className="mt-5 space-y-4 rounded-xl bg-secondary px-4 py-4">
-        <div>
-          <p className="text-xs text-muted-foreground">Send</p>
-          <p className="mt-1 text-2xl font-semibold tracking-[-0.04em]">
-            {formatNanogramBalance(interaction.amountNanograms)} GRAM
-          </p>
-        </div>
-        <div>
-          <p className="text-xs text-muted-foreground">To</p>
-          <p className="mt-1 font-mono text-sm">{compactAddress(interaction.destination)}</p>
-        </div>
+      <div className="mt-5">
+        <TransferPreview
+          amount={formatNanogramBalance(interaction.amountNanograms)}
+          destination={interaction.destination}
+          preview={interaction.preview}
+        />
       </div>
       {interaction.hasPayload || interaction.deploysContract ? (
         <details className="mt-4 text-xs text-muted-foreground">

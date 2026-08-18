@@ -233,6 +233,10 @@ fn wallet_lifecycle_error_codes_and_views_are_stable() {
             WalletLifecycleError::SecretWalletMismatch,
             WalletEngineWalletLifecycleErrorCode::SecretWalletMismatch,
         ),
+        (
+            WalletLifecycleError::TonConnectSigningFailed,
+            WalletEngineWalletLifecycleErrorCode::TonConnectSigningFailed,
+        ),
     ];
 
     assert_eq!(
@@ -254,6 +258,10 @@ fn wallet_lifecycle_error_codes_and_views_are_stable() {
     assert_eq!(
         WalletEngineWalletLifecycleErrorCode::ProtectedSecretHost as u32,
         4
+    );
+    assert_eq!(
+        WalletEngineWalletLifecycleErrorCode::TonConnectSigningFailed as u32,
+        5
     );
 
     for (error, expected_code) in cases {
