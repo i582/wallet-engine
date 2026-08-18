@@ -16,13 +16,14 @@ The generator currently:
 - generates borrowed C list views and codecs for supported sequences;
 - generates field-for-field C views and codecs for supported records;
 - generates tag-plus-payload C values and codecs for supported rich errors;
+- generates semantic C views for string-backed UniFFI custom types;
 - generates typed opaque declarations for Rust objects and foreign callback
   interfaces;
 - compiles the generated facade as strict C11 in its test suite.
 
-Custom types, fielded non-error enums, callback adapters, and export lists will
-be added on top of the normalized component model. The crate intentionally has
-no dependency on the `wallet-engine` or `c-bindings` crates.
+Fielded non-error enums, callback adapters, and export lists will be added on
+top of the normalized component model. The crate intentionally has no
+dependency on the `wallet-engine` or `c-bindings` crates.
 
 From the repository root, the experimental recipe builds the library and runs
 the generator without touching the production `bindings/c` output:
@@ -57,12 +58,12 @@ implemented. C++ compatibility is deliberately deferred until the C ABI is
 complete and stable.
 
 The current type slice discovers the builtins, flat non-error enums, supported
-optional values, sequences, records, rich declared errors, Rust objects, and
-foreign callback interfaces used by the real `ComponentInterface`. It records
-their public Rust-to-C mapping in the manifest and generates borrowed views,
-private wire helpers, and typed opaque handle declarations. Tests compile the
-facade with strict C11 warnings and execute its codecs against known UniFFI
-wire values.
+optional values, sequences, records, rich declared errors, semantic custom
+types, Rust objects, and foreign callback interfaces used by the real
+`ComponentInterface`. It records their public Rust-to-C mapping in the manifest
+and generates borrowed views, private wire helpers, and typed opaque handle
+declarations. Tests compile the facade with strict C11 warnings and execute its
+codecs against known UniFFI wire values.
 
 ## Rust to C mapping
 
@@ -143,6 +144,7 @@ metadata; it never frees Rust-owned memory with the C allocator.
 | `Vec<T>` / `Sequence<T>` | `RustBuffer` | big-endian `i32` item count followed by each nested `T` |
 | record | `RustBuffer` | fields serialized in their declared order without C padding |
 | rich error | `RustBuffer` | big-endian one-based `i32` variant tag followed by the selected payload fields |
+| string-backed custom type | `RustBuffer` | same raw/nested string representation, with a distinct semantic C view |
 
 Lowering rejects malformed views, invalid UTF-8, lengths above `INT32_MAX`
 where UniFFI uses a signed 32-bit length, and arithmetic overflow. Lifting
@@ -152,9 +154,10 @@ The pure codec behavior is tested in `tests/codec.c`. That C11 executable
 checks exact wire bytes and write/read round trips for every integer width,
 booleans, strings, bytes, a flat enum, optional values, sequences of scalars,
 strings, and flat enums, direct and nested records, nested options and
-sequences of records, and a rich error with both fieldless and payload
-variants. The malformed cases cover truncated and trailing data, invalid
-UTF-8, impossible lengths, unknown tags, and arena rollback.
+sequences of records, a semantic custom string type, and a rich error with both
+fieldless and payload variants. The malformed cases cover truncated and
+trailing data, invalid UTF-8, impossible lengths, unknown tags, and arena
+rollback.
 
 ### Flat enums
 
@@ -206,24 +209,27 @@ reject trailing bytes.
 
 The implemented slice supports options over every type already registered by
 the dependency-ordered compound collector. In the current Wallet Engine
-component this produces nine types: the six builtin/flat-enum options plus
-`Option<DomainError>`, `Option<JournalRecord>`, and
-`Option<ProtectedSecretRef>`. Options over custom types become available when
-their semantic C views are registered.
+component this produces 16 types, including custom values and nested records
+such as `Option<Base64Hash>`, `Option<TonAddressString>`,
+`Option<AccountSnapshot>`, and `Option<ResolutionInfo>`.
 
 ### Wallet Engine custom string types
 
-These Rust types use `String` as their UniFFI builtin representation. They will
-keep semantic C names while using the same `{ data, len }` ABI layout.
+These Rust types use `String` as their UniFFI builtin representation. They keep
+semantic C names while using the same `{ data, len }` ABI layout.
 
-| Rust | Planned public C |
-|---|---|
-| `TonAddressString` | `WalletEngineTonAddressStringView` |
-| `Base64Hash` | `WalletEngineBase64HashView` |
-| `Boc` | `WalletEngineBocView` |
-| `UnsignedDecimalString` | `WalletEngineUnsignedDecimalStringView` |
-| `NonEmptyString` | `WalletEngineNonEmptyStringView` |
+| Rust | Public C | Status |
+|---|---|---|
+| `TonAddressString` | `WalletEngineTonAddressStringView` | Implemented |
+| `Base64Hash` | `WalletEngineBase64HashView` | Implemented |
+| `Boc` | `WalletEngineBocView` | Implemented |
+| `UnsignedDecimalString` | `WalletEngineUnsignedDecimalStringView` | Implemented |
+| `NonEmptyString` | `WalletEngineNonEmptyStringView` | Implemented |
 
+Each type has its own public declaration and private adapter codec; the
+manifest records both the semantic type and its `String` representation. A
+direct FFI value remains raw UTF-8 `RustBuffer`, while a value nested in a
+record, option, or sequence has UniFFI's big-endian `i32` string length prefix.
 Memory and UTF-8 are checked at the C boundary. Address, hash, BOC, decimal,
 and non-empty validation stays in the Rust custom-type lift implementation.
 
@@ -254,9 +260,9 @@ Dynamic nested values call their own checked `measure` codec; lifting threads
 the callback arena through every level and rewinds the whole nested operation
 on failure.
 
-The real metadata currently produces two sequence views: `Vec<String>` and
-`Vec<HttpHeader>`. Sequences over custom types become available when those
-types are registered.
+The real metadata currently produces six sequence views: `Vec<String>`,
+`Vec<Base64Hash>`, `Vec<TonAddressString>`, `Vec<ActivityItem>`,
+`Vec<HttpHeader>`, and `Vec<SendEmulationAction>`.
 
 A supported record is emitted as a field-for-field borrowed `*View`. Its wire
 codec does not copy the in-memory C struct: it writes and reads every field in
@@ -268,14 +274,13 @@ malformed. A fieldless Rust record gets one public `uint8_t reserved` member
 because ISO C does not allow an empty struct, while its UniFFI wire value stays
 zero bytes.
 
-The real Wallet Engine metadata currently produces 17 record views:
-`CreateWalletRequest`, `DomainError`, `HttpHeader`, `HttpRequestId`,
-`ImportWalletRequest`, `JournalKey`, `JournalRecord`, `ProtectedSecretRef`,
-`ProtectedSecretStore`, `ProviderConfig`, `RecoveryPhrase`,
-`JournalCompareExchange`, `ProtectedSecretRead`, `HttpRequest`, `HttpResponse`,
-`JournalCompareExchangeResult`, and `ResourceState`. Remaining records depend
-on custom types or fielded non-error enums and are enabled by those later type
-slices.
+The real Wallet Engine metadata currently produces 30 of 33 record views. The
+custom-type closure adds `AccountSnapshot`, `ActivityCursor`, `ActivityItem`,
+`ResolutionInfo`, `SendEmulationAction`, `SendResult`, `WalletDescriptor`,
+`CreatedWallet`, `SendEmulation`, `SendSnapshot`, `WalletClientConfig`,
+`WalletSnapshot`, and `WalletUpdate` to the previous 17. The remaining
+`SendRequest`, `SendPreviewRequest`, and `SendPreview` depend on the fielded
+non-error enum `SendAmount`.
 
 ### Declared rich errors
 
@@ -314,12 +319,11 @@ rejected. Payload views lifted from Rust remain valid only while the owning
 `RustBuffer` is alive; the later callable wrapper will keep it alive through
 the result callback.
 
-The real metadata currently produces four rich error types:
-`HttpHostError`, `JournalHostError`, `ProtectedSecretHostError`, and
-`WalletLifecycleError`. `WalletClientError` is deliberately not generated
-partially: several variants contain `UnsignedDecimalString`, so the complete
-error becomes available after the custom-type slice. The fielded non-error
-`SendAmount` is also still pending.
+The real metadata currently produces five rich error types: `HttpHostError`,
+`JournalHostError`, `ProtectedSecretHostError`, `WalletClientError`, and
+`WalletLifecycleError`. `WalletClientError` becomes complete only after
+`UnsignedDecimalString` is registered; the generator never publishes its
+earlier partial shape. The fielded non-error `SendAmount` is still pending.
 
 ### Objects and callables
 

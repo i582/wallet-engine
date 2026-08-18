@@ -848,6 +848,74 @@ static void test_nested_compound_round_trip(void) {
     assert(live_allocations == 0u);
 }
 
+static void test_custom_string_type_round_trip(void) {
+    static const char text[] = {'T', 'O', 'N'};
+    static const char optional_text[] = {'A'};
+    static const WalletEngineSemanticStringView values[] = {
+        {NULL, 0u},
+        {text, sizeof(text)},
+    };
+    static const uint8_t expected[] = {
+        0x00u, 0x00u, 0x00u, 0x03u, 'T', 'O', 'N',
+        0x01u, 0x00u, 0x00u, 0x00u, 0x01u, 'A',
+        0x00u, 0x00u, 0x00u, 0x02u,
+        0x00u, 0x00u, 0x00u, 0x00u,
+        0x00u, 0x00u, 0x00u, 0x03u, 'T', 'O', 'N',
+    };
+    static uint8_t invalid_utf8[] = {0xc0u, 0x80u};
+    WalletEngineCustomTypeFixtureView input = {
+        {text, sizeof(text)},
+        {true, {optional_text, sizeof(optional_text)}},
+        {values, 2u},
+    };
+    WalletEngineCustomTypeFixtureView actual = {0};
+    WalletEngineSemanticStringView custom = {0};
+    WalletEnginePrivateRustBuffer buffer = {0};
+    WalletEnginePrivateArena arena = {0};
+
+    assert(wallet_engine_private_lower_semantic_string(input.value, &buffer)
+        == WALLET_ENGINE_ABI_STATUS_OK);
+    assert(buffer.len == sizeof(text));
+    assert_bytes(buffer.data, (const uint8_t *)text, sizeof(text));
+    assert(wallet_engine_private_lift_semantic_string(&buffer, &custom)
+        == WALLET_ENGINE_ABI_STATUS_OK);
+    assert(custom.len == sizeof(text));
+    assert_bytes((const uint8_t *)custom.data, (const uint8_t *)text, sizeof(text));
+    wallet_engine_private_rustbuffer_free(buffer);
+
+    buffer = (WalletEnginePrivateRustBuffer){0};
+    assert(wallet_engine_private_lower_custom_type_fixture(input, &buffer)
+        == WALLET_ENGINE_ABI_STATUS_OK);
+    assert(buffer.len == sizeof(expected));
+    assert_bytes(buffer.data, expected, sizeof(expected));
+    assert(wallet_engine_private_lift_custom_type_fixture(&buffer, &arena, &actual)
+        == WALLET_ENGINE_ABI_STATUS_OK);
+    assert(actual.value.len == sizeof(text));
+    assert(actual.optional_value.has_value);
+    assert(actual.optional_value.value.len == sizeof(optional_text));
+    assert(actual.values.len == 2u && actual.values.data != NULL);
+    assert(actual.values.data[0].data == NULL && actual.values.data[0].len == 0u);
+    assert(actual.values.data[1].len == sizeof(text));
+    wallet_engine_private_arena_clear(&arena);
+    wallet_engine_private_rustbuffer_free(buffer);
+
+    buffer = (WalletEnginePrivateRustBuffer){0};
+    assert(wallet_engine_private_lower_semantic_string(
+        (WalletEngineSemanticStringView){
+            (const char *)invalid_utf8,
+            sizeof(invalid_utf8),
+        },
+        &buffer
+    ) == WALLET_ENGINE_ABI_STATUS_INVALID_UTF8);
+    assert(buffer.data == NULL && buffer.len == 0u && buffer.capacity == 0u);
+    buffer = (WalletEnginePrivateRustBuffer){
+        sizeof(invalid_utf8), sizeof(invalid_utf8), invalid_utf8,
+    };
+    assert(wallet_engine_private_lift_semantic_string(&buffer, &custom)
+        == WALLET_ENGINE_ABI_STATUS_PANIC);
+    assert(live_allocations == 0u);
+}
+
 static void test_empty_record_round_trip(void) {
     static uint8_t trailing[] = {0xffu};
     WalletEngineEmptyRecordFixtureView actual = {0};
@@ -1160,6 +1228,7 @@ int main(void) {
     test_record_round_trip();
     test_nested_record_round_trip();
     test_nested_compound_round_trip();
+    test_custom_string_type_round_trip();
     test_empty_record_round_trip();
     test_rich_error_round_trip();
     test_string_round_trip();

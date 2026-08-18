@@ -27,6 +27,7 @@ const RUSTBUFFER_RUNTIME: &str = include_str!("../../templates/codecs/rustbuffer
 const STRING_CODEC: &str = include_str!("../../templates/codecs/string.c.tmpl");
 const BYTES_CODEC: &str = include_str!("../../templates/codecs/bytes.c.tmpl");
 const FLAT_ENUM_CODEC: &str = include_str!("../../templates/codecs/flat_enum.c.tmpl");
+const CUSTOM_STRING_CODEC: &str = include_str!("../../templates/codecs/custom_string.c.tmpl");
 const OPTIONAL_CODEC: &str = include_str!("../../templates/codecs/optional.c.tmpl");
 const OPTIONAL_ARENA_CODEC: &str = include_str!("../../templates/codecs/optional_arena.c.tmpl");
 const OPTIONAL_MEASURE_DYNAMIC: &str =
@@ -130,6 +131,17 @@ pub(super) fn render(model: &BindingsModel) -> String {
     }
     for enum_ in model.flat_enums() {
         output.push_str(&render_flat_enum(enum_));
+    }
+    for custom in model.custom_types() {
+        output.push_str(&template::render(
+            CUSTOM_STRING_CODEC,
+            &[
+                ("FUNCTION_NAME", custom.function_name()),
+                ("C_NAME", custom.c_name()),
+                ("BUILTIN_FUNCTION_NAME", custom.builtin_function_name()),
+                ("BUILTIN_C_NAME", custom.builtin_c_name()),
+            ],
+        ));
     }
     for compound in model.compound_types() {
         output.push_str(&match compound {
@@ -525,6 +537,27 @@ mod tests {
         assert!(codec.contains("wire_size += 8u;"));
         assert!(codec.contains("wallet_engine_private_lower_optional_u64"));
         assert!(codec.contains("wallet_engine_private_lift_optional_u64"));
+        Ok(())
+    }
+
+    #[test]
+    fn renders_custom_string_codec_as_a_typed_adapter() -> Result<()> {
+        let component = ComponentInterface::from_webidl(
+            r"
+            namespace wallet_engine {};
+            [Custom]
+            typedef string Identifier;
+            dictionary Example { Identifier value; };
+            ",
+            "wallet_engine",
+        )?;
+        let model = BindingsModel::from_components(&[component])?;
+        let codec = render(&model);
+
+        assert!(codec.contains("wallet_engine_private_write_identifier"));
+        assert!(codec.contains("(WalletEngineStringView){value.data, value.len}"));
+        assert!(codec.contains("wallet_engine_private_lower_string"));
+        assert!(codec.contains("wallet_engine_private_lift_identifier"));
         Ok(())
     }
 

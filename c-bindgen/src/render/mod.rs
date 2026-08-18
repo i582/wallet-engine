@@ -134,6 +134,9 @@ mod tests {
                 void fail();
             };
 
+            [Custom]
+            typedef string SemanticString;
+
             dictionary Example {
                 u8 unsigned_byte;
                 i8 signed_byte;
@@ -170,6 +173,12 @@ mod tests {
             dictionary NestedCompoundFixture {
                 sequence<RecordFixture> records;
                 RecordFixture? selected;
+            };
+
+            dictionary CustomTypeFixture {
+                SemanticString value;
+                SemanticString? optional_value;
+                sequence<SemanticString> values;
             };
 
             dictionary EmptyRecordFixture {};

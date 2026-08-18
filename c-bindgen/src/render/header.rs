@@ -13,6 +13,8 @@ const HEADER_TEMPLATE: &str = include_str!("../../templates/header.h.tmpl");
 const STRING_VIEW_TEMPLATE: &str = include_str!("../../templates/types/string_view.h.tmpl");
 const BYTES_VIEW_TEMPLATE: &str = include_str!("../../templates/types/bytes_view.h.tmpl");
 const FLAT_ENUM_TEMPLATE: &str = include_str!("../../templates/types/flat_enum.h.tmpl");
+const CUSTOM_STRING_VIEW_TEMPLATE: &str =
+    include_str!("../../templates/types/custom_string_view.h.tmpl");
 const OPTIONAL_TEMPLATE: &str = include_str!("../../templates/types/optional.h.tmpl");
 const SEQUENCE_TEMPLATE: &str = include_str!("../../templates/types/sequence.h.tmpl");
 const RECORD_TEMPLATE: &str = include_str!("../../templates/types/record.h.tmpl");
@@ -60,6 +62,15 @@ pub(super) fn render(model: &BindingsModel) -> String {
                 ("RUST_NAME", enum_.rust_name()),
                 ("C_NAME", enum_.c_name()),
                 ("VARIANTS", &variants),
+            ],
+        ));
+    }
+    for custom in model.custom_types() {
+        type_declarations.push_str(&template::render(
+            CUSTOM_STRING_VIEW_TEMPLATE,
+            &[
+                ("RUST_NAME", custom.rust_name()),
+                ("C_NAME", custom.c_name()),
             ],
         ));
     }
@@ -281,6 +292,26 @@ mod tests {
         assert!(header.contains("typedef struct WalletEngineOptionalU64"));
         assert!(header.contains("bool has_value;"));
         assert!(header.contains("uint64_t value;"));
+        Ok(())
+    }
+
+    #[test]
+    fn renders_semantic_custom_string_view() -> Result<()> {
+        let component = ComponentInterface::from_webidl(
+            r"
+            namespace wallet_engine {};
+            [Custom]
+            typedef string Identifier;
+            dictionary Example { Identifier value; };
+            ",
+            "wallet_engine",
+        )?;
+        let model = BindingsModel::from_components(&[component])?;
+        let header = render(&model);
+
+        assert!(header.contains("typedef struct WalletEngineIdentifierView"));
+        assert!(header.contains("const char *data;"));
+        assert!(header.contains("WalletEngineIdentifierView value;"));
         Ok(())
     }
 

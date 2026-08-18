@@ -55,6 +55,24 @@ impl RegisteredType {
         self.read_needs_arena
     }
 
+    pub(super) const fn semantic_alias(
+        &self,
+        rust_name: String,
+        c_name: String,
+        c_type_label: String,
+        codec_name: String,
+    ) -> Self {
+        Self {
+            rust_name,
+            c_name,
+            c_type_label,
+            codec_name,
+            nested_wire_size: self.nested_wire_size,
+            minimum_wire_size: self.minimum_wire_size,
+            read_needs_arena: self.read_needs_arena,
+        }
+    }
+
     pub(super) const fn compound(
         rust_name: String,
         c_name: String,
@@ -134,6 +152,7 @@ enum TypeKey {
     Optional(Box<Self>),
     Sequence(Box<Self>),
     Record(String),
+    Custom(String),
 }
 
 impl TypeRegistry {
@@ -231,6 +250,11 @@ impl TypeRegistry {
                 if module_path.split("::").next() == Some(self.crate_name.as_str()) =>
             {
                 Some(TypeKey::Record(name.clone()))
+            }
+            Type::Custom {
+                module_path, name, ..
+            } if module_path.split("::").next() == Some(self.crate_name.as_str()) => {
+                Some(TypeKey::Custom(name.clone()))
             }
             _ => None,
         }

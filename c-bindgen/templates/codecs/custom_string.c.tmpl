@@ -1,0 +1,54 @@
+
+WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_write_{{FUNCTION_NAME}}(
+    WalletEnginePrivateBufferWriter *writer,
+    {{C_NAME}} value
+) {
+    return wallet_engine_private_write_{{BUILTIN_FUNCTION_NAME}}(
+        writer,
+        ({{BUILTIN_C_NAME}}){value.data, value.len}
+    );
+}
+
+WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_read_{{FUNCTION_NAME}}(
+    WalletEnginePrivateBufferReader *reader,
+    {{C_NAME}} *out_value
+) {
+    {{BUILTIN_C_NAME}} builtin = {0};
+    WalletEngineAbiStatus status;
+    if (out_value == NULL) {
+        return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
+    }
+    status = wallet_engine_private_read_{{BUILTIN_FUNCTION_NAME}}(reader, &builtin);
+    if (status == WALLET_ENGINE_ABI_STATUS_OK) {
+        out_value->data = builtin.data;
+        out_value->len = builtin.len;
+    }
+    return status;
+}
+
+WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_lower_{{FUNCTION_NAME}}(
+    {{C_NAME}} value,
+    WalletEnginePrivateRustBuffer *out_buffer
+) {
+    return wallet_engine_private_lower_{{BUILTIN_FUNCTION_NAME}}(
+        ({{BUILTIN_C_NAME}}){value.data, value.len},
+        out_buffer
+    );
+}
+
+WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_lift_{{FUNCTION_NAME}}(
+    const WalletEnginePrivateRustBuffer *buffer,
+    {{C_NAME}} *out_value
+) {
+    {{BUILTIN_C_NAME}} builtin = {0};
+    WalletEngineAbiStatus status;
+    if (out_value == NULL) {
+        return WALLET_ENGINE_ABI_STATUS_PANIC;
+    }
+    status = wallet_engine_private_lift_{{BUILTIN_FUNCTION_NAME}}(buffer, &builtin);
+    if (status == WALLET_ENGINE_ABI_STATUS_OK) {
+        out_value->data = builtin.data;
+        out_value->len = builtin.len;
+    }
+    return status;
+}

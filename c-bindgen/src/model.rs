@@ -4,6 +4,7 @@ use uniffi_bindgen::ComponentInterface;
 
 use crate::{
     compound_map::{CompoundTypeRef, CompoundTypes},
+    custom_type_map::{SemanticCustomType, collect_semantic_custom_types},
     enum_map::FlatEnum,
     error_map::{ErrorType, collect_error_types},
     object_map::{ObjectHandle, collect_object_handles},
@@ -14,7 +15,7 @@ use crate::{
     type_registry::TypeRegistry,
 };
 
-pub(super) const MANIFEST_SCHEMA_VERSION: u32 = 10;
+pub(super) const MANIFEST_SCHEMA_VERSION: u32 = 11;
 const EXPERIMENTAL_ABI_VERSION: u32 = 0;
 const EXPECTED_CRATE_NAME: &str = "wallet_engine";
 const EXPECTED_NAMESPACE: &str = "wallet_engine";
@@ -24,6 +25,7 @@ pub(super) struct BindingsModel {
     abi_version: u32,
     uniffi_contract_version: u32,
     type_registry: TypeRegistry,
+    custom_types: Vec<SemanticCustomType>,
     compound_types: CompoundTypes,
     error_types: Vec<ErrorType>,
     object_handles: Vec<ObjectHandle>,
@@ -50,6 +52,7 @@ struct GenerationManifest {
     artifacts: [&'static str; 3],
     rendered_builtin_types: Vec<BuiltinTypeManifest>,
     rendered_flat_enums: Vec<FlatEnumManifest>,
+    rendered_custom_types: Vec<CustomTypeManifest>,
     rendered_optional_types: Vec<OptionalTypeManifest>,
     rendered_sequence_types: Vec<SequenceTypeManifest>,
     rendered_record_types: Vec<RecordTypeManifest>,
@@ -77,6 +80,19 @@ struct FlatEnumVariantManifest {
     rust: String,
     c: String,
     value: u32,
+}
+
+#[derive(Debug, Serialize)]
+struct CustomTypeManifest {
+    rust: String,
+    c: String,
+    builtin: CustomTypeBuiltinManifest,
+}
+
+#[derive(Debug, Serialize)]
+struct CustomTypeBuiltinManifest {
+    rust: String,
+    c: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -189,15 +205,15 @@ impl BindingsModel {
         }
 
         let mut type_registry = TypeRegistry::collect(component)?;
+        let custom_types = collect_semantic_custom_types(component, &mut type_registry)?;
         let compound_types = CompoundTypes::collect(component, &mut type_registry)?;
         let error_types = collect_error_types(component, &mut type_registry)?;
         let object_handles = collect_object_handles(component, &mut type_registry)?;
         let manifest = Manifest::from_components(
             components,
             &type_registry,
-            compound_types.optionals(),
-            compound_types.sequences(),
-            compound_types.records(),
+            &custom_types,
+            &compound_types,
             &error_types,
             &object_handles,
         );
@@ -210,6 +226,7 @@ impl BindingsModel {
             abi_version: EXPERIMENTAL_ABI_VERSION,
             uniffi_contract_version: component.uniffi_contract_version(),
             type_registry,
+            custom_types,
             compound_types,
             error_types,
             object_handles,
@@ -278,6 +295,10 @@ impl BindingsModel {
         self.type_registry.flat_enums()
     }
 
+    pub(super) fn custom_types(&self) -> &[SemanticCustomType] {
+        &self.custom_types
+    }
+
     pub(super) fn has_optional_types(&self) -> bool {
         !self.compound_types.optionals().is_empty()
     }
@@ -319,9 +340,8 @@ impl Manifest {
     fn from_components(
         components: &[ComponentInterface],
         type_registry: &TypeRegistry,
-        optional_types: &[OptionalType],
-        sequence_types: &[SequenceType],
-        record_types: &[RecordType],
+        custom_types: &[SemanticCustomType],
+        compound_types: &CompoundTypes,
         error_types: &[ErrorType],
         object_handles: &[ObjectHandle],
     ) -> Self {
@@ -337,7 +357,7 @@ impl Manifest {
         Self {
             schema_version: MANIFEST_SCHEMA_VERSION,
             generation: GenerationManifest {
-                phase: "nested-compound-types",
+                phase: "semantic-custom-types",
                 artifacts: [
                     "wallet_engine.h",
                     "wallet_engine.c",
@@ -354,15 +374,22 @@ impl Manifest {
                     .iter()
                     .map(FlatEnumManifest::from)
                     .collect(),
-                rendered_optional_types: optional_types
+                rendered_custom_types: custom_types.iter().map(CustomTypeManifest::from).collect(),
+                rendered_optional_types: compound_types
+                    .optionals()
                     .iter()
                     .map(OptionalTypeManifest::from)
                     .collect(),
-                rendered_sequence_types: sequence_types
+                rendered_sequence_types: compound_types
+                    .sequences()
                     .iter()
                     .map(SequenceTypeManifest::from)
                     .collect(),
-                rendered_record_types: record_types.iter().map(RecordTypeManifest::from).collect(),
+                rendered_record_types: compound_types
+                    .records()
+                    .iter()
+                    .map(RecordTypeManifest::from)
+                    .collect(),
                 rendered_error_types: error_types.iter().map(ErrorTypeManifest::from).collect(),
                 rendered_object_handles: object_handles
                     .iter()
@@ -395,6 +422,19 @@ impl From<&FlatEnum> for FlatEnumManifest {
                 .iter()
                 .map(FlatEnumVariantManifest::from)
                 .collect(),
+        }
+    }
+}
+
+impl From<&SemanticCustomType> for CustomTypeManifest {
+    fn from(value: &SemanticCustomType) -> Self {
+        Self {
+            rust: value.rust_name().to_owned(),
+            c: value.c_name().to_owned(),
+            builtin: CustomTypeBuiltinManifest {
+                rust: value.builtin_rust_name().to_owned(),
+                c: value.builtin_c_name().to_owned(),
+            },
         }
     }
 }
@@ -580,6 +620,7 @@ mod tests {
         assert_eq!(manifest.generation.rendered_semantic_operation_count, 0);
         assert!(manifest.generation.rendered_builtin_types.is_empty());
         assert!(manifest.generation.rendered_flat_enums.is_empty());
+        assert!(manifest.generation.rendered_custom_types.is_empty());
         assert!(manifest.generation.rendered_optional_types.is_empty());
         assert!(manifest.generation.rendered_sequence_types.is_empty());
         assert!(manifest.generation.rendered_record_types.is_empty());
@@ -613,7 +654,7 @@ mod tests {
         let manifest = model.manifest();
         let enum_ = &manifest.generation.rendered_flat_enums[0];
 
-        assert_eq!(manifest.generation.phase, "nested-compound-types");
+        assert_eq!(manifest.generation.phase, "semantic-custom-types");
         assert_eq!(enum_.rust, "Network");
         assert_eq!(enum_.variants[0].value, 0);
         assert_eq!(enum_.variants[1].value, 1);
@@ -637,6 +678,27 @@ mod tests {
         assert_eq!(optional.c, "WalletEngineOptionalU64");
         assert_eq!(optional.value.rust, "u64");
         assert_eq!(optional.value.c, "uint64_t");
+        Ok(())
+    }
+
+    #[test]
+    fn manifest_records_custom_type_and_builtin_representation() -> Result<()> {
+        let component = ComponentInterface::from_webidl(
+            r"
+            namespace wallet_engine {};
+            [Custom]
+            typedef string Identifier;
+            dictionary Example { Identifier value; };
+            ",
+            "wallet_engine",
+        )?;
+        let model = BindingsModel::from_components(&[component])?;
+        let custom = &model.manifest().generation.rendered_custom_types[0];
+
+        assert_eq!(custom.rust, "Identifier");
+        assert_eq!(custom.c, "WalletEngineIdentifierView");
+        assert_eq!(custom.builtin.rust, "String");
+        assert_eq!(custom.builtin.c, "WalletEngineStringView");
         Ok(())
     }
 
