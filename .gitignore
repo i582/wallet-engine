@@ -1,7 +1,6 @@
 # Rust build artifacts
 target/
 apple-bindgen/target/
-c-bindgen/target/
 kotlin-bindgen/target/
 wasm-bindings/target/
 xtask/target/

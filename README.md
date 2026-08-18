@@ -75,24 +75,6 @@ For a small React integration, see the
 shows the recovery phrase, refreshes the balance and activity, and loads more
 history. The engine integration is kept separate from the interface code.
 
-### C
-
-Generate the C ABI header:
-
-```shell
-just bindings-c
-```
-
-Build the native library and run the C11 ABI tests:
-
-```shell
-just test-c
-```
-
-The ABI lives in the separate `c-bindings` crate, and its header
-is generated with `cbindgen`. See [the C example](examples/c/README.md) for
-build and run commands.
-
 ### Generated C++ (experimental)
 
 Generate the experimental C++20 wrapper:
@@ -105,9 +87,8 @@ The output is written to `bindings/cpp-experimental`. See the
 [generated C++ example](examples/cpp-bindgen/README.md) for a minimal
 `WalletPlatformHost` implementation and build commands.
 
-Except for the checked-in C ABI header, this repository does not track generated
-bindings. Generate them from the same revision that you use to build the Rust
-library.
+This repository does not track generated bindings. Generate them from the same
+revision that you use to build the Rust library.
 
 ## Rust
 
@@ -134,7 +115,8 @@ If Acton is not in `PATH`, set the path explicitly:
 WALLET_ENGINE_ACTON_BIN=/path/to/acton cargo nextest run --locked
 ```
 
-Use `just test` to also run C boundary tests and Rust documentation tests.
+Use `just test` to also build the generated C++ example and run Rust
+documentation tests.
 
 ## Integration model
 
