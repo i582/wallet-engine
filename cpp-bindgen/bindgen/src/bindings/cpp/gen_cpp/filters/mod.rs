@@ -1,15 +1,15 @@
 use askama;
 use heck::{ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
 use uniffi_bindgen::{
-    interface::{Argument, AsType, FfiType, Literal, Object, Type, Variant},
     ComponentInterface,
+    interface::{Argument, AsType, DefaultValue, FfiType, Literal, Object, Type, Variant},
 };
 
 use crate::bindings::cpp::{
+    CodeType,
     gen_cpp::{
         callback_interface, compounds, custom, enum_, miscellany, object, primitives, record,
     },
-    CodeType,
 };
 
 use super::EnumStyle;
@@ -201,12 +201,14 @@ impl<T: AsType> AsCodeType for T {
             Type::CallbackInterface { name, module_path } => Box::new(
                 callback_interface::CallbackInterfaceCodeType::new(name, module_path),
             ),
+            Type::Box { inner_type } => inner_type.as_codetype(),
             Type::Optional { inner_type } => {
                 Box::new(compounds::OptionalCodeType::new(*inner_type))
             }
             Type::Sequence { inner_type } => {
                 Box::new(compounds::SequenceCodeType::new(*inner_type))
             }
+            Type::Set { inner_type } => Box::new(compounds::SequenceCodeType::new(*inner_type)),
             Type::Map {
                 key_type,
                 value_type,
@@ -273,18 +275,18 @@ pub(crate) fn object_names(obj: &Object) -> Result<(String, String)> {
 }
 
 pub(crate) fn literal_cpp(
-    literal: &Literal,
+    default: &DefaultValue,
     as_ct: &impl AsCodeType,
     enum_style: &EnumStyle,
     ci: &ComponentInterface,
 ) -> Result<String> {
-    match literal {
-        Literal::Enum(name, _) => Ok(format!(
+    match default {
+        DefaultValue::Literal(Literal::Enum(name, _)) => Ok(format!(
             "{}::{}",
             as_ct.as_codetype().type_label(ci),
             CppCodeOracle.enum_variant_name(&name, enum_style),
         )),
-        _ => Ok(as_ct.as_codetype().literal(literal, ci)),
+        _ => Ok(as_ct.as_codetype().default_value(default, ci)),
     }
 }
 
@@ -339,12 +341,12 @@ pub(crate) fn ffi_type_name(ffi_type: &FfiType) -> Result<String> {
         FfiType::Int64 => "int64_t".into(),
         FfiType::Float32 => "float".into(),
         FfiType::Float64 => "double".into(),
-        FfiType::RustArcPtr(_) | FfiType::VoidPointer => "void *".into(),
+        FfiType::VoidPointer => "void *".into(),
         FfiType::RustBuffer(_) => "RustBuffer".into(),
         FfiType::ForeignBytes => "ForeignBytes".into(),
         FfiType::Callback(_) => "void *".into(),
         FfiType::Struct(name) => ffi_struct_name(name)?,
-        FfiType::RustCallStatus => "RustCallStatus*".into(),
+        FfiType::RustCallStatus => "RustCallStatus".into(),
         FfiType::Reference(typ) => format!("const {} &", ffi_type_name(typ)?),
         FfiType::MutReference(typ) => format!("{} &", ffi_type_name(typ)?),
     })

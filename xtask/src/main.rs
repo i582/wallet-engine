@@ -9,7 +9,8 @@ use clap::{Parser, Subcommand};
 
 use crate::android::{AndroidAbi, build_android};
 use crate::bindings::{
-    generate_c, generate_c_experimental, generate_kotlin, generate_swift, generate_wasm,
+    generate_c, generate_c_experimental, generate_cpp, generate_kotlin, generate_swift,
+    generate_wasm,
 };
 
 #[derive(Parser)]
@@ -43,6 +44,8 @@ enum BindingLanguage {
     },
     /// Run the custom `UniFFI` C backend without replacing production bindings.
     CExperimental,
+    /// Generate experimental C++ bindings with `uniffi-bindgen-cpp`.
+    Cpp,
     /// Generate Swift sources and the Apple C module.
     Swift {
         /// Verify generation without updating ignored outputs.
@@ -75,6 +78,9 @@ fn run() -> Result<()> {
         Command::Bindings {
             language: BindingLanguage::CExperimental,
         } => generate_c_experimental(),
+        Command::Bindings {
+            language: BindingLanguage::Cpp,
+        } => generate_cpp(),
         Command::Bindings {
             language: BindingLanguage::Swift { check },
         } => generate_swift(check),

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <bit>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <exception>
 #include <functional>

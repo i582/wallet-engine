@@ -1,6 +1,9 @@
 use crate::bindings::cpp::CodeType;
 use paste::paste;
-use uniffi_bindgen::{backend::Literal, interface::Radix, ComponentInterface};
+use uniffi_bindgen::{
+    ComponentInterface,
+    interface::{Literal, Radix},
+};
 
 fn render_literal(literal: &Literal) -> String {
     match literal {

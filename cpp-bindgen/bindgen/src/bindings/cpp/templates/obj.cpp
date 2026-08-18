@@ -14,9 +14,9 @@ namespace uniffi {
 {%- endif %}
 
 
-{{ impl_class_name }}::{{ impl_class_name }}(void *ptr): instance(ptr) {}
+{{ impl_class_name }}::{{ impl_class_name }}(uint64_t ptr): instance(ptr) {}
 
-{{ impl_class_name }}::{{ impl_class_name }}(const {{ impl_class_name }} &other) : instance(nullptr) {
+{{ impl_class_name }}::{{ impl_class_name }}(const {{ impl_class_name }} &other) : instance(0) {
     if (other.instance) {
         instance = other._uniffi_internal_clone_pointer();
     }
@@ -65,7 +65,7 @@ namespace uniffi {
     );
 }
 
-void *{{ impl_class_name }}::_uniffi_internal_clone_pointer() const {
+uint64_t {{ impl_class_name }}::_uniffi_internal_clone_pointer() const {
     return uniffi::rust_call(
         {{ obj.ffi_object_clone().name() }},
         nullptr,
@@ -93,6 +93,10 @@ bool {{ impl_class_name }}::ne(const {{ type_name }} &other) const {
 {% when UniffiTrait::Hash { hash } %}
 uint64_t {{ impl_class_name }}::hash() const {
     return uniffi::{{ Type::UInt64.borrow()|lift_fn }}({% call macros::rust_call_with_prefix("this->_uniffi_internal_clone_pointer()", hash) %});
+}
+{% when UniffiTrait::Ord { cmp } %}
+int8_t {{ impl_class_name }}::compare(const {{ type_name }} &other) const {
+    return uniffi::{{ Type::Int8.borrow()|lift_fn }}({% call macros::rust_call_with_prefix("this->_uniffi_internal_clone_pointer()", cmp) %});
 }
 {% endmatch %}
 {%- endfor %}

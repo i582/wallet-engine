@@ -1,6 +1,6 @@
 use uniffi_bindgen::ComponentInterface;
 
-use crate::bindings::cpp::{gen_cpp::filters::external_namespace_prefix, CodeType};
+use crate::bindings::cpp::{CodeType, gen_cpp::filters::external_namespace_prefix};
 
 #[derive(Debug)]
 pub struct CustomCodeType {

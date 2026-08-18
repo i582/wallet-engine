@@ -1,8 +1,11 @@
-use uniffi_bindgen::{backend::Literal, interface::ObjectImpl, ComponentInterface};
+use uniffi_bindgen::{
+    ComponentInterface,
+    interface::{Literal, ObjectImpl},
+};
 
 use crate::bindings::cpp::{
-    gen_cpp::filters::callback_interface_name, gen_cpp::filters::external_namespace_prefix,
-    gen_cpp::filters::CppCodeOracle, CodeType,
+    CodeType, gen_cpp::filters::CppCodeOracle, gen_cpp::filters::callback_interface_name,
+    gen_cpp::filters::external_namespace_prefix,
 };
 
 #[derive(Debug)]

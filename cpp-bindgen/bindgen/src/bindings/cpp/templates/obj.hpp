@@ -80,6 +80,11 @@ struct {{ impl_class_name }}
      * Returns a hash of the object, internally calls Rust's `Hash` trait.
      */
     uint64_t hash() const;
+    {%- when UniffiTrait::Ord { cmp } %}
+    /**
+     * Three-way comparison, internally calls Rust's `Ord` trait.
+     */
+    int8_t compare(const {{ type_name }} &other) const;
     {%- endmatch %}
     {%- endfor %}
 
@@ -89,9 +94,9 @@ struct {{ impl_class_name }}
 private:
     {{ impl_class_name }}(const {{ impl_class_name }} &);
 
-    {{ impl_class_name }}(void *);
+    {{ impl_class_name }}(uint64_t);
 
-    void *_uniffi_internal_clone_pointer() const;
+    uint64_t _uniffi_internal_clone_pointer() const;
 
-    void *instance = nullptr;
+    uint64_t instance = 0;
 };

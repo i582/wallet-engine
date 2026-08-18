@@ -5,10 +5,11 @@ use std::{fmt::Debug, fs};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use uniffi_bindgen::{
-    backend::Literal, BindingGenerator, Component, ComponentInterface, GenerationSettings,
+    BindingGenerator, Component, ComponentInterface, GenerationSettings,
+    interface::{DefaultValue, Literal},
 };
 
-use self::gen_cpp::{generate_cpp_bindings, Bindings};
+use self::gen_cpp::{Bindings, generate_cpp_bindings};
 
 pub(crate) struct CppBindingGenerator {
     pub scaffolding_mode: bool,
@@ -49,6 +50,13 @@ pub trait CodeType: Debug {
 
     fn literal(&self, _literal: &Literal, ci: &ComponentInterface) -> String {
         unimplemented!("Unimplemented for {}", self.type_label(ci))
+    }
+
+    fn default_value(&self, default: &DefaultValue, ci: &ComponentInterface) -> String {
+        match default {
+            DefaultValue::Default => "{}".into(),
+            DefaultValue::Literal(literal) => self.literal(literal, ci),
+        }
     }
 
     /// Name of the FfiConverter
@@ -93,13 +101,6 @@ impl BindingGenerator for CppBindingGenerator {
         components: &[uniffi_bindgen::Component<Self::Config>],
     ) -> Result<()> {
         for Component { ci, config, .. } in components {
-            if ci.has_async_fns() || ci.has_async_callback_interface_definition() {
-                unimplemented!(
-                    "Cpp bindgen does not support async functions! Namespace: {}",
-                    ci.namespace()
-                );
-            }
-
             if self.scaffolding_mode {
                 unimplemented!("Cpp scaffolding is not supported yet!");
             } else {

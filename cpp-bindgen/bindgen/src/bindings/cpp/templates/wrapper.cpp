@@ -77,6 +77,74 @@ R rust_call(F f, EF error_cb, Args... args) {
     }
 }
 
+namespace {
+struct RustFutureContinuationState {
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool called = false;
+    int8_t poll_result = 0;
+};
+
+void rust_future_continuation(uint64_t data, int8_t poll_result) {
+    auto *state = reinterpret_cast<RustFutureContinuationState *>(data);
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        state->poll_result = poll_result;
+        state->called = true;
+    }
+    state->condition.notify_one();
+}
+
+void foreign_future_drop_noop(uint64_t) {}
+
+template <typename F>
+struct RustFutureHandleGuard {
+    uint64_t handle;
+    F free;
+
+    ~RustFutureHandleGuard() {
+        free(handle);
+    }
+};
+}
+
+template <typename Start, typename Poll, typename Complete, typename Free, typename EF,
+          typename R = std::invoke_result_t<Complete, uint64_t, RustCallStatus *>>
+R rust_call_async(Start start, Poll poll, Complete complete, Free free, EF error_cb) {
+    initialize();
+
+    auto handle = start();
+    RustFutureHandleGuard guard { handle, free };
+
+    while (true) {
+        RustFutureContinuationState state;
+        poll(
+            handle,
+            reinterpret_cast<void *>(&rust_future_continuation),
+            reinterpret_cast<uint64_t>(&state)
+        );
+
+        std::unique_lock<std::mutex> lock(state.mutex);
+        state.condition.wait(lock, [&state] { return state.called; });
+        if (state.poll_result == 0) {
+            break;
+        }
+        if (state.poll_result != 1) {
+            throw std::runtime_error("Unexpected Rust future poll result");
+        }
+    }
+
+    RustCallStatus status = {};
+    if constexpr (std::is_void_v<R>) {
+        complete(handle, &status);
+        check_rust_call(status, error_cb);
+    } else {
+        auto ret = complete(handle, &status);
+        check_rust_call(status, error_cb);
+        return ret;
+    }
+}
+
 template <typename F, typename W>
 void rust_call_trait_interface(RustCallStatus* status, F make_call, W write_value) {
     initialize();
