@@ -1,8 +1,14 @@
 use std::fmt::Write as _;
 
 use crate::{
-    enum_map::FlatEnum, model::BindingsModel, optional_map::OptionalType,
-    sequence_map::SequenceType, template, type_map::BuiltinType, type_registry::NestedWireSize,
+    enum_map::FlatEnum,
+    model::BindingsModel,
+    optional_map::OptionalType,
+    record_map::{RecordField, RecordType},
+    sequence_map::SequenceType,
+    template,
+    type_map::BuiltinType,
+    type_registry::NestedWireSize,
 };
 
 const BASE: &str = include_str!("../../templates/codecs/base.c.tmpl");
@@ -26,6 +32,18 @@ const SEQUENCE_FIXED_MEASURE: &str =
     include_str!("../../templates/codecs/sequence_measure_fixed.c.tmpl");
 const SEQUENCE_LENGTH_PREFIXED_VIEW_MEASURE: &str =
     include_str!("../../templates/codecs/sequence_measure_length_prefixed_view.c.tmpl");
+const RECORD_CODEC: &str = include_str!("../../templates/codecs/record.c.tmpl");
+const EMPTY_RECORD_CODEC: &str = include_str!("../../templates/codecs/empty_record.c.tmpl");
+const RECORD_MEASURE_FIXED_FIELD: &str =
+    include_str!("../../templates/codecs/record_measure_fixed_field.c.tmpl");
+const RECORD_MEASURE_LENGTH_PREFIXED_VIEW_FIELD: &str =
+    include_str!("../../templates/codecs/record_measure_length_prefixed_view_field.c.tmpl");
+const RECORD_MEASURE_DYNAMIC_FIELD: &str =
+    include_str!("../../templates/codecs/record_measure_dynamic_field.c.tmpl");
+const RECORD_WRITE_FIELD: &str = include_str!("../../templates/codecs/record_write_field.c.tmpl");
+const RECORD_READ_FIELD: &str = include_str!("../../templates/codecs/record_read_field.c.tmpl");
+const RECORD_READ_ARENA_FIELD: &str =
+    include_str!("../../templates/codecs/record_read_arena_field.c.tmpl");
 
 pub(super) fn render(model: &BindingsModel) -> String {
     let mut output = if model.has_wire_types() {
@@ -72,7 +90,7 @@ pub(super) fn render(model: &BindingsModel) -> String {
             model.private_ffi().rustbuffer_free(),
         ));
     }
-    if model.has_sequence_types() {
+    if model.needs_output_arena() {
         output.push_str(ARENA_RUNTIME);
     }
     if model.has_builtin_type(BuiltinType::String) {
@@ -89,6 +107,9 @@ pub(super) fn render(model: &BindingsModel) -> String {
     }
     for sequence in model.sequence_types() {
         output.push_str(&render_sequence(sequence));
+    }
+    for record in model.record_types() {
+        output.push_str(&render_record(record));
     }
 
     output
@@ -131,9 +152,9 @@ fn render_flat_enum(enum_: &FlatEnum) -> String {
 }
 
 fn render_optional(optional: &OptionalType) -> String {
-    let some_wire_size = match optional.inner_wire_size() {
+    let measure_some = match optional.inner_wire_size() {
         NestedWireSize::Fixed(inner_size) => {
-            format!("        wire_size = {}u;\n", inner_size + 1)
+            format!("        wire_size += {inner_size}u;\n")
         }
         NestedWireSize::LengthPrefixedView => String::from(
             r"        if ((value.value.len != 0u && value.value.data == NULL)
@@ -144,6 +165,9 @@ fn render_optional(optional: &OptionalType) -> String {
         wire_size = value.value.len + 5u;
 ",
         ),
+        NestedWireSize::Dynamic => {
+            unreachable!("optional collection only accepts base registered types")
+        }
     };
 
     template::render(
@@ -152,7 +176,7 @@ fn render_optional(optional: &OptionalType) -> String {
             ("FUNCTION_NAME", optional.function_name()),
             ("C_NAME", optional.c_name()),
             ("INNER_FUNCTION_NAME", optional.inner_function_name()),
-            ("SOME_WIRE_SIZE", &some_wire_size),
+            ("MEASURE_SOME", &measure_some),
         ],
     )
 }
@@ -169,6 +193,9 @@ fn render_sequence(sequence: &SequenceType) -> String {
             String::from("4"),
             String::from(SEQUENCE_LENGTH_PREFIXED_VIEW_MEASURE),
         ),
+        NestedWireSize::Dynamic => {
+            unreachable!("sequence collection only accepts base registered types")
+        }
     };
 
     template::render(
@@ -182,6 +209,72 @@ fn render_sequence(sequence: &SequenceType) -> String {
             ("MEASURE_ITEMS", &measure_items),
         ],
     )
+}
+
+fn render_record(record: &RecordType) -> String {
+    let template_source = if record.fields().is_empty() {
+        EMPTY_RECORD_CODEC
+    } else {
+        RECORD_CODEC
+    };
+    let mut measure_fields = String::new();
+    let mut write_fields = String::new();
+    let mut read_fields = String::new();
+    for field in record.fields() {
+        measure_fields.push_str(&render_record_measure_field(field));
+        write_fields.push_str(&template::render(
+            RECORD_WRITE_FIELD,
+            &[
+                ("FIELD_CODEC_NAME", field.codec_name()),
+                ("FIELD_C_NAME", field.c_name()),
+            ],
+        ));
+        let read_template = if field.read_needs_arena() {
+            RECORD_READ_ARENA_FIELD
+        } else {
+            RECORD_READ_FIELD
+        };
+        read_fields.push_str(&template::render(
+            read_template,
+            &[
+                ("FIELD_CODEC_NAME", field.codec_name()),
+                ("FIELD_C_NAME", field.c_name()),
+            ],
+        ));
+    }
+
+    let mut replacements = vec![
+        ("FUNCTION_NAME", record.function_name()),
+        ("C_NAME", record.c_name()),
+    ];
+    if !record.fields().is_empty() {
+        replacements.extend([
+            ("MEASURE_FIELDS", measure_fields.as_str()),
+            ("WRITE_FIELDS", write_fields.as_str()),
+            ("READ_FIELDS", read_fields.as_str()),
+        ]);
+    }
+    template::render(template_source, &replacements)
+}
+
+fn render_record_measure_field(field: &RecordField) -> String {
+    match field.nested_wire_size() {
+        NestedWireSize::Fixed(size) => {
+            let size = size.to_string();
+            template::render(RECORD_MEASURE_FIXED_FIELD, &[("FIELD_WIRE_SIZE", &size)])
+        }
+        NestedWireSize::LengthPrefixedView => template::render(
+            RECORD_MEASURE_LENGTH_PREFIXED_VIEW_FIELD,
+            &[("FIELD_C_NAME", field.c_name())],
+        ),
+        NestedWireSize::Dynamic => template::render(
+            RECORD_MEASURE_DYNAMIC_FIELD,
+            &[
+                ("FIELD_CODEC_NAME", field.codec_name()),
+                ("FIELD_C_NAME", field.c_name()),
+            ],
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -260,7 +353,7 @@ mod tests {
         assert!(codec.contains("wallet_engine_private_write_optional_u64"));
         assert!(codec.contains("value.has_value ? 1u : 0u"));
         assert!(codec.contains("wallet_engine_private_write_u64(writer, value.value)"));
-        assert!(codec.contains("wire_size = 9u;"));
+        assert!(codec.contains("wire_size += 8u;"));
         assert!(codec.contains("wallet_engine_private_lower_optional_u64"));
         assert!(codec.contains("wallet_engine_private_lift_optional_u64"));
         Ok(())
@@ -283,6 +376,48 @@ mod tests {
         assert!(codec.contains("wallet_engine_private_read_u64"));
         assert!(codec.contains("wallet_engine_private_arena_alloc"));
         assert!(codec.contains("wire_size += value.len * 8u;"));
+        Ok(())
+    }
+
+    #[test]
+    fn renders_record_fields_in_declared_order() -> Result<()> {
+        let component = ComponentInterface::from_webidl(
+            r"
+            namespace wallet_engine {};
+            dictionary Example { string label; u64 revision; };
+            ",
+            "wallet_engine",
+        )?;
+        let model = BindingsModel::from_components(&[component])?;
+        let codec = render(&model);
+        let write_label = codec
+            .find("wallet_engine_private_write_string(\n        writer,\n        value.label")
+            .expect("label write should be rendered");
+        let write_revision = codec
+            .find("wallet_engine_private_write_u64(\n        writer,\n        value.revision")
+            .expect("revision write should be rendered");
+
+        assert!(write_label < write_revision);
+        assert!(codec.contains("wallet_engine_private_measure_example"));
+        assert!(codec.contains("wallet_engine_private_lift_example"));
+        Ok(())
+    }
+
+    #[test]
+    fn fieldless_record_uses_rustbuffer_without_unrelated_i32_codec() -> Result<()> {
+        let component = ComponentInterface::from_webidl(
+            r"
+            namespace wallet_engine {};
+            dictionary Empty {};
+            ",
+            "wallet_engine",
+        )?;
+        let model = BindingsModel::from_components(&[component])?;
+        let codec = render(&model);
+
+        assert!(codec.contains("wallet_engine_private_rustbuffer_alloc"));
+        assert!(codec.contains("wallet_engine_private_lower_empty"));
+        assert!(!codec.contains("wallet_engine_private_write_i32"));
         Ok(())
     }
 }

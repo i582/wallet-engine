@@ -14,6 +14,7 @@ The generator currently:
 - generates public C types and codecs for flat non-error enums;
 - generates public C wrappers and codecs for supported optional values;
 - generates borrowed C list views and codecs for supported sequences;
+- generates field-for-field C views and codecs for supported records;
 - compiles the generated facade as strict C11 in its test suite.
 
 Compound codecs, callback adapters, and export lists will be added on top of
@@ -29,6 +30,16 @@ just bindings-c-experimental
 
 The output directory is always `bindings/c-experimental`.
 
+To compile and execute the generated C codec tests with AddressSanitizer and
+UndefinedBehaviorSanitizer, run:
+
+```shell
+just test-c-bindgen-sanitized
+```
+
+This sanitizer profile requires a C compiler with support for
+`-fsanitize=address,undefined`.
+
 Static C and header source lives in `templates/`, split into facade, public
 type, and private codec blocks. Rust renderers choose the blocks required by
 the normalized component model and substitute explicit `{{PLACEHOLDER}}`
@@ -43,10 +54,10 @@ implemented. C++ compatibility is deliberately deferred until the C ABI is
 complete and stable.
 
 The current type slice discovers the builtins, flat non-error enums, supported
-optional values, and sequences used by the real `ComponentInterface`, records
-their public Rust-to-C mapping in the manifest, and generates borrowed views
-plus private wire helpers. Tests compile the facade with strict C11 warnings
-and execute its codecs against known UniFFI wire values.
+optional values, sequences, and records used by the real `ComponentInterface`,
+records their public Rust-to-C mapping in the manifest, and generates borrowed
+views plus private wire helpers. Tests compile the facade with strict C11
+warnings and execute its codecs against known UniFFI wire values.
 
 ## Rust to C mapping
 
@@ -125,6 +136,7 @@ metadata; it never frees Rust-owned memory with the C allocator.
 | flat enum | `RustBuffer` | big-endian `i32` UniFFI discriminant |
 | `Option<T>` | `RustBuffer` | one-byte `0`/`1` tag followed by nested `T` for `Some` |
 | `Vec<T>` / `Sequence<T>` | `RustBuffer` | big-endian `i32` item count followed by each nested `T` |
+| record | `RustBuffer` | fields serialized in their declared order without C padding |
 
 Lowering rejects malformed views, invalid UTF-8, lengths above `INT32_MAX`
 where UniFFI uses a signed 32-bit length, and arithmetic overflow. Lifting
@@ -133,8 +145,9 @@ checks buffer bounds and rejects trailing data for a complete `Bytes` value.
 The pure codec behavior is tested in `tests/codec.c`. That C11 executable
 checks exact wire bytes and write/read round trips for every integer width,
 booleans, strings, bytes, a flat enum, optional values, and sequences of
-scalars, strings, and flat enums, together with malformed, truncated,
-trailing, invalid UTF-8, and unknown-tag inputs.
+scalars, strings, and flat enums, plus direct and nested records. The malformed
+cases cover truncated and trailing data, invalid UTF-8, impossible lengths,
+and unknown tags.
 
 ### Flat enums
 
@@ -211,7 +224,7 @@ and non-empty validation stays in the Rust custom-type lift implementation.
 | Rust / UniFFI | Public C | Status | Rule |
 |---|---|---|---|
 | `Vec<T>` | `WalletEngineTListView { const T *data; size_t len; }` | Implemented for builtin and flat-enum items | Borrowed contiguous sequence. |
-| record `T` | `WalletEngineTView` | Planned | Fields are converted recursively. |
+| record `T` | `WalletEngineTView` | Implemented when every field type is registered | Fields are converted recursively. |
 | enum with fields | kind/tag plus generated payload union | Planned | Only the payload selected by the tag is active. |
 | error enum `E` | stable error code plus generated payload | Planned | Declared errors are separate from immediate ABI failures. |
 
@@ -228,6 +241,24 @@ only through UniFFI.
 The current slice composes sequences over registered builtins and flat enums.
 Sequences over records and custom types become available when those item types
 are registered by their later type slices.
+
+A supported record is emitted as a field-for-field borrowed `*View`. Its wire
+codec does not copy the in-memory C struct: it writes and reads every field in
+the order stored in `ComponentInterface`, using the nested codec registered for
+that field. Records are collected in dependency order, so a record can embed an
+already supported record, option, or sequence by value. Lift uses the same
+temporary arena as sequences and rolls allocations back if any later field is
+malformed. A fieldless Rust record gets one public `uint8_t reserved` member
+because ISO C does not allow an empty struct, while its UniFFI wire value stays
+zero bytes.
+
+The real Wallet Engine metadata currently produces 13 record views:
+`CreateWalletRequest`, `DomainError`, `HttpHeader`, `HttpRequestId`,
+`ImportWalletRequest`, `JournalKey`, `JournalRecord`, `ProtectedSecretRef`,
+`ProtectedSecretStore`, `ProviderConfig`, `RecoveryPhrase`,
+`JournalCompareExchange`, and `ProtectedSecretRead`. Remaining records depend
+on custom types, payload enums, `Option<Record>`, or `Sequence<Record>` and are
+enabled by those later type slices.
 
 ### Objects and callables
 

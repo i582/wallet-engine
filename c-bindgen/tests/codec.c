@@ -623,6 +623,165 @@ static void test_sequence_flat_enum_round_trip(void) {
     assert(live_allocations == 0u);
 }
 
+static void test_record_round_trip(void) {
+    static const char label[] = {'T', 'O', 'N'};
+    static const char alias[] = {'m', 'a', 'i', 'n'};
+    static const WalletEngineStringView aliases[] = {
+        {alias, sizeof(alias)},
+        {NULL, 0u},
+    };
+    static const uint8_t expected[] = {
+        0x00u, 0x00u, 0x00u, 0x03u, 'T', 'O', 'N',
+        0x00u, 0x00u, 0x00u, 0x02u,
+        0x00u, 0x00u, 0x00u, 0x04u, 'm', 'a', 'i', 'n',
+        0x00u, 0x00u, 0x00u, 0x00u,
+        0x00u, 0x00u, 0x00u, 0x02u,
+        0x01u, 0x01u, 0x02u, 0x03u, 0x04u, 0x05u, 0x06u, 0x07u, 0x08u,
+    };
+    static const uint8_t invalid_utf8[] = {0xc0u, 0x80u};
+    static uint8_t unknown_enum[] = {
+        0x00u, 0x00u, 0x00u, 0x00u,
+        0x00u, 0x00u, 0x00u, 0x01u,
+        0x00u, 0x00u, 0x00u, 0x00u,
+        0x00u, 0x00u, 0x00u, 0x03u,
+    };
+    static uint8_t truncated_optional[] = {
+        0x00u, 0x00u, 0x00u, 0x00u,
+        0x00u, 0x00u, 0x00u, 0x01u,
+        0x00u, 0x00u, 0x00u, 0x00u,
+        0x00u, 0x00u, 0x00u, 0x01u,
+        0x01u,
+    };
+    static uint8_t trailing[] = {
+        0x00u, 0x00u, 0x00u, 0x00u,
+        0x00u, 0x00u, 0x00u, 0x00u,
+        0x00u, 0x00u, 0x00u, 0x01u,
+        0x00u,
+        0xffu,
+    };
+    WalletEngineRecordFixtureView input = {
+        {label, sizeof(label)},
+        {aliases, 2u},
+        WALLET_ENGINE_NETWORK_TESTNET,
+        {true, UINT64_C(0x0102030405060708)},
+    };
+    WalletEngineRecordFixtureView actual = {0};
+    WalletEnginePrivateRustBuffer buffer = {0};
+    WalletEnginePrivateArena arena = {0};
+
+    assert(wallet_engine_private_lower_record_fixture(input, &buffer)
+        == WALLET_ENGINE_ABI_STATUS_OK);
+    assert(buffer.len == sizeof(expected));
+    assert_bytes(buffer.data, expected, sizeof(expected));
+    assert(wallet_engine_private_lift_record_fixture(&buffer, &arena, &actual)
+        == WALLET_ENGINE_ABI_STATUS_OK);
+    assert(actual.label.len == sizeof(label));
+    assert_bytes(
+        (const uint8_t *)actual.label.data,
+        (const uint8_t *)label,
+        sizeof(label)
+    );
+    assert(actual.aliases.len == 2u && actual.aliases.data != NULL);
+    assert(actual.aliases.data[0].len == sizeof(alias));
+    assert_bytes(
+        (const uint8_t *)actual.aliases.data[0].data,
+        (const uint8_t *)alias,
+        sizeof(alias)
+    );
+    assert(actual.aliases.data[1].data == NULL && actual.aliases.data[1].len == 0u);
+    assert(actual.network == WALLET_ENGINE_NETWORK_TESTNET);
+    assert(actual.revision.has_value);
+    assert(actual.revision.value == UINT64_C(0x0102030405060708));
+    assert(arena.head != NULL);
+    wallet_engine_private_arena_clear(&arena);
+    wallet_engine_private_rustbuffer_free(buffer);
+
+    input.label = (WalletEngineStringView){
+        (const char *)invalid_utf8,
+        sizeof(invalid_utf8),
+    };
+    buffer = (WalletEnginePrivateRustBuffer){0};
+    assert(wallet_engine_private_lower_record_fixture(input, &buffer)
+        == WALLET_ENGINE_ABI_STATUS_INVALID_UTF8);
+    assert(buffer.data == NULL && buffer.len == 0u && buffer.capacity == 0u);
+
+    buffer = (WalletEnginePrivateRustBuffer){
+        sizeof(unknown_enum), sizeof(unknown_enum), unknown_enum,
+    };
+    assert(wallet_engine_private_lift_record_fixture(&buffer, &arena, &actual)
+        == WALLET_ENGINE_ABI_STATUS_PANIC);
+    assert(arena.head == NULL);
+    assert(actual.label.data == NULL && actual.aliases.data == NULL);
+    buffer = (WalletEnginePrivateRustBuffer){
+        sizeof(truncated_optional), sizeof(truncated_optional), truncated_optional,
+    };
+    assert(wallet_engine_private_lift_record_fixture(&buffer, &arena, &actual)
+        == WALLET_ENGINE_ABI_STATUS_PANIC);
+    assert(arena.head == NULL);
+    assert(actual.label.data == NULL && actual.aliases.data == NULL);
+    buffer = (WalletEnginePrivateRustBuffer){sizeof(trailing), sizeof(trailing), trailing};
+    assert(wallet_engine_private_lift_record_fixture(&buffer, &arena, &actual)
+        == WALLET_ENGINE_ABI_STATUS_PANIC);
+    assert(arena.head == NULL);
+    assert(actual.label.data == NULL && actual.aliases.data == NULL);
+    assert(live_allocations == 0u);
+}
+
+static void test_nested_record_round_trip(void) {
+    static const char label[] = {'T', 'O', 'N'};
+    static const WalletEngineStringView aliases[] = {
+        {label, sizeof(label)},
+    };
+    WalletEngineNestedRecordFixtureView input = {
+        {
+            {label, sizeof(label)},
+            {aliases, 1u},
+            WALLET_ENGINE_NETWORK_MAINNET,
+            {false, UINT64_MAX},
+        },
+        true,
+    };
+    WalletEngineNestedRecordFixtureView actual = {0};
+    WalletEnginePrivateRustBuffer buffer = {0};
+    WalletEnginePrivateArena arena = {0};
+
+    assert(wallet_engine_private_lower_nested_record_fixture(input, &buffer)
+        == WALLET_ENGINE_ABI_STATUS_OK);
+    assert(wallet_engine_private_lift_nested_record_fixture(&buffer, &arena, &actual)
+        == WALLET_ENGINE_ABI_STATUS_OK);
+    assert(actual.enabled);
+    assert(actual.value.label.len == sizeof(label));
+    assert(actual.value.aliases.len == 1u);
+    assert(actual.value.aliases.data != NULL);
+    assert(actual.value.network == WALLET_ENGINE_NETWORK_MAINNET);
+    assert(!actual.value.revision.has_value && actual.value.revision.value == 0u);
+    wallet_engine_private_arena_clear(&arena);
+    wallet_engine_private_rustbuffer_free(buffer);
+    assert(live_allocations == 0u);
+}
+
+static void test_empty_record_round_trip(void) {
+    static uint8_t trailing[] = {0xffu};
+    WalletEngineEmptyRecordFixtureView actual = {0};
+    WalletEnginePrivateRustBuffer buffer = {0};
+    WalletEnginePrivateArena arena = {0};
+
+    assert(wallet_engine_private_lower_empty_record_fixture(
+        (WalletEngineEmptyRecordFixtureView){0},
+        &buffer
+    ) == WALLET_ENGINE_ABI_STATUS_OK);
+    assert(buffer.data == NULL && buffer.len == 0u && buffer.capacity == 0u);
+    assert(wallet_engine_private_lift_empty_record_fixture(&buffer, &arena, &actual)
+        == WALLET_ENGINE_ABI_STATUS_OK);
+    assert(arena.head == NULL);
+
+    buffer = (WalletEnginePrivateRustBuffer){sizeof(trailing), sizeof(trailing), trailing};
+    assert(wallet_engine_private_lift_empty_record_fixture(&buffer, &arena, &actual)
+        == WALLET_ENGINE_ABI_STATUS_PANIC);
+    assert(arena.head == NULL);
+    assert(live_allocations == 0u);
+}
+
 static void test_string_round_trip(void) {
     static const char text[] = {
         'T', 'O', 'N', ' ', (char)0xf0, (char)0x9f, (char)0x92, (char)0x8e,
@@ -808,6 +967,9 @@ int main(void) {
     test_sequence_u64_round_trip();
     test_sequence_string_round_trip();
     test_sequence_flat_enum_round_trip();
+    test_record_round_trip();
+    test_nested_record_round_trip();
+    test_empty_record_round_trip();
     test_string_round_trip();
     test_empty_string_round_trip();
     test_bytes_round_trip();

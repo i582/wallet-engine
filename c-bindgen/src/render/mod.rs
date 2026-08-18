@@ -41,6 +41,8 @@ mod tests {
     use super::{FACADE_FILENAME, write_bindings};
     use crate::model::BindingsModel;
 
+    const ENABLE_SANITIZERS_ENV: &str = "WALLET_ENGINE_C_BINDGEN_SANITIZERS";
+
     #[test]
     fn generated_skeleton_compiles_as_strict_c11() -> Result<()> {
         let component = builtin_fixture()?;
@@ -51,15 +53,7 @@ mod tests {
             .context("C compile-smoke path is not valid UTF-8")?;
         write_bindings(out_dir, &model)?;
 
-        let compiler = env::var_os("CC").unwrap_or_else(|| OsString::from("cc"));
-        let output = Command::new(compiler)
-            .arg("-std=c11")
-            .arg("-Wall")
-            .arg("-Wextra")
-            .arg("-Werror")
-            .arg("-pedantic")
-            .arg("-I")
-            .arg(out_dir)
+        let output = c_compiler(out_dir)
             .arg("-c")
             .arg(out_dir.join(FACADE_FILENAME))
             .arg("-o")
@@ -86,15 +80,7 @@ mod tests {
 
         let harness = Utf8Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/codec.c");
         let executable = out_dir.join("codec_test");
-        let compiler = env::var_os("CC").unwrap_or_else(|| OsString::from("cc"));
-        let output = Command::new(compiler)
-            .arg("-std=c11")
-            .arg("-Wall")
-            .arg("-Wextra")
-            .arg("-Werror")
-            .arg("-pedantic")
-            .arg("-I")
-            .arg(out_dir)
+        let output = c_compiler(out_dir)
             .arg(&harness)
             .arg("-o")
             .arg(&executable)
@@ -115,6 +101,29 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         Ok(())
+    }
+
+    fn c_compiler(include_dir: &Utf8Path) -> Command {
+        let compiler = env::var_os("CC").unwrap_or_else(|| OsString::from("cc"));
+        let mut command = Command::new(compiler);
+        command
+            .arg("-std=c11")
+            .arg("-Wall")
+            .arg("-Wextra")
+            .arg("-Werror")
+            .arg("-pedantic")
+            .arg("-I")
+            .arg(include_dir);
+
+        if env::var_os(ENABLE_SANITIZERS_ENV).is_some() {
+            command
+                .arg("-fsanitize=address,undefined")
+                .arg("-fno-sanitize-recover=all")
+                .arg("-fno-omit-frame-pointer")
+                .arg("-g");
+        }
+
+        command
     }
 
     fn builtin_fixture() -> Result<ComponentInterface> {
@@ -142,6 +151,20 @@ mod tests {
                 sequence<string> names;
                 sequence<Network> networks;
             };
+
+            dictionary RecordFixture {
+                string label;
+                sequence<string> aliases;
+                Network network;
+                u64? revision;
+            };
+
+            dictionary NestedRecordFixture {
+                RecordFixture value;
+                boolean enabled;
+            };
+
+            dictionary EmptyRecordFixture {};
 
             enum Network { "mainnet", "testnet" };
             "#,

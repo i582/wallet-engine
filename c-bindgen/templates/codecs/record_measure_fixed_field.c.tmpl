@@ -1,0 +1,4 @@
+    if (wire_size > SIZE_MAX - {{FIELD_WIRE_SIZE}}u) {
+        return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
+    }
+    wire_size += {{FIELD_WIRE_SIZE}}u;

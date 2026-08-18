@@ -16,9 +16,13 @@ pub(super) fn function_name(rust_name: &str) -> String {
     rust_name.to_snake_case()
 }
 
+pub(super) fn field_name(rust_name: &str) -> String {
+    rust_name.to_snake_case()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{constant_name, function_name, type_name};
+    use super::{constant_name, field_name, function_name, type_name};
 
     #[test]
     fn names_are_prefixed_and_stable() {
@@ -28,5 +32,6 @@ mod tests {
             "WALLET_ENGINE_HTTP_METHOD_POST"
         );
         assert_eq!(function_name("HttpMethod"), "http_method");
+        assert_eq!(field_name("requestTimeoutMs"), "request_timeout_ms");
     }
 }

@@ -8,6 +8,10 @@ const BYTES_VIEW_TEMPLATE: &str = include_str!("../../templates/types/bytes_view
 const FLAT_ENUM_TEMPLATE: &str = include_str!("../../templates/types/flat_enum.h.tmpl");
 const OPTIONAL_TEMPLATE: &str = include_str!("../../templates/types/optional.h.tmpl");
 const SEQUENCE_TEMPLATE: &str = include_str!("../../templates/types/sequence.h.tmpl");
+const RECORD_TEMPLATE: &str = include_str!("../../templates/types/record.h.tmpl");
+const RECORD_FIELD_TEMPLATE: &str = include_str!("../../templates/types/record_field.h.tmpl");
+const EMPTY_RECORD_FIELD_TEMPLATE: &str =
+    include_str!("../../templates/types/empty_record_field.h.tmpl");
 
 pub(super) fn render(model: &BindingsModel) -> String {
     let abi_version = model.abi_version().to_string();
@@ -60,6 +64,36 @@ pub(super) fn render(model: &BindingsModel) -> String {
                 ("RUST_NAME", sequence.rust_name()),
                 ("C_NAME", sequence.c_name()),
                 ("INNER_C_NAME", sequence.inner_c_name()),
+            ],
+        ));
+    }
+    for (index, record) in model.record_types().iter().enumerate() {
+        if index != 0 {
+            type_declarations.push('\n');
+        }
+        let fields = if record.fields().is_empty() {
+            String::from(EMPTY_RECORD_FIELD_TEMPLATE)
+        } else {
+            record
+                .fields()
+                .iter()
+                .map(|field| {
+                    template::render(
+                        RECORD_FIELD_TEMPLATE,
+                        &[
+                            ("FIELD_C_TYPE", field.c_type_name()),
+                            ("FIELD_C_NAME", field.c_name()),
+                        ],
+                    )
+                })
+                .collect()
+        };
+        type_declarations.push_str(&template::render(
+            RECORD_TEMPLATE,
+            &[
+                ("RUST_NAME", record.rust_name()),
+                ("C_NAME", record.c_name()),
+                ("FIELDS", &fields),
             ],
         ));
     }
@@ -169,6 +203,36 @@ mod tests {
         assert!(header.contains("typedef struct WalletEngineStringListView"));
         assert!(header.contains("const WalletEngineStringView *data;"));
         assert!(header.contains("size_t len;"));
+        Ok(())
+    }
+
+    #[test]
+    fn renders_records_in_dependency_order() -> Result<()> {
+        let component = ComponentInterface::from_webidl(
+            r"
+            namespace wallet_engine {};
+            dictionary Outer { Inner inner; u64 revision; };
+            dictionary Inner { string label; };
+            ",
+            "wallet_engine",
+        )?;
+        let model = BindingsModel::from_components(&[component])?;
+        let header = render(&model);
+        let inner = header
+            .find("typedef struct WalletEngineInnerView")
+            .expect("Inner view should be rendered");
+        let outer = header
+            .find("typedef struct WalletEngineOuterView")
+            .expect("Outer view should be rendered");
+
+        assert!(inner < outer);
+        assert!(header.contains("WalletEngineInnerView inner;"));
+        assert!(header.contains("uint64_t revision;"));
+        assert!(
+            header.contains(
+                "} WalletEngineInnerView;\n\n/* A borrowed view of Rust record `Outer`. */"
+            )
+        );
         Ok(())
     }
 }

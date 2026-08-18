@@ -5,13 +5,15 @@ use uniffi_bindgen::{ComponentInterface, interface::Type};
 
 use crate::{
     naming,
-    type_registry::{NestedWireSize, TypeRegistry},
+    type_registry::{NestedWireSize, RegisteredType, TypeRegistry},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SequenceType {
+    uniffi_type: Type,
     rust_name: String,
     c_name: String,
+    c_type_label: String,
     function_name: String,
     inner_rust_name: String,
     inner_c_name: String,
@@ -47,6 +49,20 @@ impl SequenceType {
     pub(super) const fn inner_wire_size(&self) -> NestedWireSize {
         self.inner_wire_size
     }
+
+    pub(super) const fn uniffi_type(&self) -> &Type {
+        &self.uniffi_type
+    }
+
+    pub(super) fn registered_type(&self) -> RegisteredType {
+        RegisteredType::compound(
+            self.rust_name.clone(),
+            self.c_name.clone(),
+            self.c_type_label.clone(),
+            self.function_name.clone(),
+            true,
+        )
+    }
 }
 
 pub(super) fn collect_sequence_types(
@@ -56,7 +72,7 @@ pub(super) fn collect_sequence_types(
     let mut sequences = component
         .iter_local_types()
         .filter_map(|type_| match type_ {
-            Type::Sequence { inner_type } => sequence_type(inner_type, types),
+            Type::Sequence { inner_type } => sequence_type(type_, inner_type, types),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -81,16 +97,24 @@ pub(super) fn collect_sequence_types(
     Ok(sequences)
 }
 
-fn sequence_type(inner_type: &Type, types: &TypeRegistry) -> Option<SequenceType> {
+fn sequence_type(
+    uniffi_type: &Type,
+    inner_type: &Type,
+    types: &TypeRegistry,
+) -> Option<SequenceType> {
     let inner = types.resolve(inner_type)?;
     let inner_label = inner
         .c_type_label()
         .strip_suffix("View")
         .unwrap_or_else(|| inner.c_type_label());
 
+    let c_type_label = format!("{inner_label}ListView");
+
     Some(SequenceType {
+        uniffi_type: uniffi_type.clone(),
         rust_name: format!("Vec<{}>", inner.rust_name()),
-        c_name: naming::type_name(&format!("{inner_label}ListView")),
+        c_name: naming::type_name(&c_type_label),
+        c_type_label,
         function_name: format!("sequence_{}", inner.codec_name()),
         inner_rust_name: inner.rust_name().to_owned(),
         inner_c_name: inner.c_name().to_owned(),

@@ -57,6 +57,9 @@ test-rust:
     cargo nextest run --locked --manifest-path xtask/Cargo.toml {{ NEXTEST_CONFIG_ARGS }} {{ NEXTEST_PROFILE_ARGS }}
     cargo test --locked --doc
 
+test-c-bindgen-sanitized:
+    env WALLET_ENGINE_C_BINDGEN_SANITIZERS=1 cargo nextest run --locked --manifest-path c-bindgen/Cargo.toml {{ NEXTEST_CONFIG_ARGS }} {{ NEXTEST_PROFILE_ARGS }}
+
 # Run mutation tests for the root Rust crate. Extra arguments are forwarded to
 # cargo-mutants, for example: `just mutants --file src/engine/send.rs`.
 mutants *args:

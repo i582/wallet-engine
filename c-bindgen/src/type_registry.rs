@@ -12,6 +12,7 @@ use crate::{
 pub(super) enum NestedWireSize {
     Fixed(usize),
     LengthPrefixedView,
+    Dynamic,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +22,7 @@ pub(super) struct RegisteredType {
     c_type_label: String,
     codec_name: String,
     nested_wire_size: NestedWireSize,
+    read_needs_arena: bool,
 }
 
 impl RegisteredType {
@@ -44,6 +46,27 @@ impl RegisteredType {
         self.nested_wire_size
     }
 
+    pub(super) const fn read_needs_arena(&self) -> bool {
+        self.read_needs_arena
+    }
+
+    pub(super) const fn compound(
+        rust_name: String,
+        c_name: String,
+        c_type_label: String,
+        codec_name: String,
+        read_needs_arena: bool,
+    ) -> Self {
+        Self {
+            rust_name,
+            c_name,
+            c_type_label,
+            codec_name,
+            nested_wire_size: NestedWireSize::Dynamic,
+            read_needs_arena,
+        }
+    }
+
     fn from_builtin(builtin: BuiltinType) -> Self {
         let (c_type_label, codec_name, nested_wire_size) = match builtin {
             BuiltinType::UInt8 => ("U8", "u8", NestedWireSize::Fixed(1)),
@@ -64,6 +87,7 @@ impl RegisteredType {
             c_type_label: c_type_label.to_owned(),
             codec_name: codec_name.to_owned(),
             nested_wire_size,
+            read_needs_arena: false,
         }
     }
 
@@ -74,6 +98,7 @@ impl RegisteredType {
             c_type_label: enum_.rust_name().to_owned(),
             codec_name: enum_.function_name().to_owned(),
             nested_wire_size: NestedWireSize::Fixed(4),
+            read_needs_arena: false,
         }
     }
 }
@@ -92,6 +117,9 @@ pub(super) struct TypeRegistry {
 enum TypeKey {
     Builtin(BuiltinType),
     Enum(String),
+    Optional(Box<Self>),
+    Sequence(Box<Self>),
+    Record(String),
 }
 
 impl TypeRegistry {
@@ -133,6 +161,13 @@ impl TypeRegistry {
         self.key_for(type_).and_then(|key| self.types.get(&key))
     }
 
+    pub(super) fn register_type(&mut self, type_: &Type, registered: RegisteredType) -> Result<()> {
+        let Some(key) = self.key_for(type_) else {
+            anyhow::bail!("cannot register unsupported or external UniFFI type {type_:?}");
+        };
+        self.register(key, registered)
+    }
+
     pub(super) fn has_builtin_type(&self, builtin: BuiltinType) -> bool {
         self.builtin_types.contains(&builtin)
     }
@@ -162,6 +197,17 @@ impl TypeRegistry {
                 if module_path.split("::").next() == Some(self.crate_name.as_str()) =>
             {
                 Some(TypeKey::Enum(name.clone()))
+            }
+            Type::Optional { inner_type } => self
+                .key_for(inner_type)
+                .map(|inner| TypeKey::Optional(Box::new(inner))),
+            Type::Sequence { inner_type } => self
+                .key_for(inner_type)
+                .map(|inner| TypeKey::Sequence(Box::new(inner))),
+            Type::Record { module_path, name }
+                if module_path.split("::").next() == Some(self.crate_name.as_str()) =>
+            {
+                Some(TypeKey::Record(name.clone()))
             }
             _ => None,
         }
@@ -257,6 +303,7 @@ mod tests {
             c_type_label: "First".to_owned(),
             codec_name: "first".to_owned(),
             nested_wire_size: NestedWireSize::Fixed(1),
+            read_needs_arena: false,
         };
         let second = RegisteredType {
             rust_name: "Second".to_owned(),
@@ -264,6 +311,7 @@ mod tests {
             c_type_label: "Second".to_owned(),
             codec_name: "second".to_owned(),
             nested_wire_size: NestedWireSize::Fixed(1),
+            read_needs_arena: false,
         };
 
         registry.register(TypeKey::Builtin(BuiltinType::UInt8), first)?;

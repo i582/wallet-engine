@@ -1,0 +1,9 @@
+    status = wallet_engine_private_read_{{FIELD_CODEC_NAME}}(
+        reader,
+        arena,
+        &out_value->{{FIELD_C_NAME}}
+    );
+    if (status != WALLET_ENGINE_ABI_STATUS_OK) {
+        wallet_engine_private_arena_rewind(arena, mark);
+        return status;
+    }

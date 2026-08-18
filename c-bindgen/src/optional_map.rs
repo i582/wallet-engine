@@ -5,13 +5,15 @@ use uniffi_bindgen::{ComponentInterface, interface::Type};
 
 use crate::{
     naming,
-    type_registry::{NestedWireSize, TypeRegistry},
+    type_registry::{NestedWireSize, RegisteredType, TypeRegistry},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct OptionalType {
+    uniffi_type: Type,
     rust_name: String,
     c_name: String,
+    c_type_label: String,
     function_name: String,
     inner_rust_name: String,
     inner_c_name: String,
@@ -47,6 +49,20 @@ impl OptionalType {
     pub(super) const fn inner_wire_size(&self) -> NestedWireSize {
         self.inner_wire_size
     }
+
+    pub(super) const fn uniffi_type(&self) -> &Type {
+        &self.uniffi_type
+    }
+
+    pub(super) fn registered_type(&self) -> RegisteredType {
+        RegisteredType::compound(
+            self.rust_name.clone(),
+            self.c_name.clone(),
+            self.c_type_label.clone(),
+            self.function_name.clone(),
+            false,
+        )
+    }
 }
 
 pub(super) fn collect_optional_types(
@@ -56,7 +72,7 @@ pub(super) fn collect_optional_types(
     let mut optionals = component
         .iter_local_types()
         .filter_map(|type_| match type_ {
-            Type::Optional { inner_type } => optional_type(inner_type, types),
+            Type::Optional { inner_type } => optional_type(type_, inner_type, types),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -79,15 +95,22 @@ pub(super) fn collect_optional_types(
     Ok(optionals)
 }
 
-fn optional_type(inner_type: &Type, types: &TypeRegistry) -> Option<OptionalType> {
+fn optional_type(
+    uniffi_type: &Type,
+    inner_type: &Type,
+    types: &TypeRegistry,
+) -> Option<OptionalType> {
     let inner = types.resolve(inner_type)?;
     let rust_name = format!("Option<{}>", inner.rust_name());
-    let c_name = naming::type_name(&format!("Optional{}", inner.c_type_label()));
+    let c_type_label = format!("Optional{}", inner.c_type_label());
+    let c_name = naming::type_name(&c_type_label);
     let function_name = format!("optional_{}", inner.codec_name());
 
     Some(OptionalType {
+        uniffi_type: uniffi_type.clone(),
         rust_name,
         c_name,
+        c_type_label,
         function_name,
         inner_rust_name: inner.rust_name().to_owned(),
         inner_c_name: inner.c_name().to_owned(),

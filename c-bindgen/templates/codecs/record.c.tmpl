@@ -1,15 +1,13 @@
-
 WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_measure_{{FUNCTION_NAME}}(
     {{C_NAME}} value,
     size_t *out_size
 ) {
-    size_t wire_size = 1u;
+    size_t wire_size = 0u;
+    (void)value;
     if (out_size == NULL) {
         return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
     }
-    if (value.has_value) {
-{{MEASURE_SOME}}    }
-    *out_size = wire_size;
+{{MEASURE_FIELDS}}    *out_size = wire_size;
     return WALLET_ENGINE_ABI_STATUS_OK;
 }
 
@@ -17,45 +15,23 @@ WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_write_{{FUNCTI
     WalletEnginePrivateBufferWriter *writer,
     {{C_NAME}} value
 ) {
-    WalletEngineAbiStatus status = wallet_engine_private_write_u8(
-        writer,
-        value.has_value ? 1u : 0u
-    );
-    if (status != WALLET_ENGINE_ABI_STATUS_OK || !value.has_value) {
-        return status;
-    }
-    return wallet_engine_private_write_{{INNER_FUNCTION_NAME}}(writer, value.value);
+    WalletEngineAbiStatus status;
+{{WRITE_FIELDS}}    return WALLET_ENGINE_ABI_STATUS_OK;
 }
 
 WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_read_{{FUNCTION_NAME}}(
     WalletEnginePrivateBufferReader *reader,
+    WalletEnginePrivateArena *arena,
     {{C_NAME}} *out_value
 ) {
-    uint8_t tag = 0u;
+    WalletEnginePrivateArenaBlock *mark;
     WalletEngineAbiStatus status;
-    if (out_value == NULL) {
+    if (reader == NULL || arena == NULL || out_value == NULL) {
         return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
     }
     *out_value = ({{C_NAME}}){0};
-    status = wallet_engine_private_read_u8(reader, &tag);
-    if (status != WALLET_ENGINE_ABI_STATUS_OK) {
-        return status;
-    }
-    switch (tag) {
-        case 0u:
-            return WALLET_ENGINE_ABI_STATUS_OK;
-        case 1u:
-            status = wallet_engine_private_read_{{INNER_FUNCTION_NAME}}(
-                reader,
-                &out_value->value
-            );
-            if (status == WALLET_ENGINE_ABI_STATUS_OK) {
-                out_value->has_value = true;
-            }
-            return status;
-        default:
-            return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
-    }
+    mark = arena->head;
+{{READ_FIELDS}}    return WALLET_ENGINE_ABI_STATUS_OK;
 }
 
 WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_lower_{{FUNCTION_NAME}}(
@@ -77,6 +53,9 @@ WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_lower_{{FUNCTI
     }
     writer = (WalletEnginePrivateBufferWriter){out_buffer->data, wire_size, 0u};
     status = wallet_engine_private_write_{{FUNCTION_NAME}}(&writer, value);
+    if (status == WALLET_ENGINE_ABI_STATUS_OK && writer.offset != writer.len) {
+        status = WALLET_ENGINE_ABI_STATUS_PANIC;
+    }
     if (status != WALLET_ENGINE_ABI_STATUS_OK) {
         wallet_engine_private_rustbuffer_free(*out_buffer);
         *out_buffer = (WalletEnginePrivateRustBuffer){0};
@@ -86,16 +65,22 @@ WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_lower_{{FUNCTI
 
 WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_lift_{{FUNCTION_NAME}}(
     const WalletEnginePrivateRustBuffer *buffer,
+    WalletEnginePrivateArena *arena,
     {{C_NAME}} *out_value
 ) {
+    WalletEnginePrivateArenaBlock *mark;
     WalletEnginePrivateBufferReader reader;
     WalletEngineAbiStatus status;
-    if (out_value == NULL || !wallet_engine_private_rustbuffer_is_valid(buffer)) {
+    if (arena == NULL || out_value == NULL
+        || !wallet_engine_private_rustbuffer_is_valid(buffer)) {
         return WALLET_ENGINE_ABI_STATUS_PANIC;
     }
+    mark = arena->head;
     reader = (WalletEnginePrivateBufferReader){buffer->data, (size_t)buffer->len, 0u};
-    status = wallet_engine_private_read_{{FUNCTION_NAME}}(&reader, out_value);
+    status = wallet_engine_private_read_{{FUNCTION_NAME}}(&reader, arena, out_value);
     if (status != WALLET_ENGINE_ABI_STATUS_OK || reader.offset != reader.len) {
+        wallet_engine_private_arena_rewind(arena, mark);
+        *out_value = ({{C_NAME}}){0};
         return WALLET_ENGINE_ABI_STATUS_PANIC;
     }
     return WALLET_ENGINE_ABI_STATUS_OK;

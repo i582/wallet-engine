@@ -1,0 +1,7 @@
+    if ((value.{{FIELD_C_NAME}}.len != 0u && value.{{FIELD_C_NAME}}.data == NULL)
+        || value.{{FIELD_C_NAME}}.len > (size_t)INT32_MAX
+        || wire_size > SIZE_MAX - 4u
+        || value.{{FIELD_C_NAME}}.len > SIZE_MAX - wire_size - 4u) {
+        return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
+    }
+    wire_size += value.{{FIELD_C_NAME}}.len + 4u;

@@ -7,7 +7,7 @@ const ARENA_INCLUDES_TEMPLATE: &str = include_str!("../../templates/arena_includ
 pub(super) fn render(model: &BindingsModel) -> String {
     let wire_includes = if model.has_wire_types() {
         let mut includes = String::from(WIRE_INCLUDES_TEMPLATE);
-        if model.has_sequence_types() {
+        if model.needs_output_arena() {
             includes.push_str(ARENA_INCLUDES_TEMPLATE);
         }
         includes

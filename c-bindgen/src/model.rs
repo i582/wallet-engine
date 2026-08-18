@@ -5,12 +5,13 @@ use uniffi_bindgen::ComponentInterface;
 use crate::{
     enum_map::FlatEnum,
     optional_map::{OptionalType, collect_optional_types},
+    record_map::{RecordType, collect_record_types},
     sequence_map::{SequenceType, collect_sequence_types},
     type_map::BuiltinType,
     type_registry::TypeRegistry,
 };
 
-pub(super) const MANIFEST_SCHEMA_VERSION: u32 = 6;
+pub(super) const MANIFEST_SCHEMA_VERSION: u32 = 7;
 const EXPERIMENTAL_ABI_VERSION: u32 = 0;
 const EXPECTED_CRATE_NAME: &str = "wallet_engine";
 const EXPECTED_NAMESPACE: &str = "wallet_engine";
@@ -22,6 +23,7 @@ pub(super) struct BindingsModel {
     type_registry: TypeRegistry,
     optional_types: Vec<OptionalType>,
     sequence_types: Vec<SequenceType>,
+    record_types: Vec<RecordType>,
     private_ffi: PrivateFfi,
     manifest: Manifest,
 }
@@ -47,6 +49,7 @@ struct GenerationManifest {
     rendered_flat_enums: Vec<FlatEnumManifest>,
     rendered_optional_types: Vec<OptionalTypeManifest>,
     rendered_sequence_types: Vec<SequenceTypeManifest>,
+    rendered_record_types: Vec<RecordTypeManifest>,
     rendered_semantic_operation_count: usize,
     pending_semantic_operation_count: usize,
 }
@@ -98,6 +101,21 @@ struct SequenceItemManifest {
 }
 
 #[derive(Debug, Serialize)]
+struct RecordTypeManifest {
+    rust: String,
+    c: String,
+    fields: Vec<RecordFieldManifest>,
+}
+
+#[derive(Debug, Serialize)]
+struct RecordFieldManifest {
+    rust: String,
+    c: String,
+    rust_type: String,
+    c_type: String,
+}
+
+#[derive(Debug, Serialize)]
 struct ComponentManifest {
     crate_name: String,
     namespace: String,
@@ -133,15 +151,23 @@ impl BindingsModel {
             );
         }
 
-        let type_registry = TypeRegistry::collect(component)?;
+        let mut type_registry = TypeRegistry::collect(component)?;
         let optional_types = collect_optional_types(component, &type_registry)?;
         let sequence_types = collect_sequence_types(component, &type_registry)?;
+        for optional in &optional_types {
+            type_registry.register_type(optional.uniffi_type(), optional.registered_type())?;
+        }
+        for sequence in &sequence_types {
+            type_registry.register_type(sequence.uniffi_type(), sequence.registered_type())?;
+        }
+        let record_types = collect_record_types(component, &mut type_registry)?;
         let manifest = Manifest::from_components(
             components,
             type_registry.builtin_types(),
             type_registry.flat_enums(),
             &optional_types,
             &sequence_types,
+            &record_types,
         );
         let private_ffi = PrivateFfi {
             rustbuffer_alloc: component.ffi_rustbuffer_alloc().name().to_owned(),
@@ -154,6 +180,7 @@ impl BindingsModel {
             type_registry,
             optional_types,
             sequence_types,
+            record_types,
             private_ffi,
             manifest,
         })
@@ -202,6 +229,11 @@ impl BindingsModel {
             || self.has_flat_enums()
             || self.has_optional_types()
             || self.has_sequence_types()
+            || self.has_record_types()
+    }
+
+    pub(super) const fn needs_output_arena(&self) -> bool {
+        self.has_sequence_types() || self.has_record_types()
     }
 
     pub(super) fn flat_enums(&self) -> &[FlatEnum] {
@@ -224,6 +256,14 @@ impl BindingsModel {
         &self.sequence_types
     }
 
+    pub(super) const fn has_record_types(&self) -> bool {
+        !self.record_types.is_empty()
+    }
+
+    pub(super) fn record_types(&self) -> &[RecordType] {
+        &self.record_types
+    }
+
     pub(super) const fn private_ffi(&self) -> &PrivateFfi {
         &self.private_ffi
     }
@@ -240,6 +280,7 @@ impl Manifest {
         flat_enums: &[FlatEnum],
         optional_types: &[OptionalType],
         sequence_types: &[SequenceType],
+        record_types: &[RecordType],
     ) -> Self {
         let component_manifests = components
             .iter()
@@ -253,7 +294,7 @@ impl Manifest {
         Self {
             schema_version: MANIFEST_SCHEMA_VERSION,
             generation: GenerationManifest {
-                phase: "sequences",
+                phase: "records",
                 artifacts: [
                     "wallet_engine.h",
                     "wallet_engine.c",
@@ -273,6 +314,7 @@ impl Manifest {
                     .iter()
                     .map(SequenceTypeManifest::from)
                     .collect(),
+                rendered_record_types: record_types.iter().map(RecordTypeManifest::from).collect(),
                 rendered_semantic_operation_count: 0,
                 pending_semantic_operation_count,
             },
@@ -336,6 +378,25 @@ impl From<&SequenceType> for SequenceTypeManifest {
                 rust: value.inner_rust_name().to_owned(),
                 c: value.inner_c_name().to_owned(),
             },
+        }
+    }
+}
+
+impl From<&RecordType> for RecordTypeManifest {
+    fn from(value: &RecordType) -> Self {
+        Self {
+            rust: value.rust_name().to_owned(),
+            c: value.c_name().to_owned(),
+            fields: value
+                .fields()
+                .iter()
+                .map(|field| RecordFieldManifest {
+                    rust: field.rust_name().to_owned(),
+                    c: field.c_name().to_owned(),
+                    rust_type: field.rust_type_name().to_owned(),
+                    c_type: field.c_type_name().to_owned(),
+                })
+                .collect(),
         }
     }
 }
@@ -428,6 +489,7 @@ mod tests {
         assert!(manifest.generation.rendered_flat_enums.is_empty());
         assert!(manifest.generation.rendered_optional_types.is_empty());
         assert!(manifest.generation.rendered_sequence_types.is_empty());
+        assert!(manifest.generation.rendered_record_types.is_empty());
         assert_eq!(manifest.components.len(), 1);
         assert_eq!(manifest.components[0].crate_name, "wallet_engine");
         Ok(())
@@ -456,7 +518,7 @@ mod tests {
         let manifest = model.manifest();
         let enum_ = &manifest.generation.rendered_flat_enums[0];
 
-        assert_eq!(manifest.generation.phase, "sequences");
+        assert_eq!(manifest.generation.phase, "records");
         assert_eq!(enum_.rust, "Network");
         assert_eq!(enum_.variants[0].value, 0);
         assert_eq!(enum_.variants[1].value, 1);
@@ -499,6 +561,27 @@ mod tests {
         assert_eq!(sequence.c, "WalletEngineStringListView");
         assert_eq!(sequence.item.rust, "String");
         assert_eq!(sequence.item.c, "WalletEngineStringView");
+        Ok(())
+    }
+
+    #[test]
+    fn manifest_records_public_record_fields() -> Result<()> {
+        let component = ComponentInterface::from_webidl(
+            r"
+            namespace wallet_engine {};
+            dictionary Example { string label; u64 revision; };
+            ",
+            "wallet_engine",
+        )?;
+        let model = BindingsModel::from_components(&[component])?;
+        let record = &model.manifest().generation.rendered_record_types[0];
+
+        assert_eq!(record.rust, "Example");
+        assert_eq!(record.c, "WalletEngineExampleView");
+        assert_eq!(record.fields[0].rust, "label");
+        assert_eq!(record.fields[0].c_type, "WalletEngineStringView");
+        assert_eq!(record.fields[1].rust_type, "u64");
+        assert_eq!(record.fields[1].c_type, "uint64_t");
         Ok(())
     }
 }

@@ -6,6 +6,7 @@ mod loader;
 mod model;
 mod naming;
 mod optional_map;
+mod record_map;
 mod render;
 mod sequence_map;
 mod template;
