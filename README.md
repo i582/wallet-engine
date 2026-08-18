@@ -93,6 +93,18 @@ The ABI lives in the separate `c-bindings` crate, and its header
 is generated with `cbindgen`. See [the C example](examples/c/README.md) for
 build and run commands.
 
+### Generated C++ (experimental)
+
+Generate the experimental C++20 wrapper:
+
+```shell
+just bindings-cpp
+```
+
+The output is written to `bindings/cpp-experimental`. See the
+[generated C++ example](examples/cpp-bindgen/README.md) for a minimal
+`WalletPlatformHost` implementation and build commands.
+
 Except for the checked-in C ABI header, this repository does not track generated
 bindings. Generate them from the same revision that you use to build the Rust
 library.
