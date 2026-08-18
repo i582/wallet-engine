@@ -7,8 +7,8 @@ rust-version = "1.96.1"
 license = "MIT OR Apache-2.0"
 
 [workspace]
-members = ["crates/ton-connect-core"]
-default-members = [".", "crates/ton-connect-core"]
+members = ["crates/ton-connect-client", "crates/ton-connect-core"]
+default-members = [".", "crates/ton-connect-client", "crates/ton-connect-core"]
 exclude = [
     "apple-bindgen",
     "c-bindings",

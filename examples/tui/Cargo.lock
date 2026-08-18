@@ -3277,6 +3277,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ton-connect-client"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.17",
+ "ton-connect-core",
+ "url",
+]
+
+[[package]]
 name = "ton-connect-core"
 version = "0.1.0"
 dependencies = [
@@ -3668,7 +3678,6 @@ dependencies = [
  "anyhow",
  "arboard",
  "async-trait",
- "base64",
  "crossterm",
  "futures-util",
  "num-bigint",
@@ -3678,6 +3687,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-util",
+ "ton-connect-client",
  "ton-connect-core",
  "url",
  "wallet-engine",

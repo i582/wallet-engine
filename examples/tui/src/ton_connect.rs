@@ -3,23 +3,21 @@
 use std::{num::NonZeroU32, num::NonZeroUsize, str::FromStr as _, sync::Arc, time::Duration};
 
 use anyhow::{Context as _, Result, anyhow, bail};
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures_util::StreamExt as _;
 use reqwest::Client;
-use serde::Serialize;
 use serde_json::Map;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use ton_connect_client::{IncomingRequest, TonConnectClient, TonConnectClientConfig};
 use ton_connect_core::{
-    AppManifest, AppRequest, BridgeSseDecoder, ClientId, ConnectEvent, ConnectEventError,
-    ConnectEventErrorCode, ConnectEventPayload, ConnectItem, ConnectItemReply, ConnectLink,
-    DeviceInfo, DevicePlatform, Ed25519PublicKey, Ed25519Signature, Feature, HttpBridgeUrl,
-    KnownAppRequest, NetworkId, RawAccountAddress, RawTransactionPayload, RpcError, RpcErrorCode,
-    SendTransactionFeature, SendTransactionRequest, SessionCrypto, TonAddressItemReply, TonProof,
-    TonProofDomain, TonProofItemReply, TraceId, TransactionPayload, Uint64String, WalletEventKind,
-    WalletResponse, WalletResponseError, WalletResponseSuccess, WalletResult, WalletSessionState,
-    WalletStateInit,
+    AppManifest, ClientId, ConnectEventErrorCode, ConnectEventPayload, ConnectItem,
+    ConnectItemReply, DeviceInfo, DevicePlatform, Ed25519PublicKey, Ed25519Signature, Feature,
+    HeartbeatMode, HttpBridgeUrl, KnownAppRequest, NetworkId, PreparedBridgePost,
+    RawAccountAddress, RawTransactionPayload, RpcError, RpcErrorCode, SendTransactionFeature,
+    SendTransactionRequest, TonAddressItemReply, TonProof, TonProofDomain, TonProofItemReply,
+    TransactionPayload, Uint64String, WalletResponse, WalletResponseError, WalletResponseSuccess,
+    WalletResult, WalletStateInit,
 };
 use wallet_engine::{
     Boc, Network, NonEmptyString, SendAmount, SendPhase, SendRequest, TonAddressString,
@@ -134,19 +132,26 @@ async fn run(
     events: &mpsc::UnboundedSender<TonConnectEvent>,
     cancellation: &CancellationToken,
 ) -> Result<()> {
-    let link = ConnectLink::parse(link_value)?;
-    let request = link
-        .request()
-        .ok_or_else(|| anyhow!("connect link does not contain a full request"))?;
     let bridge_value =
         std::env::var("TON_CONNECT_BRIDGE_URL").unwrap_or_else(|_| DEFAULT_BRIDGE_URL.to_owned());
     let bridge = HttpBridgeUrl::try_from(bridge_value.as_str())?;
+    let event_limit = NonZeroUsize::new(SSE_EVENT_LIMIT_BYTES)
+        .ok_or_else(|| anyhow!("invalid SSE event limit"))?;
+    let message_ttl =
+        NonZeroU32::new(BRIDGE_TTL_SECONDS).ok_or_else(|| anyhow!("invalid bridge TTL"))?;
+    let mut session = TonConnectClient::from_link(
+        link_value,
+        TonConnectClientConfig::new(bridge, event_limit, message_ttl, HeartbeatMode::Message),
+    )?;
+    let request = session
+        .connect_request()
+        .cloned()
+        .ok_or_else(|| anyhow!("connect link does not contain a full request"))?;
     let http = Client::builder()
         .connect_timeout(Duration::from_secs(HTTP_TIMEOUT_SECONDS))
         .redirect(reqwest::redirect::Policy::none())
         .user_agent(concat!("wallet-engine-tui/", env!("CARGO_PKG_VERSION")))
         .build()?;
-    let session = SessionCrypto::generate()?;
     let account = ton_connect_account(&lifecycle, &descriptor)?;
     enforce_connect_network(request.items.as_slice(), &account.network)?;
     let manifest = load_manifest(&http, request.manifest_url.as_str()).await?;
@@ -172,23 +177,15 @@ async fn run(
         () = cancellation.cancelled() => return Ok(()),
     };
     if !approved {
-        send_connect_error(
-            &http,
-            &bridge,
-            &session,
-            link.client_id(),
-            link.trace_id(),
+        let post = session.reject_connect(
             ConnectEventErrorCode::UserDeclined,
-            "User declined the connection",
-        )
-        .await?;
+            "User declined the connection".to_owned(),
+        )?;
+        send_bridge_post(&http, &post).await?;
         return Ok(());
     }
 
-    let transition =
-        WalletSessionState::pending_connect().prepare_event(WalletEventKind::Connect)?;
-    let connect_event = connect_event(
-        transition.id(),
+    let connect_payload = connect_payload(
         request.items.as_slice(),
         &account,
         &lifecycle,
@@ -196,17 +193,8 @@ async fn run(
         &domain,
     )
     .await?;
-    let mut state = transition.into_state();
-    send_encrypted(
-        &http,
-        &bridge,
-        &session,
-        link.client_id(),
-        &connect_event,
-        None,
-        link.trace_id(),
-    )
-    .await?;
+    let post = session.approve_connect(connect_payload, None)?;
+    send_bridge_post(&http, &post).await?;
     events
         .send(TonConnectEvent::Connected {
             dapp_name: manifest.name().to_owned(),
@@ -216,10 +204,7 @@ async fn run(
 
     listen(
         &http,
-        &bridge,
-        &session,
-        link.client_id(),
-        &mut state,
+        &mut session,
         &wallet_client,
         &descriptor,
         manifest.name(),
@@ -282,14 +267,13 @@ async fn load_manifest(client: &Client, url: &str) -> Result<AppManifest> {
     Ok(serde_json::from_slice(&body)?)
 }
 
-async fn connect_event(
-    id: u64,
+async fn connect_payload(
     requested: &[ConnectItem],
     account: &TonAddressItemReply,
     lifecycle: &WalletLifecycle,
     descriptor: &WalletDescriptor,
     domain: &str,
-) -> Result<ConnectEvent> {
+) -> Result<ConnectEventPayload> {
     let mut items = Vec::new();
     for item in requested {
         match item {
@@ -322,44 +306,34 @@ async fn connect_event(
             }
         }
     }
-    Ok(ConnectEvent::Connect {
-        id,
-        payload: ConnectEventPayload {
-            items,
-            device: DeviceInfo {
-                platform: current_platform(),
-                app_name: DEMO_WALLET_APP_NAME.to_owned(),
-                app_version: env!("CARGO_PKG_VERSION").to_owned(),
-                max_protocol_version: u32::from(ton_connect_core::PROTOCOL_VERSION),
-                features: vec![Feature::SendTransaction(SendTransactionFeature::new(
-                    1,
-                    Some(false),
-                    None,
-                )?)],
-            },
+    Ok(ConnectEventPayload {
+        items,
+        device: DeviceInfo {
+            platform: current_platform(),
+            app_name: DEMO_WALLET_APP_NAME.to_owned(),
+            app_version: env!("CARGO_PKG_VERSION").to_owned(),
+            max_protocol_version: u32::from(ton_connect_core::PROTOCOL_VERSION),
+            features: vec![Feature::SendTransaction(SendTransactionFeature::new(
+                1,
+                Some(false),
+                None,
+            )?)],
         },
-        response: None,
     })
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn listen(
     client: &Client,
-    bridge: &HttpBridgeUrl,
-    session: &SessionCrypto,
-    peer: ClientId,
-    state: &mut WalletSessionState,
+    session: &mut TonConnectClient,
     wallet_client: &Arc<WalletClient>,
     descriptor: &WalletDescriptor,
     dapp_name: &str,
     events: &mpsc::UnboundedSender<TonConnectEvent>,
     cancellation: &CancellationToken,
 ) -> Result<()> {
-    let limit = NonZeroUsize::new(SSE_EVENT_LIMIT_BYTES)
-        .ok_or_else(|| anyhow!("invalid SSE event limit"))?;
-    let mut last_event_id = None::<String>;
     loop {
-        let endpoint = bridge.events_endpoint(session.client_id(), last_event_id.as_deref(), None);
+        let endpoint = session.begin_events_subscription();
         let response = tokio::select! {
             result = client.get(endpoint).send() => result?,
             () = cancellation.cancelled() => return Ok(()),
@@ -367,7 +341,6 @@ async fn listen(
         if !response.status().is_success() {
             bail!("bridge returned HTTP {}", response.status());
         }
-        let mut decoder = BridgeSseDecoder::new(limit);
         let mut stream = response.bytes_stream();
         loop {
             let chunk = tokio::select! {
@@ -377,29 +350,11 @@ async fn listen(
             let Some(chunk) = chunk else {
                 break;
             };
-            for event in decoder.push(&chunk?)? {
-                if let Some(event_id) = event.event_id() {
-                    last_event_id = Some(event_id.to_owned());
-                }
-                let envelope = event.into_message();
-                if envelope.from() != peer {
-                    continue;
-                }
-                let encrypted = envelope.message().decode()?;
-                let Ok(plaintext) = session.decrypt(peer, &encrypted) else {
-                    continue;
-                };
-                let Ok(request) = serde_json::from_slice::<AppRequest>(&plaintext) else {
-                    continue;
-                };
+            for request in session.ingest_sse_chunk(&chunk?)? {
                 if process_request(
                     client,
-                    bridge,
                     session,
-                    peer,
-                    state,
                     request,
-                    envelope.trace_id(),
                     wallet_client,
                     descriptor,
                     dapp_name,
@@ -423,34 +378,21 @@ async fn listen(
 #[allow(clippy::too_many_arguments)]
 async fn process_request(
     client: &Client,
-    bridge: &HttpBridgeUrl,
-    session: &SessionCrypto,
-    peer: ClientId,
-    state: &mut WalletSessionState,
-    request: AppRequest,
-    trace_id: Option<&TraceId>,
+    session: &TonConnectClient,
+    incoming: IncomingRequest,
     wallet_client: &Arc<WalletClient>,
     descriptor: &WalletDescriptor,
     dapp_name: &str,
     events: &mpsc::UnboundedSender<TonConnectEvent>,
     cancellation: &CancellationToken,
 ) -> Result<bool> {
-    let prepared = match state.prepare_request(&request) {
-        Ok(prepared) => prepared,
-        Err(_) => return Ok(false),
-    };
-    *state = prepared.into_state();
-    let request_id = request.id.clone();
-    let topic = request.method.clone();
-    let (response, disconnected) = match request.decode() {
-        Ok(KnownAppRequest::Disconnect(_)) => (
-            WalletResponse::Success(WalletResponseSuccess {
-                result: WalletResult::Object(Map::new()),
-                id: request_id,
-            }),
-            true,
-        ),
-        Ok(KnownAppRequest::SendTransaction(request)) => (
+    let request_id = incoming.request().id.clone();
+    let response = match incoming.decode() {
+        Ok(KnownAppRequest::Disconnect(_)) => WalletResponse::Success(WalletResponseSuccess {
+            result: WalletResult::Object(Map::new()),
+            id: request_id,
+        }),
+        Ok(KnownAppRequest::SendTransaction(request)) => {
             handle_send_transaction(
                 session.client_id(),
                 &request,
@@ -460,34 +402,21 @@ async fn process_request(
                 events,
                 cancellation,
             )
-            .await,
-            false,
-        ),
+            .await
+        }
         Ok(KnownAppRequest::SignMessage(_) | KnownAppRequest::SignData(_))
-        | Err(RpcError::UnsupportedMethod(_)) => (
-            rpc_error(
-                request_id,
-                RpcErrorCode::MethodNotSupported,
-                "Method is not supported",
-            ),
-            false,
+        | Err(RpcError::UnsupportedMethod(_)) => rpc_error(
+            request_id,
+            RpcErrorCode::MethodNotSupported,
+            "Method is not supported",
         ),
-        Err(RpcError::InvalidParameterCount { .. } | RpcError::InvalidPayload(_)) => (
-            rpc_error(request_id, RpcErrorCode::BadRequest, "Malformed request"),
-            false,
-        ),
+        Err(RpcError::InvalidParameterCount { .. } | RpcError::InvalidPayload(_)) => {
+            rpc_error(request_id, RpcErrorCode::BadRequest, "Malformed request")
+        }
     };
-    send_encrypted(
-        client,
-        bridge,
-        session,
-        peer,
-        &response,
-        Some(&topic),
-        trace_id,
-    )
-    .await?;
-    Ok(disconnected)
+    let post = session.prepare_response(&incoming, &response)?;
+    send_bridge_post(client, &post).await?;
+    Ok(incoming.closes_session())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -647,50 +576,16 @@ fn rpc_error(id: String, code: RpcErrorCode, message: &str) -> WalletResponse {
     }
 }
 
-async fn send_encrypted<T: Serialize>(
-    client: &Client,
-    bridge: &HttpBridgeUrl,
-    session: &SessionCrypto,
-    peer: ClientId,
-    message: &T,
-    topic: Option<&str>,
-    trace_id: Option<&TraceId>,
-) -> Result<()> {
-    let plaintext = serde_json::to_vec(message)?;
-    let encoded = STANDARD.encode(session.encrypt(peer, &plaintext)?);
-    let ttl = NonZeroU32::new(BRIDGE_TTL_SECONDS).ok_or_else(|| anyhow!("invalid bridge TTL"))?;
-    let endpoint = bridge.message_endpoint(session.client_id(), peer, ttl, topic, trace_id);
+async fn send_bridge_post(client: &Client, post: &PreparedBridgePost) -> Result<()> {
     client
-        .post(endpoint)
+        .post(post.url().clone())
         .timeout(Duration::from_secs(HTTP_TIMEOUT_SECONDS))
         .header(reqwest::header::CONTENT_TYPE, "text/plain; charset=utf-8")
-        .body(encoded)
+        .body(post.body().as_str().to_owned())
         .send()
         .await?
         .error_for_status()?;
     Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn send_connect_error(
-    client: &Client,
-    bridge: &HttpBridgeUrl,
-    session: &SessionCrypto,
-    peer: ClientId,
-    trace_id: Option<&TraceId>,
-    code: ConnectEventErrorCode,
-    message: &str,
-) -> Result<()> {
-    let transition =
-        WalletSessionState::pending_connect().prepare_event(WalletEventKind::ConnectError)?;
-    let event = ConnectEvent::ConnectError {
-        id: transition.id(),
-        payload: ConnectEventError {
-            code,
-            message: message.to_owned(),
-        },
-    };
-    send_encrypted(client, bridge, session, peer, &event, None, trace_id).await
 }
 
 fn unix_timestamp() -> Result<u64> {

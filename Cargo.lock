@@ -1902,6 +1902,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ton-connect-client"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "ton-connect-core",
+ "ton_core",
+ "url",
+]
+
+[[package]]
 name = "ton-connect-core"
 version = "0.1.0"
 dependencies = [
