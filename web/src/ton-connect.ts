@@ -38,7 +38,8 @@ import type {
   TonConnectWalletEvent,
   TonConnectWalletOptions,
 } from "./ton-connect-types"
-import type {SendPreview, SendResult, WalletDescriptor} from "./types"
+import type {SendPreview, SendResult} from "./send-types"
+import type {WalletDescriptor} from "./types"
 import type {WalletClient} from "./wallet-client"
 import type {WalletLifecycle} from "./wallet-lifecycle"
 

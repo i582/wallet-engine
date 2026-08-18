@@ -1,6 +1,7 @@
 import type {KeyPair} from "@tonconnect/protocol"
 
-import type {SendPreview, WalletDescriptor} from "./types"
+import type {SendPreview} from "./send-types"
+import type {WalletDescriptor} from "./types"
 import type {WalletClient} from "./wallet-client"
 import type {WalletLifecycle} from "./wallet-lifecycle"
 

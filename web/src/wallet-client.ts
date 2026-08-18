@@ -3,15 +3,8 @@ import {WalletClient as RawWalletClient} from "../../bindings/wasm/wallet_engine
 import {BrowserHttpHost, type BrowserHttpHostOptions} from "./http-host"
 import {initializeWalletEngine} from "./initialize"
 import type {BrowserPlatformHost} from "./platform-host"
-import type {
-  SendRequest,
-  SendPreview,
-  SendPreviewRequest,
-  SendResult,
-  WalletClientConfig,
-  WalletSnapshot,
-  WalletUpdate,
-} from "./types"
+import type {SendPreview, SendPreviewRequest, SendRequest, SendResult} from "./send-types"
+import type {WalletClientConfig, WalletSnapshot, WalletUpdate} from "./types"
 
 export interface CreateClientOptions extends BrowserHttpHostOptions {
   readonly platformHost: BrowserPlatformHost

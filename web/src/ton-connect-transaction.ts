@@ -1,4 +1,5 @@
 import {canonicalRequestId, isUnsignedDecimal} from "./ton-connect-protocol"
+import type {SendRequest} from "./send-types"
 import type {
   AppRequest,
   RawMessage,
@@ -6,7 +7,7 @@ import type {
   TonConnectAccountInfo,
   TonConnectInteraction,
 } from "./ton-connect-types"
-import type {SendRequest, WalletDescriptor} from "./types"
+import type {WalletDescriptor} from "./types"
 
 export type PreparedTransaction =
   | {
