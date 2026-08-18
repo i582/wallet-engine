@@ -57,6 +57,8 @@ NODE=/absolute/path/to/node cargo test --test ton_connect_e2e
 
 The harness starts bridge and dApp processes on available ports, waits for
 readiness, and always terminates child processes when a scenario finishes.
+The Rust CI job builds the pinned official bridge revision and sets
+`TON_CONNECT_BRIDGE_BIN` explicitly.
 
 ## Coverage
 
