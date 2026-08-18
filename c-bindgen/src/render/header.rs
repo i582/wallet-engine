@@ -1,6 +1,7 @@
 use std::fmt::Write as _;
 
 use crate::{
+    compound_map::CompoundTypeRef,
     error_map::ErrorType,
     model::BindingsModel,
     object_map::{HandleKind, ObjectHandle},
@@ -62,55 +63,8 @@ pub(super) fn render(model: &BindingsModel) -> String {
             ],
         ));
     }
-    for optional in model.optional_types() {
-        type_declarations.push_str(&template::render(
-            OPTIONAL_TEMPLATE,
-            &[
-                ("RUST_NAME", optional.rust_name()),
-                ("C_NAME", optional.c_name()),
-                ("INNER_C_NAME", optional.inner_c_name()),
-            ],
-        ));
-    }
-    for sequence in model.sequence_types() {
-        type_declarations.push_str(&template::render(
-            SEQUENCE_TEMPLATE,
-            &[
-                ("RUST_NAME", sequence.rust_name()),
-                ("C_NAME", sequence.c_name()),
-                ("INNER_C_NAME", sequence.inner_c_name()),
-            ],
-        ));
-    }
-    for (index, record) in model.record_types().iter().enumerate() {
-        if index != 0 {
-            type_declarations.push('\n');
-        }
-        let fields = if record.fields().is_empty() {
-            String::from(EMPTY_RECORD_FIELD_TEMPLATE)
-        } else {
-            record
-                .fields()
-                .iter()
-                .map(|field| {
-                    template::render(
-                        RECORD_FIELD_TEMPLATE,
-                        &[
-                            ("FIELD_C_TYPE", field.c_type_name()),
-                            ("FIELD_C_NAME", field.c_name()),
-                        ],
-                    )
-                })
-                .collect()
-        };
-        type_declarations.push_str(&template::render(
-            RECORD_TEMPLATE,
-            &[
-                ("RUST_NAME", record.rust_name()),
-                ("C_NAME", record.c_name()),
-                ("FIELDS", &fields),
-            ],
-        ));
+    for compound in model.compound_types() {
+        type_declarations.push_str(&render_compound_type(compound));
     }
     for error in model.error_types() {
         type_declarations.push_str(&render_error(error));
@@ -127,6 +81,54 @@ pub(super) fn render(model: &BindingsModel) -> String {
             ("TYPE_DECLARATIONS", &type_declarations),
         ],
     )
+}
+
+fn render_compound_type(type_: CompoundTypeRef<'_>) -> String {
+    match type_ {
+        CompoundTypeRef::Optional(optional) => template::render(
+            OPTIONAL_TEMPLATE,
+            &[
+                ("RUST_NAME", optional.rust_name()),
+                ("C_NAME", optional.c_name()),
+                ("INNER_C_NAME", optional.inner_c_name()),
+            ],
+        ),
+        CompoundTypeRef::Sequence(sequence) => template::render(
+            SEQUENCE_TEMPLATE,
+            &[
+                ("RUST_NAME", sequence.rust_name()),
+                ("C_NAME", sequence.c_name()),
+                ("INNER_C_NAME", sequence.inner_c_name()),
+            ],
+        ),
+        CompoundTypeRef::Record(record) => {
+            let fields = if record.fields().is_empty() {
+                String::from(EMPTY_RECORD_FIELD_TEMPLATE)
+            } else {
+                record
+                    .fields()
+                    .iter()
+                    .map(|field| {
+                        template::render(
+                            RECORD_FIELD_TEMPLATE,
+                            &[
+                                ("FIELD_C_TYPE", field.c_type_name()),
+                                ("FIELD_C_NAME", field.c_name()),
+                            ],
+                        )
+                    })
+                    .collect()
+            };
+            template::render(
+                RECORD_TEMPLATE,
+                &[
+                    ("RUST_NAME", record.rust_name()),
+                    ("C_NAME", record.c_name()),
+                    ("FIELDS", &fields),
+                ],
+            )
+        }
+    }
 }
 
 fn render_object_handle(handle: &ObjectHandle) -> String {
@@ -351,6 +353,41 @@ mod tests {
                 "} WalletEngineInnerView;\n\n/* A borrowed view of Rust record `Outer`. */"
             )
         );
+        Ok(())
+    }
+
+    #[test]
+    fn renders_nested_compounds_in_dependency_order() -> Result<()> {
+        let component = ComponentInterface::from_webidl(
+            r"
+            namespace wallet_engine {};
+            dictionary Container {
+                sequence<Item> items;
+                Item? selected;
+            };
+            dictionary Item { string value; };
+            ",
+            "wallet_engine",
+        )?;
+        let model = BindingsModel::from_components(&[component])?;
+        let header = render(&model);
+        let item = header
+            .find("typedef struct WalletEngineItemView")
+            .expect("Item should be rendered");
+        let sequence = header
+            .find("typedef struct WalletEngineItemListView")
+            .expect("Vec<Item> should be rendered");
+        let optional = header
+            .find("typedef struct WalletEngineOptionalItemView")
+            .expect("Option<Item> should be rendered");
+        let container = header
+            .find("typedef struct WalletEngineContainerView")
+            .expect("Container should be rendered");
+
+        assert!(item < sequence && sequence < container);
+        assert!(item < optional && optional < container);
+        assert!(header.contains("const WalletEngineItemView *data;"));
+        assert!(header.contains("WalletEngineItemView value;"));
         Ok(())
     }
 

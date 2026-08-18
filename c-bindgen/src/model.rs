@@ -3,17 +3,18 @@ use serde::Serialize;
 use uniffi_bindgen::ComponentInterface;
 
 use crate::{
+    compound_map::{CompoundTypeRef, CompoundTypes},
     enum_map::FlatEnum,
     error_map::{ErrorType, collect_error_types},
     object_map::{ObjectHandle, collect_object_handles},
-    optional_map::{OptionalType, collect_optional_types},
-    record_map::{RecordType, collect_record_types},
-    sequence_map::{SequenceType, collect_sequence_types},
+    optional_map::OptionalType,
+    record_map::RecordType,
+    sequence_map::SequenceType,
     type_map::BuiltinType,
     type_registry::TypeRegistry,
 };
 
-pub(super) const MANIFEST_SCHEMA_VERSION: u32 = 9;
+pub(super) const MANIFEST_SCHEMA_VERSION: u32 = 10;
 const EXPERIMENTAL_ABI_VERSION: u32 = 0;
 const EXPECTED_CRATE_NAME: &str = "wallet_engine";
 const EXPECTED_NAMESPACE: &str = "wallet_engine";
@@ -23,9 +24,7 @@ pub(super) struct BindingsModel {
     abi_version: u32,
     uniffi_contract_version: u32,
     type_registry: TypeRegistry,
-    optional_types: Vec<OptionalType>,
-    sequence_types: Vec<SequenceType>,
-    record_types: Vec<RecordType>,
+    compound_types: CompoundTypes,
     error_types: Vec<ErrorType>,
     object_handles: Vec<ObjectHandle>,
     private_ffi: PrivateFfi,
@@ -190,23 +189,15 @@ impl BindingsModel {
         }
 
         let mut type_registry = TypeRegistry::collect(component)?;
-        let optional_types = collect_optional_types(component, &type_registry)?;
-        let sequence_types = collect_sequence_types(component, &type_registry)?;
-        for optional in &optional_types {
-            type_registry.register_type(optional.uniffi_type(), optional.registered_type())?;
-        }
-        for sequence in &sequence_types {
-            type_registry.register_type(sequence.uniffi_type(), sequence.registered_type())?;
-        }
-        let record_types = collect_record_types(component, &mut type_registry)?;
+        let compound_types = CompoundTypes::collect(component, &mut type_registry)?;
         let error_types = collect_error_types(component, &mut type_registry)?;
         let object_handles = collect_object_handles(component, &mut type_registry)?;
         let manifest = Manifest::from_components(
             components,
             &type_registry,
-            &optional_types,
-            &sequence_types,
-            &record_types,
+            compound_types.optionals(),
+            compound_types.sequences(),
+            compound_types.records(),
             &error_types,
             &object_handles,
         );
@@ -219,9 +210,7 @@ impl BindingsModel {
             abi_version: EXPERIMENTAL_ABI_VERSION,
             uniffi_contract_version: component.uniffi_contract_version(),
             type_registry,
-            optional_types,
-            sequence_types,
-            record_types,
+            compound_types,
             error_types,
             object_handles,
             private_ffi,
@@ -259,9 +248,9 @@ impl BindingsModel {
 
     pub(super) fn has_wire_types(&self) -> bool {
         !self.type_registry.is_empty()
-            || !self.optional_types.is_empty()
-            || !self.sequence_types.is_empty()
-            || !self.record_types.is_empty()
+            || self.has_optional_types()
+            || self.has_sequence_types()
+            || self.has_record_types()
             || !self.error_types.is_empty()
     }
 
@@ -289,28 +278,20 @@ impl BindingsModel {
         self.type_registry.flat_enums()
     }
 
-    pub(super) const fn has_optional_types(&self) -> bool {
-        !self.optional_types.is_empty()
+    pub(super) fn has_optional_types(&self) -> bool {
+        !self.compound_types.optionals().is_empty()
     }
 
-    pub(super) fn optional_types(&self) -> &[OptionalType] {
-        &self.optional_types
+    pub(super) fn has_sequence_types(&self) -> bool {
+        !self.compound_types.sequences().is_empty()
     }
 
-    pub(super) const fn has_sequence_types(&self) -> bool {
-        !self.sequence_types.is_empty()
+    pub(super) fn has_record_types(&self) -> bool {
+        !self.compound_types.records().is_empty()
     }
 
-    pub(super) fn sequence_types(&self) -> &[SequenceType] {
-        &self.sequence_types
-    }
-
-    pub(super) const fn has_record_types(&self) -> bool {
-        !self.record_types.is_empty()
-    }
-
-    pub(super) fn record_types(&self) -> &[RecordType] {
-        &self.record_types
+    pub(super) fn compound_types(&self) -> impl Iterator<Item = CompoundTypeRef<'_>> {
+        self.compound_types.iter()
     }
 
     pub(super) const fn has_error_types(&self) -> bool {
@@ -356,7 +337,7 @@ impl Manifest {
         Self {
             schema_version: MANIFEST_SCHEMA_VERSION,
             generation: GenerationManifest {
-                phase: "opaque-handles",
+                phase: "nested-compound-types",
                 artifacts: [
                     "wallet_engine.h",
                     "wallet_engine.c",
@@ -632,7 +613,7 @@ mod tests {
         let manifest = model.manifest();
         let enum_ = &manifest.generation.rendered_flat_enums[0];
 
-        assert_eq!(manifest.generation.phase, "opaque-handles");
+        assert_eq!(manifest.generation.phase, "nested-compound-types");
         assert_eq!(enum_.rust, "Network");
         assert_eq!(enum_.variants[0].value, 0);
         assert_eq!(enum_.variants[1].value, 1);

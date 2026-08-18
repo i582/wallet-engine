@@ -167,6 +167,11 @@ mod tests {
                 boolean enabled;
             };
 
+            dictionary NestedCompoundFixture {
+                sequence<RecordFixture> records;
+                RecordFixture? selected;
+            };
+
             dictionary EmptyRecordFixture {};
 
             enum Network { "mainnet", "testnet" };

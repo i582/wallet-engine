@@ -1,6 +1,7 @@
 //! Custom `UniFFI` backend for the Wallet Engine typed C facade.
 
 mod cli;
+mod compound_map;
 mod enum_map;
 mod error_map;
 mod loader;

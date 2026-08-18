@@ -20,9 +20,9 @@ The generator currently:
   interfaces;
 - compiles the generated facade as strict C11 in its test suite.
 
-Remaining compound types, callback adapters, and export lists will be added on
-top of the normalized component model. The crate intentionally has no
-dependency on the `wallet-engine` or `c-bindings` crates.
+Custom types, fielded non-error enums, callback adapters, and export lists will
+be added on top of the normalized component model. The crate intentionally has
+no dependency on the `wallet-engine` or `c-bindings` crates.
 
 From the repository root, the experimental recipe builds the library and runs
 the generator without touching the production `bindings/c` output:
@@ -151,9 +151,10 @@ checks buffer bounds and rejects trailing data for a complete `Bytes` value.
 The pure codec behavior is tested in `tests/codec.c`. That C11 executable
 checks exact wire bytes and write/read round trips for every integer width,
 booleans, strings, bytes, a flat enum, optional values, sequences of scalars,
-strings, and flat enums, direct and nested records, and a rich error with both
-fieldless and payload variants. The malformed cases cover truncated and
-trailing data, invalid UTF-8, impossible lengths, and unknown tags.
+strings, and flat enums, direct and nested records, nested options and
+sequences of records, and a rich error with both fieldless and payload
+variants. The malformed cases cover truncated and trailing data, invalid
+UTF-8, impossible lengths, unknown tags, and arena rollback.
 
 ### Flat enums
 
@@ -203,11 +204,12 @@ containing one tag byte: `0` for `None`, or `1` followed by the normal nested
 codec for `T`. Generated readers reject every other tag and complete lifts
 reject trailing bytes.
 
-The implemented slice supports options whose inner value is an implemented
-builtin or flat enum. In the current Wallet Engine component this produces six
-types: `Option<String>`, `Option<u16>`, `Option<i32>`, `Option<u64>`,
-`Option<PendingReason>`, and `Option<HttpHostErrorKind>`. Options over custom
-types and records will be enabled with those type slices.
+The implemented slice supports options over every type already registered by
+the dependency-ordered compound collector. In the current Wallet Engine
+component this produces nine types: the six builtin/flat-enum options plus
+`Option<DomainError>`, `Option<JournalRecord>`, and
+`Option<ProtectedSecretRef>`. Options over custom types become available when
+their semantic C views are registered.
 
 ### Wallet Engine custom string types
 
@@ -229,7 +231,7 @@ and non-empty validation stays in the Rust custom-type lift implementation.
 
 | Rust / UniFFI | Public C | Status | Rule |
 |---|---|---|---|
-| `Vec<T>` | `WalletEngineTListView { const T *data; size_t len; }` | Implemented for builtin and flat-enum items | Borrowed contiguous sequence. |
+| `Vec<T>` | `WalletEngineTListView { const T *data; size_t len; }` | Implemented for registered item types | Borrowed contiguous sequence. |
 | record `T` | `WalletEngineTView` | Implemented when every field type is registered | Fields are converted recursively. |
 | enum with fields | kind/tag plus generated payload union | Planned | Only the payload selected by the tag is active. |
 | rich error enum `E` | stable tag plus generated payload union | Implemented when every payload field type is registered | Declared errors are separate from immediate ABI failures. |
@@ -244,9 +246,17 @@ and provides rollback/cleanup helpers; the later method renderer will clear it
 after the callback returns. Rust-owned `RustBuffer` memory is still released
 only through UniFFI.
 
-The current slice composes sequences over registered builtins and flat enums.
-Sequences over records and custom types become available when those item types
-are registered by their later type slices.
+The collector repeatedly registers every currently resolvable option,
+sequence, and record until it reaches a fixed point. Public declarations and
+private codecs use that same topological order, so `Record`, `Option<Record>`,
+`Vec<Record>`, and a later record containing both are emitted in a valid order.
+Dynamic nested values call their own checked `measure` codec; lifting threads
+the callback arena through every level and rewinds the whole nested operation
+on failure.
+
+The real metadata currently produces two sequence views: `Vec<String>` and
+`Vec<HttpHeader>`. Sequences over custom types become available when those
+types are registered.
 
 A supported record is emitted as a field-for-field borrowed `*View`. Its wire
 codec does not copy the in-memory C struct: it writes and reads every field in
@@ -258,13 +268,14 @@ malformed. A fieldless Rust record gets one public `uint8_t reserved` member
 because ISO C does not allow an empty struct, while its UniFFI wire value stays
 zero bytes.
 
-The real Wallet Engine metadata currently produces 13 record views:
+The real Wallet Engine metadata currently produces 17 record views:
 `CreateWalletRequest`, `DomainError`, `HttpHeader`, `HttpRequestId`,
 `ImportWalletRequest`, `JournalKey`, `JournalRecord`, `ProtectedSecretRef`,
 `ProtectedSecretStore`, `ProviderConfig`, `RecoveryPhrase`,
-`JournalCompareExchange`, and `ProtectedSecretRead`. Remaining records depend
-on custom types, payload enums, `Option<Record>`, or `Sequence<Record>` and are
-enabled by those later type slices.
+`JournalCompareExchange`, `ProtectedSecretRead`, `HttpRequest`, `HttpResponse`,
+`JournalCompareExchangeResult`, and `ResourceState`. Remaining records depend
+on custom types or fielded non-error enums and are enabled by those later type
+slices.
 
 ### Declared rich errors
 

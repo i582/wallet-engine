@@ -22,6 +22,7 @@ pub(super) struct RegisteredType {
     c_type_label: String,
     codec_name: String,
     nested_wire_size: NestedWireSize,
+    minimum_wire_size: usize,
     read_needs_arena: bool,
 }
 
@@ -46,6 +47,10 @@ impl RegisteredType {
         self.nested_wire_size
     }
 
+    pub(super) const fn minimum_wire_size(&self) -> usize {
+        self.minimum_wire_size
+    }
+
     pub(super) const fn read_needs_arena(&self) -> bool {
         self.read_needs_arena
     }
@@ -55,6 +60,7 @@ impl RegisteredType {
         c_name: String,
         c_type_label: String,
         codec_name: String,
+        minimum_wire_size: usize,
         read_needs_arena: bool,
     ) -> Self {
         Self {
@@ -63,23 +69,29 @@ impl RegisteredType {
             c_type_label,
             codec_name,
             nested_wire_size: NestedWireSize::Dynamic,
+            minimum_wire_size,
             read_needs_arena,
         }
     }
 
     fn from_builtin(builtin: BuiltinType) -> Self {
-        let (c_type_label, codec_name, nested_wire_size) = match builtin {
-            BuiltinType::UInt8 => ("U8", "u8", NestedWireSize::Fixed(1)),
-            BuiltinType::Int8 => ("I8", "i8", NestedWireSize::Fixed(1)),
-            BuiltinType::UInt16 => ("U16", "u16", NestedWireSize::Fixed(2)),
-            BuiltinType::Int16 => ("I16", "i16", NestedWireSize::Fixed(2)),
-            BuiltinType::UInt32 => ("U32", "u32", NestedWireSize::Fixed(4)),
-            BuiltinType::Int32 => ("I32", "i32", NestedWireSize::Fixed(4)),
-            BuiltinType::UInt64 => ("U64", "u64", NestedWireSize::Fixed(8)),
-            BuiltinType::Int64 => ("I64", "i64", NestedWireSize::Fixed(8)),
-            BuiltinType::Boolean => ("Bool", "bool", NestedWireSize::Fixed(1)),
-            BuiltinType::String => ("StringView", "string", NestedWireSize::LengthPrefixedView),
-            BuiltinType::Bytes => ("BytesView", "bytes", NestedWireSize::LengthPrefixedView),
+        let (c_type_label, codec_name, nested_wire_size, minimum_wire_size) = match builtin {
+            BuiltinType::UInt8 => ("U8", "u8", NestedWireSize::Fixed(1), 1),
+            BuiltinType::Int8 => ("I8", "i8", NestedWireSize::Fixed(1), 1),
+            BuiltinType::UInt16 => ("U16", "u16", NestedWireSize::Fixed(2), 2),
+            BuiltinType::Int16 => ("I16", "i16", NestedWireSize::Fixed(2), 2),
+            BuiltinType::UInt32 => ("U32", "u32", NestedWireSize::Fixed(4), 4),
+            BuiltinType::Int32 => ("I32", "i32", NestedWireSize::Fixed(4), 4),
+            BuiltinType::UInt64 => ("U64", "u64", NestedWireSize::Fixed(8), 8),
+            BuiltinType::Int64 => ("I64", "i64", NestedWireSize::Fixed(8), 8),
+            BuiltinType::Boolean => ("Bool", "bool", NestedWireSize::Fixed(1), 1),
+            BuiltinType::String => (
+                "StringView",
+                "string",
+                NestedWireSize::LengthPrefixedView,
+                4,
+            ),
+            BuiltinType::Bytes => ("BytesView", "bytes", NestedWireSize::LengthPrefixedView, 4),
         };
         Self {
             rust_name: builtin.rust_name().to_owned(),
@@ -87,6 +99,7 @@ impl RegisteredType {
             c_type_label: c_type_label.to_owned(),
             codec_name: codec_name.to_owned(),
             nested_wire_size,
+            minimum_wire_size,
             read_needs_arena: false,
         }
     }
@@ -98,6 +111,7 @@ impl RegisteredType {
             c_type_label: enum_.rust_name().to_owned(),
             codec_name: enum_.function_name().to_owned(),
             nested_wire_size: NestedWireSize::Fixed(4),
+            minimum_wire_size: 4,
             read_needs_arena: false,
         }
     }
@@ -312,6 +326,7 @@ mod tests {
             c_type_label: "First".to_owned(),
             codec_name: "first".to_owned(),
             nested_wire_size: NestedWireSize::Fixed(1),
+            minimum_wire_size: 1,
             read_needs_arena: false,
         };
         let second = RegisteredType {
@@ -320,6 +335,7 @@ mod tests {
             c_type_label: "Second".to_owned(),
             codec_name: "second".to_owned(),
             nested_wire_size: NestedWireSize::Fixed(1),
+            minimum_wire_size: 1,
             read_needs_arena: false,
         };
 

@@ -1,0 +1,14 @@
+    for (size_t index = 0u; index < value.len; index += 1u) {
+        size_t item_wire_size = 0u;
+        WalletEngineAbiStatus status = wallet_engine_private_measure_{{INNER_FUNCTION_NAME}}(
+            value.data[index],
+            &item_wire_size
+        );
+        if (status != WALLET_ENGINE_ABI_STATUS_OK) {
+            return status;
+        }
+        if (item_wire_size > SIZE_MAX - wire_size) {
+            return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
+        }
+        wire_size += item_wire_size;
+    }

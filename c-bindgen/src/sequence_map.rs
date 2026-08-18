@@ -19,6 +19,8 @@ pub(super) struct SequenceType {
     inner_c_name: String,
     inner_function_name: String,
     inner_wire_size: NestedWireSize,
+    inner_minimum_wire_size: usize,
+    inner_read_needs_arena: bool,
 }
 
 impl SequenceType {
@@ -50,6 +52,14 @@ impl SequenceType {
         self.inner_wire_size
     }
 
+    pub(super) const fn inner_minimum_wire_size(&self) -> usize {
+        self.inner_minimum_wire_size
+    }
+
+    pub(super) const fn inner_read_needs_arena(&self) -> bool {
+        self.inner_read_needs_arena
+    }
+
     pub(super) const fn uniffi_type(&self) -> &Type {
         &self.uniffi_type
     }
@@ -60,6 +70,7 @@ impl SequenceType {
             self.c_name.clone(),
             self.c_type_label.clone(),
             self.function_name.clone(),
+            4,
             true,
         )
     }
@@ -71,6 +82,7 @@ pub(super) fn collect_sequence_types(
 ) -> Result<Vec<SequenceType>> {
     let mut sequences = component
         .iter_local_types()
+        .filter(|type_| types.resolve(type_).is_none())
         .filter_map(|type_| match type_ {
             Type::Sequence { inner_type } => sequence_type(type_, inner_type, types),
             _ => None,
@@ -120,6 +132,8 @@ fn sequence_type(
         inner_c_name: inner.c_name().to_owned(),
         inner_function_name: inner.codec_name().to_owned(),
         inner_wire_size: inner.nested_wire_size(),
+        inner_minimum_wire_size: inner.minimum_wire_size(),
+        inner_read_needs_arena: inner.read_needs_arena(),
     })
 }
 

@@ -19,6 +19,7 @@ pub(super) struct OptionalType {
     inner_c_name: String,
     inner_function_name: String,
     inner_wire_size: NestedWireSize,
+    inner_read_needs_arena: bool,
 }
 
 impl OptionalType {
@@ -50,6 +51,10 @@ impl OptionalType {
         self.inner_wire_size
     }
 
+    pub(super) const fn inner_read_needs_arena(&self) -> bool {
+        self.inner_read_needs_arena
+    }
+
     pub(super) const fn uniffi_type(&self) -> &Type {
         &self.uniffi_type
     }
@@ -60,7 +65,8 @@ impl OptionalType {
             self.c_name.clone(),
             self.c_type_label.clone(),
             self.function_name.clone(),
-            false,
+            1,
+            self.inner_read_needs_arena,
         )
     }
 }
@@ -71,6 +77,7 @@ pub(super) fn collect_optional_types(
 ) -> Result<Vec<OptionalType>> {
     let mut optionals = component
         .iter_local_types()
+        .filter(|type_| types.resolve(type_).is_none())
         .filter_map(|type_| match type_ {
             Type::Optional { inner_type } => optional_type(type_, inner_type, types),
             _ => None,
@@ -116,6 +123,7 @@ fn optional_type(
         inner_c_name: inner.c_name().to_owned(),
         inner_function_name: inner.codec_name().to_owned(),
         inner_wire_size: inner.nested_wire_size(),
+        inner_read_needs_arena: inner.read_needs_arena(),
     })
 }
 

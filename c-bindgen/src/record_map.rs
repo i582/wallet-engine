@@ -18,6 +18,7 @@ pub(super) struct RecordType {
     c_name: String,
     c_type_label: String,
     function_name: String,
+    minimum_wire_size: usize,
     fields: Vec<RecordField>,
 }
 
@@ -44,6 +45,7 @@ impl RecordType {
             self.c_name.clone(),
             self.c_type_label.clone(),
             self.function_name.clone(),
+            self.minimum_wire_size,
             true,
         )
     }
@@ -57,6 +59,7 @@ pub(super) struct RecordField {
     c_type_name: String,
     codec_name: String,
     nested_wire_size: NestedWireSize,
+    minimum_wire_size: usize,
     read_needs_arena: bool,
 }
 
@@ -88,6 +91,10 @@ impl RecordField {
     pub(super) const fn read_needs_arena(&self) -> bool {
         self.read_needs_arena
     }
+
+    pub(super) const fn minimum_wire_size(&self) -> usize {
+        self.minimum_wire_size
+    }
 }
 
 pub(super) fn collect_record_types(
@@ -97,7 +104,7 @@ pub(super) fn collect_record_types(
     let mut remaining = component
         .record_definitions()
         .iter()
-        .filter(|record| !record.remote())
+        .filter(|record| !record.remote() && types.resolve(&record.as_type()).is_none())
         .collect::<Vec<_>>();
     remaining.sort_by(|left, right| left.name().cmp(right.name()));
 
@@ -142,10 +149,19 @@ fn record_type(record: &Record, types: &TypeRegistry) -> Result<Option<RecordTyp
             c_type_name: registered.c_name().to_owned(),
             codec_name: registered.codec_name().to_owned(),
             nested_wire_size: registered.nested_wire_size(),
+            minimum_wire_size: registered.minimum_wire_size(),
             read_needs_arena: registered.read_needs_arena(),
         });
     }
     let c_type_label = format!("{}View", record.name());
+    let minimum_wire_size = fields.iter().try_fold(0usize, |total, field| {
+        total.checked_add(field.minimum_wire_size()).ok_or_else(|| {
+            anyhow::anyhow!(
+                "record {} minimum wire size overflows size_t",
+                record.name()
+            )
+        })
+    })?;
 
     Ok(Some(RecordType {
         uniffi_type: record.as_type(),
@@ -153,6 +169,7 @@ fn record_type(record: &Record, types: &TypeRegistry) -> Result<Option<RecordTyp
         c_name: naming::type_name(&c_type_label),
         c_type_label,
         function_name: naming::function_name(record.name()),
+        minimum_wire_size,
         fields,
     }))
 }

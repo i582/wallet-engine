@@ -1,13 +1,15 @@
+
 WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_measure_{{FUNCTION_NAME}}(
     {{C_NAME}} value,
     size_t *out_size
 ) {
-    size_t wire_size = 4u;
-    if (out_size == NULL || value.len > (size_t)INT32_MAX
-        || (value.len != 0u && value.data == NULL)) {
+    size_t wire_size = 1u;
+    if (out_size == NULL) {
         return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
     }
-{{MEASURE_ITEMS}}    *out_size = wire_size;
+    if (value.has_value) {
+{{MEASURE_SOME}}    }
+    *out_size = wire_size;
     return WALLET_ENGINE_ABI_STATUS_OK;
 }
 
@@ -15,25 +17,14 @@ WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_write_{{FUNCTI
     WalletEnginePrivateBufferWriter *writer,
     {{C_NAME}} value
 ) {
-    size_t index;
-    WalletEngineAbiStatus status;
-    if (value.len > (size_t)INT32_MAX || (value.len != 0u && value.data == NULL)) {
-        return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
-    }
-    status = wallet_engine_private_write_i32(writer, (int32_t)value.len);
-    if (status != WALLET_ENGINE_ABI_STATUS_OK) {
+    WalletEngineAbiStatus status = wallet_engine_private_write_u8(
+        writer,
+        value.has_value ? 1u : 0u
+    );
+    if (status != WALLET_ENGINE_ABI_STATUS_OK || !value.has_value) {
         return status;
     }
-    for (index = 0u; index < value.len; index += 1u) {
-        status = wallet_engine_private_write_{{INNER_FUNCTION_NAME}}(
-            writer,
-            value.data[index]
-        );
-        if (status != WALLET_ENGINE_ABI_STATUS_OK) {
-            return status;
-        }
-    }
-    return WALLET_ENGINE_ABI_STATUS_OK;
+    return wallet_engine_private_write_{{INNER_FUNCTION_NAME}}(writer, value.value);
 }
 
 WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_read_{{FUNCTION_NAME}}(
@@ -42,45 +33,36 @@ WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_read_{{FUNCTIO
     {{C_NAME}} *out_value
 ) {
     WalletEnginePrivateArenaBlock *mark;
-    {{INNER_C_NAME}} *items = NULL;
-    void *allocation = NULL;
-    int32_t wire_len = 0;
-    size_t len;
-    size_t index;
+    uint8_t tag = 0u;
     WalletEngineAbiStatus status;
     if (reader == NULL || arena == NULL || out_value == NULL) {
         return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
     }
     *out_value = ({{C_NAME}}){0};
     mark = arena->head;
-    status = wallet_engine_private_read_i32(reader, &wire_len);
-    if (status != WALLET_ENGINE_ABI_STATUS_OK || wire_len < 0) {
-        return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
-    }
-    len = (size_t)wire_len;
-    if (reader->offset > reader->len || len > SIZE_MAX / sizeof(*items)) {
-        return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
-    }
-{{MINIMUM_REMAINING_CHECK}}
-    status = wallet_engine_private_arena_alloc(
-        arena,
-        len * sizeof(*items),
-        &allocation
-    );
+    status = wallet_engine_private_read_u8(reader, &tag);
     if (status != WALLET_ENGINE_ABI_STATUS_OK) {
         return status;
     }
-    items = allocation;
-    for (index = 0u; index < len; index += 1u) {
-{{READ_ITEM}}
-        if (status != WALLET_ENGINE_ABI_STATUS_OK) {
-            wallet_engine_private_arena_rewind(arena, mark);
+    switch (tag) {
+        case 0u:
+            return WALLET_ENGINE_ABI_STATUS_OK;
+        case 1u:
+            status = wallet_engine_private_read_{{INNER_FUNCTION_NAME}}(
+                reader,
+                arena,
+                &out_value->value
+            );
+            if (status == WALLET_ENGINE_ABI_STATUS_OK) {
+                out_value->has_value = true;
+            } else {
+                wallet_engine_private_arena_rewind(arena, mark);
+            }
             return status;
-        }
+        default:
+            wallet_engine_private_arena_rewind(arena, mark);
+            return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
     }
-    out_value->data = items;
-    out_value->len = len;
-    return WALLET_ENGINE_ABI_STATUS_OK;
 }
 
 WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_lower_{{FUNCTION_NAME}}(

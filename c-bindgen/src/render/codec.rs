@@ -1,6 +1,7 @@
 use std::fmt::Write as _;
 
 use crate::{
+    compound_map::CompoundTypeRef,
     enum_map::FlatEnum,
     error_map::{ErrorField, ErrorType, ErrorVariant},
     model::BindingsModel,
@@ -27,12 +28,22 @@ const STRING_CODEC: &str = include_str!("../../templates/codecs/string.c.tmpl");
 const BYTES_CODEC: &str = include_str!("../../templates/codecs/bytes.c.tmpl");
 const FLAT_ENUM_CODEC: &str = include_str!("../../templates/codecs/flat_enum.c.tmpl");
 const OPTIONAL_CODEC: &str = include_str!("../../templates/codecs/optional.c.tmpl");
+const OPTIONAL_ARENA_CODEC: &str = include_str!("../../templates/codecs/optional_arena.c.tmpl");
+const OPTIONAL_MEASURE_DYNAMIC: &str =
+    include_str!("../../templates/codecs/optional_measure_dynamic.c.tmpl");
 const ARENA_RUNTIME: &str = include_str!("../../templates/codecs/arena.c.tmpl");
 const SEQUENCE_CODEC: &str = include_str!("../../templates/codecs/sequence.c.tmpl");
 const SEQUENCE_FIXED_MEASURE: &str =
     include_str!("../../templates/codecs/sequence_measure_fixed.c.tmpl");
 const SEQUENCE_LENGTH_PREFIXED_VIEW_MEASURE: &str =
     include_str!("../../templates/codecs/sequence_measure_length_prefixed_view.c.tmpl");
+const SEQUENCE_DYNAMIC_MEASURE: &str =
+    include_str!("../../templates/codecs/sequence_measure_dynamic.c.tmpl");
+const SEQUENCE_MINIMUM_REMAINING_CHECK: &str =
+    include_str!("../../templates/codecs/sequence_minimum_remaining_check.c.tmpl");
+const SEQUENCE_READ_ITEM: &str = include_str!("../../templates/codecs/sequence_read_item.c.tmpl");
+const SEQUENCE_READ_ARENA_ITEM: &str =
+    include_str!("../../templates/codecs/sequence_read_arena_item.c.tmpl");
 const RECORD_CODEC: &str = include_str!("../../templates/codecs/record.c.tmpl");
 const EMPTY_RECORD_CODEC: &str = include_str!("../../templates/codecs/empty_record.c.tmpl");
 const RECORD_MEASURE_FIXED_FIELD: &str =
@@ -120,14 +131,12 @@ pub(super) fn render(model: &BindingsModel) -> String {
     for enum_ in model.flat_enums() {
         output.push_str(&render_flat_enum(enum_));
     }
-    for optional in model.optional_types() {
-        output.push_str(&render_optional(optional));
-    }
-    for sequence in model.sequence_types() {
-        output.push_str(&render_sequence(sequence));
-    }
-    for record in model.record_types() {
-        output.push_str(&render_record(record));
+    for compound in model.compound_types() {
+        output.push_str(&match compound {
+            CompoundTypeRef::Optional(optional) => render_optional(optional),
+            CompoundTypeRef::Sequence(sequence) => render_sequence(sequence),
+            CompoundTypeRef::Record(record) => render_record(record),
+        });
     }
     for error in model.error_types() {
         output.push_str(&render_error(error));
@@ -186,13 +195,18 @@ fn render_optional(optional: &OptionalType) -> String {
         wire_size = value.value.len + 5u;
 ",
         ),
-        NestedWireSize::Dynamic => {
-            unreachable!("optional collection only accepts base registered types")
-        }
+        NestedWireSize::Dynamic => template::render(
+            OPTIONAL_MEASURE_DYNAMIC,
+            &[("INNER_FUNCTION_NAME", optional.inner_function_name())],
+        ),
     };
 
     template::render(
-        OPTIONAL_CODEC,
+        if optional.inner_read_needs_arena() {
+            OPTIONAL_ARENA_CODEC
+        } else {
+            OPTIONAL_CODEC
+        },
         &[
             ("FUNCTION_NAME", optional.function_name()),
             ("C_NAME", optional.c_name()),
@@ -203,21 +217,36 @@ fn render_optional(optional: &OptionalType) -> String {
 }
 
 fn render_sequence(sequence: &SequenceType) -> String {
-    let (minimum_inner_wire_size, measure_items) = match sequence.inner_wire_size() {
+    let measure_items = match sequence.inner_wire_size() {
         NestedWireSize::Fixed(inner_size) => {
             let inner_size = inner_size.to_string();
-            let measure_items =
-                template::render(SEQUENCE_FIXED_MEASURE, &[("INNER_WIRE_SIZE", &inner_size)]);
-            (inner_size, measure_items)
+            template::render(SEQUENCE_FIXED_MEASURE, &[("INNER_WIRE_SIZE", &inner_size)])
         }
-        NestedWireSize::LengthPrefixedView => (
-            String::from("4"),
-            String::from(SEQUENCE_LENGTH_PREFIXED_VIEW_MEASURE),
+        NestedWireSize::LengthPrefixedView => String::from(SEQUENCE_LENGTH_PREFIXED_VIEW_MEASURE),
+        NestedWireSize::Dynamic => template::render(
+            SEQUENCE_DYNAMIC_MEASURE,
+            &[("INNER_FUNCTION_NAME", sequence.inner_function_name())],
         ),
-        NestedWireSize::Dynamic => {
-            unreachable!("sequence collection only accepts base registered types")
-        }
     };
+    let minimum_remaining_check = if sequence.inner_minimum_wire_size() == 0 {
+        String::new()
+    } else {
+        template::render(
+            SEQUENCE_MINIMUM_REMAINING_CHECK,
+            &[(
+                "MINIMUM_INNER_WIRE_SIZE",
+                &sequence.inner_minimum_wire_size().to_string(),
+            )],
+        )
+    };
+    let read_item = template::render(
+        if sequence.inner_read_needs_arena() {
+            SEQUENCE_READ_ARENA_ITEM
+        } else {
+            SEQUENCE_READ_ITEM
+        },
+        &[("INNER_FUNCTION_NAME", sequence.inner_function_name())],
+    );
 
     template::render(
         SEQUENCE_CODEC,
@@ -226,8 +255,9 @@ fn render_sequence(sequence: &SequenceType) -> String {
             ("C_NAME", sequence.c_name()),
             ("INNER_C_NAME", sequence.inner_c_name()),
             ("INNER_FUNCTION_NAME", sequence.inner_function_name()),
-            ("MIN_INNER_WIRE_SIZE", &minimum_inner_wire_size),
+            ("MINIMUM_REMAINING_CHECK", &minimum_remaining_check),
             ("MEASURE_ITEMS", &measure_items),
+            ("READ_ITEM", &read_item),
         ],
     )
 }
@@ -567,6 +597,48 @@ mod tests {
         assert!(write_label < write_revision);
         assert!(codec.contains("wallet_engine_private_measure_example"));
         assert!(codec.contains("wallet_engine_private_lift_example"));
+        Ok(())
+    }
+
+    #[test]
+    fn renders_dynamic_nested_compound_codecs_with_arena() -> Result<()> {
+        let component = ComponentInterface::from_webidl(
+            r"
+            namespace wallet_engine {};
+            dictionary Container {
+                sequence<Item> items;
+                Item? selected;
+            };
+            dictionary Item { string value; };
+            ",
+            "wallet_engine",
+        )?;
+        let model = BindingsModel::from_components(&[component])?;
+        let codec = render(&model);
+        let item = codec
+            .find("wallet_engine_private_measure_item")
+            .expect("Item codec should be rendered");
+        let sequence = codec
+            .find("wallet_engine_private_measure_sequence_item")
+            .expect("Vec<Item> codec should be rendered");
+        let optional = codec
+            .find("wallet_engine_private_measure_optional_item")
+            .expect("Option<Item> codec should be rendered");
+        let container = codec
+            .find("wallet_engine_private_measure_container")
+            .expect("Container codec should be rendered");
+
+        assert!(item < sequence && sequence < container);
+        assert!(item < optional && optional < container);
+        assert!(
+            codec.contains("wallet_engine_private_measure_item(\n            value.data[index]")
+        );
+        assert!(
+            codec.contains(
+                "wallet_engine_private_read_item(\n            reader,\n            arena,"
+            )
+        );
+        assert!(codec.contains("wallet_engine_private_measure_item(\n            value.value"));
         Ok(())
     }
 

@@ -760,6 +760,94 @@ static void test_nested_record_round_trip(void) {
     assert(live_allocations == 0u);
 }
 
+static void test_nested_compound_round_trip(void) {
+    static const char label[] = {'A'};
+    static const WalletEngineRecordFixtureView records[] = {
+        {
+            {label, sizeof(label)},
+            {NULL, 0u},
+            WALLET_ENGINE_NETWORK_MAINNET,
+            {false, UINT64_MAX},
+        },
+    };
+    static const uint8_t record_wire[] = {
+        0x00u, 0x00u, 0x00u, 0x01u, 'A',
+        0x00u, 0x00u, 0x00u, 0x00u,
+        0x00u, 0x00u, 0x00u, 0x01u,
+        0x00u,
+    };
+    static const uint8_t expected[] = {
+        0x00u, 0x00u, 0x00u, 0x01u,
+        0x00u, 0x00u, 0x00u, 0x01u, 'A',
+        0x00u, 0x00u, 0x00u, 0x00u,
+        0x00u, 0x00u, 0x00u, 0x01u,
+        0x00u,
+        0x01u,
+        0x00u, 0x00u, 0x00u, 0x01u, 'A',
+        0x00u, 0x00u, 0x00u, 0x00u,
+        0x00u, 0x00u, 0x00u, 0x01u,
+        0x00u,
+    };
+    static uint8_t impossible_sequence[4u + sizeof(record_wire)] = {
+        0x00u, 0x00u, 0x00u, 0x02u,
+        0x00u, 0x00u, 0x00u, 0x01u, 'A',
+        0x00u, 0x00u, 0x00u, 0x00u,
+        0x00u, 0x00u, 0x00u, 0x01u,
+        0x00u,
+    };
+    static uint8_t truncated_optional[] = {
+        0x01u,
+        0x00u, 0x00u, 0x00u, 0x01u, 'A',
+        0x00u, 0x00u, 0x00u, 0x00u,
+        0x00u, 0x00u, 0x00u, 0x01u,
+    };
+    WalletEngineNestedCompoundFixtureView input = {
+        {records, 1u},
+        {true, records[0]},
+    };
+    WalletEngineNestedCompoundFixtureView actual = {0};
+    WalletEngineRecordFixtureListView sequence = {0};
+    WalletEngineOptionalRecordFixtureView optional = {0};
+    WalletEnginePrivateRustBuffer buffer = {0};
+    WalletEnginePrivateArena arena = {0};
+
+    assert(wallet_engine_private_lower_nested_compound_fixture(input, &buffer)
+        == WALLET_ENGINE_ABI_STATUS_OK);
+    assert(buffer.len == sizeof(expected));
+    assert_bytes(buffer.data, expected, sizeof(expected));
+    assert(wallet_engine_private_lift_nested_compound_fixture(&buffer, &arena, &actual)
+        == WALLET_ENGINE_ABI_STATUS_OK);
+    assert(actual.records.len == 1u && actual.records.data != NULL);
+    assert(actual.records.data[0].label.len == sizeof(label));
+    assert(actual.records.data[0].aliases.len == 0u);
+    assert(actual.selected.has_value);
+    assert(actual.selected.value.network == WALLET_ENGINE_NETWORK_MAINNET);
+    assert(!actual.selected.value.revision.has_value);
+    wallet_engine_private_arena_clear(&arena);
+    wallet_engine_private_rustbuffer_free(buffer);
+
+    buffer = (WalletEnginePrivateRustBuffer){
+        sizeof(impossible_sequence), sizeof(impossible_sequence), impossible_sequence,
+    };
+    assert(wallet_engine_private_lift_sequence_record_fixture(
+        &buffer,
+        &arena,
+        &sequence
+    ) == WALLET_ENGINE_ABI_STATUS_PANIC);
+    assert(sequence.data == NULL && sequence.len == 0u && arena.head == NULL);
+
+    buffer = (WalletEnginePrivateRustBuffer){
+        sizeof(truncated_optional), sizeof(truncated_optional), truncated_optional,
+    };
+    assert(wallet_engine_private_lift_optional_record_fixture(
+        &buffer,
+        &arena,
+        &optional
+    ) == WALLET_ENGINE_ABI_STATUS_PANIC);
+    assert(!optional.has_value && arena.head == NULL);
+    assert(live_allocations == 0u);
+}
+
 static void test_empty_record_round_trip(void) {
     static uint8_t trailing[] = {0xffu};
     WalletEngineEmptyRecordFixtureView actual = {0};
@@ -1071,6 +1159,7 @@ int main(void) {
     test_sequence_flat_enum_round_trip();
     test_record_round_trip();
     test_nested_record_round_trip();
+    test_nested_compound_round_trip();
     test_empty_record_round_trip();
     test_rich_error_round_trip();
     test_string_round_trip();

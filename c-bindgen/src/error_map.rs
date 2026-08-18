@@ -58,6 +58,7 @@ impl ErrorType {
             self.c_name.clone(),
             self.rust_name.clone(),
             self.function_name.clone(),
+            4,
             self.read_needs_arena,
         )
     }
