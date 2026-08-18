@@ -62,6 +62,14 @@ pub struct IncomingRequest {
     closes_session: bool,
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PersistedIncomingRequest {
+    request: AppRequest,
+    trace_id: Option<TraceId>,
+    closes_session: bool,
+}
+
 /// Complete session state that a host can store and restore after a restart.
 ///
 /// The serialized value contains the HTTP session secret key. Store it with
@@ -138,6 +146,34 @@ impl IncomingRequest {
     #[must_use]
     pub const fn closes_session(&self) -> bool {
         self.closes_session
+    }
+
+    /// Serializes this already authenticated request for crash-safe approval.
+    pub fn persisted(&self) -> Result<String, TonConnectClientError> {
+        serde_json::to_string(&PersistedIncomingRequest {
+            request: self.request.clone(),
+            trace_id: self.trace_id.clone(),
+            closes_session: self.closes_session,
+        })
+        .map_err(TonConnectClientError::PendingRequestJson)
+    }
+
+    /// Restores an authenticated request persisted after its replay transition.
+    pub fn restore(persisted: &str) -> Result<Self, TonConnectClientError> {
+        let wire = serde_json::from_str::<PersistedIncomingRequest>(persisted)
+            .map_err(TonConnectClientError::PendingRequestJson)?;
+        let closes_session = matches!(
+            wire.request.clone().decode(),
+            Ok(KnownAppRequest::Disconnect(_))
+        );
+        if closes_session != wire.closes_session {
+            return Err(TonConnectClientError::InvalidPendingRequest);
+        }
+        Ok(Self {
+            request: wire.request,
+            trace_id: wire.trace_id,
+            closes_session: wire.closes_session,
+        })
     }
 }
 
@@ -464,6 +500,12 @@ pub enum TonConnectClientError {
     /// A wallet response does not echo the accepted dApp request identifier.
     #[error("TON Connect wallet response id does not match the dApp request")]
     ResponseIdMismatch,
+    /// A persisted authenticated request has inconsistent lifecycle metadata.
+    #[error("persisted TON Connect request is inconsistent")]
+    InvalidPendingRequest,
+    /// A persisted authenticated request is malformed JSON.
+    #[error("invalid persisted TON Connect request: {0}")]
+    PendingRequestJson(serde_json::Error),
     /// The deep link is malformed.
     #[error(transparent)]
     Link(#[from] ConnectLinkError),

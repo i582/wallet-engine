@@ -133,8 +133,12 @@ actor AppleWalletProtectedSecretStore {
             "Authenticate to protect this wallet."
         case .signTransfer:
             "Authenticate to sign this GRAM transfer."
+        case .signTonConnectProof:
+            "Authenticate to prove ownership of this wallet."
         case .revealRecoveryPhrase:
             "Authenticate to reveal this wallet's recovery phrase."
+        case .restoreWalletMetadata:
+            "Authenticate to restore this wallet's public metadata."
         }
     }
 

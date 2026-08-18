@@ -2247,6 +2247,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "ton",
+ "ton-connect-client",
  "ton-connect-core",
  "uniffi",
  "url",

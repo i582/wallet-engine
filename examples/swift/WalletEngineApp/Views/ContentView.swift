@@ -123,6 +123,7 @@ private struct WalletDashboard: View {
     @State private var wallets: [StoredWallet] = []
     @State private var selectedWalletAddress: String?
     @State private var session: WalletSession?
+    @State private var tonConnect: TonConnectCoordinator?
     @State private var sessionError: String?
     @State private var isConfirmingWalletDeletion = false
     @State private var presentedSheet: WalletSheet?
@@ -200,6 +201,10 @@ private struct WalletDashboard: View {
             || walletSnapshot?.activityResource.phase == .failed
     }
 
+    private var refreshDiagnostic: String? {
+        sessionError ?? session?.diagnostic
+    }
+
     private var loadMoreHistoryError: String? {
         walletSnapshot?.activityPaginationResource.phase == .failed
             ? "Could not load more activity"
@@ -230,11 +235,20 @@ private struct WalletDashboard: View {
                             onReceive: { presentedSheet = .receive }
                         )
                         if hasRefreshNotice {
-                            WalletDataNotice(onRetry: refreshAccount)
+                            WalletDataNotice(
+                                diagnostic: refreshDiagnostic,
+                                onRetry: refreshAccount
+                            )
                         }
                     }
                     if let persistenceError {
                         Label(persistenceError, systemImage: "externaldrive.badge.exclamationmark")
+                            .font(.callout)
+                            .foregroundStyle(.red)
+                            .textSelection(.enabled)
+                    }
+                    if let tonConnectDiagnostic = tonConnect?.diagnostic {
+                        Label(tonConnectDiagnostic, systemImage: "link.badge.plus")
                             .font(.callout)
                             .foregroundStyle(.red)
                             .textSelection(.enabled)
@@ -281,7 +295,16 @@ private struct WalletDashboard: View {
                 .accessibilityLabel("Settings")
             }
 
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                if activeWallet != nil {
+                    Button {
+                        presentedSheet = .tonConnect
+                    } label: {
+                        Label("Connect app", systemImage: "link")
+                    }
+                    .help("Connect a TON app")
+                }
+
                 Button {
                     presentedSheet = .create
                 } label: {
@@ -327,7 +350,16 @@ private struct WalletDashboard: View {
                 }
             }
 
-            ToolbarItem(placement: .primaryAction) {
+            ToolbarItemGroup(placement: .primaryAction) {
+                if activeWallet != nil {
+                    Button {
+                        presentedSheet = .tonConnect
+                    } label: {
+                        Label("Connect app", systemImage: "link")
+                    }
+                    .help("Connect a TON app")
+                }
+
                 Button {
                     presentedSheet = .create
                 } label: {
@@ -394,6 +426,10 @@ private struct WalletDashboard: View {
                         refreshAccount()
                     }
                 }
+            case .tonConnect:
+                if let tonConnect {
+                    TonConnectView(coordinator: tonConnect)
+                }
             }
         }
         .confirmationDialog(
@@ -415,6 +451,13 @@ private struct WalletDashboard: View {
         }
         .task(id: activeWallet?.recordId) {
             await activateWalletData()
+        }
+        .overlay(alignment: .topLeading) {
+            if let tonConnect {
+                TonConnectApprovalObserver(coordinator: tonConnect) {
+                    presentedSheet = .tonConnect
+                }
+            }
         }
         .onDisappear(perform: stopWalletData)
     }
@@ -497,6 +540,7 @@ private struct WalletDashboard: View {
             : remainingWallets[min(deletedIndex, remainingWallets.count - 1)].address
 
         do {
+            await tonConnect?.disconnect()
             try await lifecycle.deleteWallet(descriptor)
             try WalletStore.save(wallets: remainingWallets, selectedAddress: nextAddress)
             wallets = remainingWallets
@@ -541,6 +585,8 @@ private struct WalletDashboard: View {
         let generation = activationGeneration
         guard let wallet = activeWallet else {
             let previous = session
+            tonConnect?.close()
+            tonConnect = nil
             session = nil
             sessionError = nil
             await previous?.shutdown()
@@ -549,7 +595,7 @@ private struct WalletDashboard: View {
 
         sessionError = nil
         do {
-            let installedWallet = wallet
+            let installedWallet = try await migrateWalletIfNeeded(wallet)
 
             let replacement = try environment.makeClient(wallet: installedWallet)
             guard !Task.isCancelled,
@@ -576,6 +622,14 @@ private struct WalletDashboard: View {
             }
 
             await installedSession.refresh()
+            tonConnect?.close()
+            let coordinator = try TonConnectCoordinator(
+                wallet: installedWallet,
+                walletSession: installedSession,
+                lifecycle: lifecycle
+            )
+            tonConnect = coordinator
+            await coordinator.restore()
             sessionError = nil
         } catch is CancellationError {
             return
@@ -589,10 +643,34 @@ private struct WalletDashboard: View {
     private func stopWalletData() {
         activationGeneration &+= 1
         let previous = session
+        tonConnect?.close()
+        tonConnect = nil
         session = nil
         Task {
             await previous?.shutdown()
         }
+    }
+
+    private func migrateWalletIfNeeded(
+        _ wallet: StoredWallet
+    ) async throws -> StoredWallet {
+        if wallet.publicKey?.count == 32 {
+            return wallet
+        }
+        guard let legacy = wallet.descriptorForUpgrade else {
+            throw WalletSessionError.missingPublicKey
+        }
+        let upgraded = try await lifecycle.upgradeLegacyDescriptor(legacy)
+        let migrated = StoredWallet(descriptor: upgraded, name: wallet.name)
+        guard let index = wallets.firstIndex(where: { $0.recordId == wallet.recordId }) else {
+            throw WalletSessionError.superseded
+        }
+        var updated = wallets
+        updated[index] = migrated
+        try WalletStore.save(wallets: updated, selectedAddress: migrated.address)
+        wallets = updated
+        selectedWalletAddress = migrated.address
+        return migrated
     }
 }
 
@@ -601,8 +679,29 @@ private enum WalletSheet: String, Identifiable {
     case rename
     case receive
     case send
+    case tonConnect
 
     var id: String { rawValue }
+}
+
+/// Bridges nested `@Observable` approval changes to the dashboard's sheet state.
+///
+/// The dashboard owns the presentation enum, while the coordinator owns the
+/// asynchronous TON Connect state. Keeping the observation in a child view
+/// makes SwiftUI track the coordinator's `approval` property directly, so an
+/// incoming request can present a sheet even when no TON Connect sheet is open.
+private struct TonConnectApprovalObserver: View {
+    let coordinator: TonConnectCoordinator
+    let onApproval: () -> Void
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onChange(of: coordinator.approval?.id, initial: true) { _, _ in
+                guard coordinator.approval != nil else { return }
+                onApproval()
+            }
+    }
 }
 
 private struct EmptyWalletState: View {
@@ -798,13 +897,21 @@ private struct BalancePanel: View {
 }
 
 private struct WalletDataNotice: View {
+    let diagnostic: String?
     let onRetry: () -> Void
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 10) {
-                Label("Couldn’t refresh wallet data", systemImage: "exclamationmark.circle")
-                    .font(.callout)
+                VStack(alignment: .leading, spacing: 3) {
+                    Label("Couldn’t refresh wallet data", systemImage: "exclamationmark.circle")
+                        .font(.callout)
+                    if let diagnostic {
+                        Text(diagnostic)
+                            .font(.caption)
+                            .textSelection(.enabled)
+                    }
+                }
                 Spacer()
                 Button("Try again", action: onRetry)
                     .platformLinkButtonStyle()
@@ -813,6 +920,11 @@ private struct WalletDataNotice: View {
             VStack(alignment: .leading, spacing: 8) {
                 Label("Couldn’t refresh wallet data", systemImage: "exclamationmark.circle")
                     .font(.callout)
+                if let diagnostic {
+                    Text(diagnostic)
+                        .font(.caption)
+                        .textSelection(.enabled)
+                }
                 Button("Try again", action: onRetry)
                     .platformLinkButtonStyle()
             }
@@ -841,6 +953,7 @@ private struct WalletActions: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
+
         }
         .controlSize(.large)
     }
@@ -1531,6 +1644,9 @@ private struct SendWalletView: View {
                         operationId: UUID().uuidString.lowercased(),
                         destination: normalizedDestination,
                         amount: .exact(nanograms: nanograms),
+                        validUntil: nil,
+                        payload: nil,
+                        stateInit: nil,
                         comment: nil,
                     )
                 )

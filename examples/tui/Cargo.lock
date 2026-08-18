@@ -3281,6 +3281,7 @@ name = "ton-connect-client"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "thiserror 2.0.17",
  "ton-connect-core",
  "url",
@@ -3665,6 +3666,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.17",
  "ton",
+ "ton-connect-client",
  "ton-connect-core",
  "uniffi",
  "url",

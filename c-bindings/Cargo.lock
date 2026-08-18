@@ -1597,6 +1597,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ton-connect-client"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+ "ton-connect-core",
+ "url",
+]
+
+[[package]]
 name = "ton-connect-core"
 version = "0.1.0"
 dependencies = [
@@ -1839,6 +1850,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "ton",
+ "ton-connect-client",
  "ton-connect-core",
  "uniffi",
  "url",

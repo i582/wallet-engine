@@ -1,3 +1,4 @@
+import Foundation
 import WalletEngineFFI
 
 nonisolated extension StoredWalletNetwork {
@@ -42,6 +43,17 @@ nonisolated extension StoredWallet {
             recordId: recordId,
             address: address,
             publicKey: publicKey,
+            network: network.engineValue,
+            secretRef: ProtectedSecretRef(value: secretRef)
+        )
+    }
+
+    var descriptorForUpgrade: WalletDescriptor? {
+        guard !recordId.isEmpty, !secretRef.isEmpty else { return nil }
+        return WalletDescriptor(
+            recordId: recordId,
+            address: address,
+            publicKey: publicKey ?? Data(),
             network: network.engineValue,
             secretRef: ProtectedSecretRef(value: secretRef)
         )
