@@ -1,6 +1,6 @@
 use ton::ton_wallet::Mnemonic;
 
-/// A stable mnemonic and the V5R1 testnet address derived from it.
+/// A stable mnemonic and the testnet wallet address derived from it.
 ///
 /// Keep these values together. Changing one without the other would make
 /// lifecycle, signing, and localnet scenarios test different wallets.
@@ -9,7 +9,7 @@ pub(crate) struct TestWalletFixture;
 impl TestWalletFixture {
     const RECOVERY_PHRASE: &'static str = "section garden tomato dinner season dice renew length useful spin trade intact use universe what post spike keen mandate behind concert egg doll rug";
 
-    const TESTNET_V5_ADDRESS: &'static str = "0QA_6fh0aRAkD7n1MNfAUx8TvyCUw2iTQfzVM-0isMze2anN";
+    const TESTNET_ADDRESS: &'static str = "0QAb6ciTteLklCTalEdkmpmwBqmfSaYZJd6wc9kHdYSJHY6z";
 
     const OTHER_RECOVERY_PHRASE: &'static str = "fish uncle sort juice lunar salute peasant decorate flash cherry become treat obtain august diet safe describe area below nasty scale right armed rural";
 
@@ -24,8 +24,8 @@ impl TestWalletFixture {
             .collect()
     }
 
-    pub(crate) const fn testnet_v5_address(&self) -> &'static str {
-        Self::TESTNET_V5_ADDRESS
+    pub(crate) const fn testnet_address(&self) -> &'static str {
+        Self::TESTNET_ADDRESS
     }
 
     pub(crate) fn public_key(&self) -> Vec<u8> {

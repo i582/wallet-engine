@@ -7,7 +7,7 @@ use ton_core::traits::tlb::TLB;
 
 macro_rules! load_code {
     ($path:expr) => {
-        TonCell::from_boc_base64(include_str!($path)).unwrap()
+        TonCell::from_boc_base64(include_str!($path).trim()).unwrap()
     };
 }
 
@@ -54,6 +54,12 @@ pub static TON_WALLET_CODE_BY_VERSION: LazyLock<HashMap<WalletVersion, TonCell>>
             (
                 V5R1,
                 load_code!("../../resources/ton_wallet_code/wallet_v5.code"),
+            ),
+            // Built from https://github.com/tolk-vm/wallet-v5-experimental at
+            // b420256f2fd78844a31260831616c1fab7acd0db with Acton 1.1.0.
+            (
+                Wallet,
+                load_code!("../../resources/ton_wallet_code/wallet_v5_experimental.code"),
             ),
             (
                 HLV1R1,

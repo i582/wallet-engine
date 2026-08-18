@@ -1287,7 +1287,7 @@ fn localnet_external_deployment_while_first_send_emulation_is_pending_is_not_mis
         ))
         .when(wait_for_request("deployment-emulation"))
         .then(snapshot().send_phase(SendPhase::Idle))
-        // A different client deploys the same V5R1 wallet first.
+        // A different client deploys the same wallet first.
         .when(call("external-deploy", spam_transfers(1)))
         .then(succeeds("external-deploy"))
         .then(on_chain_wallet().active().seqno(1))

@@ -5,7 +5,7 @@ Kotlin, and TypeScript applications the same wallet behavior.
 
 Use Wallet Engine to:
 
-- create and import V5R1 wallets.
+- create and import wallets.
 - protect recovery phrases with platform storage.
 - read balances and transaction history.
 - load additional history pages.
@@ -71,31 +71,25 @@ IndexedDB journal storage, wallet lifecycle methods, and wallet client methods.
 Read [WASM.md](WASM.md) for browser setup and security requirements.
 
 For a small React integration, see the
-[web wallet example](examples/web/README.md). It creates a V5R1 testnet wallet,
+[web wallet example](examples/web/README.md). It creates a testnet wallet,
 shows the recovery phrase, refreshes the balance and activity, and loads more
 history. The engine integration is kept separate from the interface code.
 
-### C
+### Generated C++ (experimental)
 
-Generate the C ABI header:
-
-```shell
-just bindings-c
-```
-
-Build the native library and run the C11 ABI tests:
+Generate the experimental C++20 wrapper:
 
 ```shell
-just test-c
+just bindings-cpp
 ```
 
-The ABI lives in the separate `c-bindings` crate, and its header
-is generated with `cbindgen`. See [the C example](examples/c/README.md) for
-build and run commands.
+The output is written to `bindings/cpp-experimental`. See the
+[generated C++ Qt example](examples/cpp-bindgen/README.md) for a small desktop
+wallet with balance refresh, activity, transfer preview/send, native HTTP and
+platform-host implementations, and build commands.
 
-Except for the checked-in C ABI header, this repository does not track generated
-bindings. Generate them from the same revision that you use to build the Rust
-library.
+This repository does not track generated bindings. Generate them from the same
+revision that you use to build the Rust library.
 
 ## Rust
 
@@ -122,7 +116,8 @@ If Acton is not in `PATH`, set the path explicitly:
 WALLET_ENGINE_ACTON_BIN=/path/to/acton cargo nextest run --locked
 ```
 
-Use `just test` to also run C boundary tests and Rust documentation tests.
+Use `just test` to also build the generated C++ example and run Rust
+documentation tests.
 
 ## Integration model
 
@@ -212,7 +207,7 @@ flowchart TD
     ValidateCreate -- yes --> Generate["Generate 24-word TON mnemonic"]
     Generate --> Generated{"Mnemonic generated?"}
     Generated -- no --> InvalidGenerated["CALL ERROR<br/>InvalidRecoveryPhrase"]
-    Generated -- yes --> DeriveCreate["Derive V5R1 address and public key"]
+    Generated -- yes --> DeriveCreate["Derive wallet address and public key"]
 
     Import["importWallet"]
     ValidateImport{"Valid record ID<br/>and mnemonic?"}
@@ -271,7 +266,7 @@ flowchart TD
     SecretRef{"Local secret reference<br/>is absent or nonblank?"}
     New --> SecretRef
     SecretRef -- no --> BadSecretRef["CALL ERROR<br/>InvalidLocalSecretReference"]
-    SecretRef -- yes --> PublicKey{"Public key derives V5R1 state?"}
+    SecretRef -- yes --> PublicKey{"Public key derives wallet state?"}
     PublicKey -- no --> BadKey["CALL ERROR<br/>InvalidWalletPublicKey"]
     PublicKey -- yes --> Identity{"Address matches key + network?"}
     Identity -- no --> BadIdentity["CALL ERROR<br/>WalletIdentityMismatch"]
@@ -407,7 +402,7 @@ flowchart TD
     Seqno --> SeqnoOk{"Valid seqno response?"}
     SeqnoOk -- no --> PreviewFailed
     SeqnoOk -- yes --> Build
-    Zero --> Build["Calculate validUntil<br/>build fake-signed V5R1 BOC"]
+    Zero --> Build["Calculate validUntil<br/>build fake-signed wallet BOC"]
     Build --> Prepared{"Preview BOC prepared?"}
     Prepared -- time overflow --> PreviewFailed
     Prepared -- BOC build failed --> PreviewFailed
@@ -467,7 +462,7 @@ flowchart TD
     Checks -- yes --> Unlock
     Unlock --> Secret{"Mnemonic valid and<br/>matches wallet address?"}
     Secret -- no --> SecretError["CALL ERROR<br/>InvalidProtectedSecret or SendFailed"]
-    Sign["Build and sign fresh V5R1 BOC<br/>zeroize Rust secret buffer"]
+    Sign["Build and sign fresh wallet BOC<br/>zeroize Rust secret buffer"]
     Signed{"Signed BOC built?"}
     Boundary["DURABLE COMMIT BOUNDARY<br/>CAS signed BOC into journal"]
     Secret -- yes --> Sign
@@ -667,7 +662,7 @@ signed message valid for longer.
 `previewSend` does these steps:
 
 1. loads a fresh account state and sequence number.
-2. builds the complete V5R1 intent from the stored public key.
+2. builds the complete wallet intent from the stored public key.
 3. emulates it with a placeholder signature and `ignore_chksig`.
 4. returns fees, actions, trace status, and the preview expiration time.
 
@@ -678,7 +673,7 @@ signed message valid for longer.
 3. calculates a new expiration time from the provider synchronization time.
 4. requests the protected recovery phrase from the host.
 5. makes sure that the phrase belongs to the selected wallet.
-6. builds and signs a new V5R1 message in Rust.
+6. builds and signs a new wallet message in Rust.
 7. stores the exact signed BoC in the host journal.
 8. submits that BoC to the provider.
 

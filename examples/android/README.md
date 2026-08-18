@@ -5,7 +5,7 @@ Wallet Engine Kotlin API directly. It does not use the old JNI adapter.
 
 The application can:
 
-- create and import a testnet V5R1 wallet.
+- create and import a testnet wallet.
 - store its recovery phrase with Android Keystore encryption.
 - show the balance and recent activity.
 - load older transactions.

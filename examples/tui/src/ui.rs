@@ -150,7 +150,7 @@ fn render_welcome(frame: &mut Frame<'_>, area: Rect, _app: &App) {
                 Style::default().add_modifier(Modifier::BOLD),
             )),
             Line::default(),
-            Line::from("Create a new V5R1 wallet or import 24 recovery words."),
+            Line::from("Create a new wallet or import 24 recovery words."),
             Line::from(Span::styled(
                 "This example uses TON testnet.",
                 Style::default().fg(WARNING),

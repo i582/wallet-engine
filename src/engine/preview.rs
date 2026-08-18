@@ -20,7 +20,7 @@ impl WalletClient {
     /// Emulates a transfer without reading the journal or protected secret.
     ///
     /// The engine fetches fresh account state and seqno, builds a complete
-    /// V5R1 message with a fake signature, and asks Toncenter to execute it.
+    /// Wallet message with a fake signature, and asks Toncenter to execute it.
     /// Calling [`Self::send`] later repeats the chain-state checks and builds a
     /// new message from fresh state before the real signature is created.
     pub async fn preview_send(

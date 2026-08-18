@@ -1,6 +1,6 @@
 //! Validation of public configuration and send requests.
 
-use crate::wallet::crypto::derive_v5r1_public_state;
+use crate::wallet::crypto::derive_wallet_public_state;
 use crate::{WalletClientConfig, WalletClientError};
 
 pub(super) fn validate_config(config: &WalletClientConfig) -> Result<(), WalletClientError> {
@@ -12,7 +12,7 @@ pub(super) fn validate_config(config: &WalletClientConfig) -> Result<(), WalletC
         return Err(WalletClientError::InvalidLocalSecretReference);
     }
 
-    let (derived_address, _) = derive_v5r1_public_state(&config.public_key, config.network)
+    let (derived_address, _) = derive_wallet_public_state(&config.public_key, config.network)
         .map_err(|_| WalletClientError::InvalidWalletPublicKey)?;
 
     if config.address.as_address() != &derived_address {
@@ -25,7 +25,7 @@ pub(super) fn validate_config(config: &WalletClientConfig) -> Result<(), WalletC
 #[cfg(test)]
 mod tests {
     use super::validate_config;
-    use crate::wallet::crypto::derive_v5r1_public_state;
+    use crate::wallet::crypto::derive_wallet_public_state;
     use crate::{
         Network, ProtectedSecretRef, ProviderConfig, WalletClientConfig, WalletClientError,
     };
@@ -74,7 +74,7 @@ mod tests {
 
     fn valid_config() -> WalletClientConfig {
         let public_key = vec![0; 32];
-        let (address, _) = derive_v5r1_public_state(&public_key, Network::Testnet)
+        let (address, _) = derive_wallet_public_state(&public_key, Network::Testnet)
             .expect("test public key must derive a wallet");
         WalletClientConfig {
             record_id: crate::NonEmptyString::try_from("validation-wallet")

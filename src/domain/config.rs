@@ -68,7 +68,7 @@ pub struct WalletClientConfig {
     pub record_id: NonEmptyString,
     /// The friendly TON address that the client reads and sends from.
     pub address: TonAddressString,
-    /// The raw 32-byte Ed25519 public key stored in this V5R1 wallet.
+    /// The raw 32-byte Ed25519 public key stored in this wallet.
     ///
     /// This value is public metadata. The engine uses it to build a faithful
     /// fake-signed message for preflight emulation without unlocking the mnemonic.

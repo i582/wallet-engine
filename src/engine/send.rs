@@ -1,4 +1,4 @@
-//! V5R1 transfer orchestration.
+//! Wallet transfer orchestration.
 use super::client::WalletClient;
 use super::http::build_toncenter_v2_request;
 use super::send_http::{
@@ -18,7 +18,7 @@ use crate::wallet::send::{SendResolution, pending_send_record};
 
 #[uniffi::export]
 impl WalletClient {
-    /// Signs, records, and submits one V5R1 transfer.
+    /// Signs, records, and submits one wallet transfer.
     ///
     /// A preceding [`Self::preview_send`] is an informational UI step, not a
     /// prerequisite. This method independently reloads account state and seqno,

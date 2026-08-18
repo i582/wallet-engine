@@ -14,43 +14,34 @@ build-dev:
 
 fmt:
     cargo fmt --all
-    cargo fmt --manifest-path c-bindings/Cargo.toml
     cargo fmt --manifest-path apple-bindgen/Cargo.toml
-    cargo fmt --manifest-path c-bindgen/Cargo.toml
     cargo fmt --manifest-path kotlin-bindgen/Cargo.toml
     cargo fmt --manifest-path wasm-bindings/Cargo.toml
     cargo fmt --manifest-path xtask/Cargo.toml
 
 fmt-check:
     cargo fmt --all --check
-    cargo fmt --manifest-path c-bindings/Cargo.toml -- --check
     cargo fmt --manifest-path apple-bindgen/Cargo.toml -- --check
-    cargo fmt --manifest-path c-bindgen/Cargo.toml -- --check
     cargo fmt --manifest-path kotlin-bindgen/Cargo.toml -- --check
     cargo fmt --manifest-path wasm-bindings/Cargo.toml -- --check
     cargo fmt --manifest-path xtask/Cargo.toml -- --check
 
 check-build:
     cargo check --locked --all-targets
-    cargo check --locked --manifest-path c-bindings/Cargo.toml --all-targets
     cargo check --locked --manifest-path apple-bindgen/Cargo.toml --all-targets
-    cargo check --locked --manifest-path c-bindgen/Cargo.toml --all-targets
     cargo check --locked --manifest-path kotlin-bindgen/Cargo.toml --all-targets
     cargo check --locked --manifest-path wasm-bindings/Cargo.toml --target wasm32-unknown-unknown
     cargo check --locked --manifest-path xtask/Cargo.toml --all-targets
 
 clippy:
     cargo clippy --locked --all-targets -- -D warnings
-    cargo clippy --locked --manifest-path c-bindings/Cargo.toml --all-targets -- -D warnings
     cargo clippy --locked --manifest-path apple-bindgen/Cargo.toml --all-targets -- -D warnings
-    cargo clippy --locked --manifest-path c-bindgen/Cargo.toml --all-targets -- -D warnings
     cargo clippy --locked --manifest-path kotlin-bindgen/Cargo.toml --all-targets -- -D warnings
     cargo clippy --locked --manifest-path wasm-bindings/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
     cargo clippy --locked --manifest-path xtask/Cargo.toml --all-targets -- -D warnings
 
 test-rust:
     cargo nextest run --locked {{ NEXTEST_PROFILE_ARGS }}
-    cargo nextest run --locked --manifest-path c-bindgen/Cargo.toml {{ NEXTEST_CONFIG_ARGS }} {{ NEXTEST_PROFILE_ARGS }}
     cargo nextest run --locked --manifest-path xtask/Cargo.toml {{ NEXTEST_CONFIG_ARGS }} {{ NEXTEST_PROFILE_ARGS }}
     cargo test --locked --doc
 
@@ -77,10 +68,7 @@ kani-setup:
     cargo install kani-verifier --version 0.67.0 --locked
     cargo kani setup
 
-test-c-abi-rust:
-    cargo nextest run --locked --manifest-path c-bindings/Cargo.toml {{ NEXTEST_CONFIG_ARGS }} {{ NEXTEST_PROFILE_ARGS }}
-
-miri: miri-rust miri-c-bindings
+miri: miri-rust
 
 miri-setup:
     rustup toolchain install {{ MIRI_TOOLCHAIN }} --profile minimal --component miri --component rust-src
@@ -90,10 +78,7 @@ miri-setup:
 miri-rust:
     env MIRIFLAGS=-Zmiri-tree-borrows rustup run {{ MIRI_TOOLCHAIN }} cargo miri nextest run --locked --lib {{ NEXTEST_CONFIG_ARGS }} {{ NEXTEST_PROFILE_ARGS }}
 
-miri-c-bindings:
-    rustup run {{ MIRI_TOOLCHAIN }} cargo miri nextest run --locked --manifest-path c-bindings/Cargo.toml {{ NEXTEST_CONFIG_ARGS }} {{ NEXTEST_PROFILE_ARGS }}
-
-test: test-c test-cpp test-rust test-c-abi-rust
+test: test-cpp test-rust
 
 coverage-setup:
     cargo install cargo-llvm-cov --locked
@@ -132,41 +117,13 @@ bindings-wasm:
 bindings-wasm-check:
     cargo xtask bindings wasm --check
 
-bindings-c:
-    cargo xtask bindings c
+bindings-cpp:
+    cargo xtask bindings cpp
 
-bindings-c-check:
-    cargo xtask bindings c --check
+build-cpp: example-cpp-bindgen-build
 
-bindings-c-experimental:
-    cargo xtask bindings c-experimental
-
-build-c:
-    cargo build --release --locked --manifest-path c-bindings/Cargo.toml
-
-test-c: bindings-c build-c
-    cmake -S c-bindings/tests/c -B target/c-tests
-    cmake --build target/c-tests
-    ctest --test-dir target/c-tests --output-on-failure
-
-test-c-tsan: bindings-c build-c
-    cmake -S c-bindings/tests/c -B target/c-tests-tsan -DWALLET_ENGINE_C_ENABLE_THREAD_SANITIZER=ON
-    cmake --build target/c-tests-tsan
-    ctest --test-dir target/c-tests-tsan --output-on-failure
-
-build-cpp: bindings-c
-    cmake -S cpp-bindings -B target/cpp-bindings -DBUILD_TESTING=OFF
-    cmake --build target/cpp-bindings
-
-test-cpp: bindings-c
-    cmake -S cpp-bindings -B target/cpp-bindings -DBUILD_TESTING=ON
-    cmake --build target/cpp-bindings
-    ctest --test-dir target/cpp-bindings --output-on-failure
-
-test-cpp-sanitized: bindings-c
-    cmake -S cpp-bindings -B target/cpp-bindings-sanitized -DBUILD_TESTING=ON -DWALLET_ENGINE_CPP_ENABLE_SANITIZERS=ON
-    cmake --build target/cpp-bindings-sanitized
-    ctest --test-dir target/cpp-bindings-sanitized --output-on-failure
+test-cpp: example-cpp-bindgen-build
+    env QT_QPA_PLATFORM=offscreen WALLET_ENGINE_QT_SMOKE_TEST=1 ./target/cpp-bindgen-example/wallet_engine_cpp_bindgen_example
 
 web-install:
     bun install --cwd web --frozen-lockfile
@@ -209,14 +166,12 @@ example-web-test: example-web-install bindings-wasm
 
 web-check: web-fmt-check web-lint web-build web-test example-web-fmt-check example-web-lint example-web-build example-web-test
 
-example-c-build: bindings-c build-c
-    cmake -S examples/c -B target/c-example
-    cmake --build target/c-example
+example-cpp-bindgen-build: bindings-cpp
+    cmake -S examples/cpp-bindgen -B target/cpp-bindgen-example
+    cmake --build target/cpp-bindgen-example
 
-example-c-run: example-c-build
-    ./target/c-example/wallet_engine_c_example
-
-c-check: test-c-abi-rust test-c example-c-build
+example-cpp-bindgen-run: example-cpp-bindgen-build
+    ./target/cpp-bindgen-example/wallet_engine_cpp_bindgen_example
 
 example-tui-run:
     cargo run --locked --manifest-path examples/tui/Cargo.toml
@@ -263,7 +218,7 @@ example-android-install: example-android-build
 
 kotlin-check: example-android-check
 
-bindings-check: c-check kotlin-check swift-check web-check
+bindings-check: kotlin-check swift-check web-check
 
 check-deny:
     cargo deny check
@@ -285,9 +240,7 @@ install-tools:
 
 clean:
     cargo clean
-    cargo clean --manifest-path c-bindings/Cargo.toml
     cargo clean --manifest-path apple-bindgen/Cargo.toml
-    cargo clean --manifest-path c-bindgen/Cargo.toml
     cargo clean --manifest-path kotlin-bindgen/Cargo.toml
     cargo clean --manifest-path wasm-bindings/Cargo.toml
     cargo clean --manifest-path xtask/Cargo.toml

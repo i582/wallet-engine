@@ -1,0 +1,9 @@
+[workspace]
+members = ["bindgen"]
+exclude = ["fixtures"]
+
+resolver = "2"
+
+[workspace.dependencies]
+uniffi = "=0.32.0"
+uniffi_bindgen = { version = "=0.32.0", features = ["cargo-metadata"] }

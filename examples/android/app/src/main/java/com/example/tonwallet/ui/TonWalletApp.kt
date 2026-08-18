@@ -359,7 +359,7 @@ private fun WelcomeScreen(
         )
         Spacer(Modifier.height(spacing.sm))
         Text(
-            "A self-custody Wallet V5R1 for TON testnet. Keys are created on this device and protected by Android Keystore.",
+            "A self-custody wallet for TON testnet. Keys are created on this device and protected by Android Keystore.",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -1241,7 +1241,7 @@ private fun ReceiveSheet(wallet: StoredWallet, onDismiss: () -> Unit) {
             color = MaterialTheme.colorScheme.surfaceVariant,
         ) {
             Column(Modifier.padding(LocalAppSpacing.current.md)) {
-                Text("Your Wallet V5R1 address", style = MaterialTheme.typography.labelMedium)
+                Text("Your wallet address", style = MaterialTheme.typography.labelMedium)
                 Spacer(Modifier.height(LocalAppSpacing.current.sm))
                 Text(
                     wallet.address,

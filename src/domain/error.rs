@@ -164,8 +164,8 @@ pub enum WalletClientError {
     /// The configured protected-secret reference is blank.
     #[error("the local signing secret reference is blank")]
     InvalidLocalSecretReference,
-    /// The configured public key cannot derive a V5R1 wallet state.
-    #[error("the wallet public key cannot derive a V5R1 wallet state")]
+    /// The configured public key cannot derive the wallet state.
+    #[error("the wallet public key cannot derive the wallet state")]
     InvalidWalletPublicKey,
     /// The configured address does not belong to the public key and network.
     #[error("the wallet address does not match the public key and network")]

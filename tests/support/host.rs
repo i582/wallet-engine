@@ -652,7 +652,7 @@ impl ScenarioHttpHost {
 }
 
 fn activity_transactions(page: usize, count: usize) -> Vec<Value> {
-    let address = test_wallet().testnet_v5_address();
+    let address = test_wallet().testnet_address();
     (0..count)
         .map(|index| {
             let ordinal = page.saturating_mul(10).saturating_add(index);

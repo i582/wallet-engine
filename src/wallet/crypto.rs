@@ -1,4 +1,4 @@
-//! TON mnemonic generation and V5R1 wallet derivation.
+//! TON mnemonic generation and wallet derivation.
 //!
 //! Lifecycle and signing code share this private module so both paths derive
 //! the same key pair, contract wallet ID, and address for a selected network.
@@ -26,7 +26,7 @@ pub(crate) enum WalletCryptoError {
     RandomGeneration,
     #[error("invalid recovery phrase")]
     InvalidMnemonic,
-    #[error("V5R1 wallet construction failed")]
+    #[error("wallet construction failed")]
     WalletConstruction,
 }
 
@@ -150,11 +150,11 @@ pub(crate) fn generate_mnemonic() -> Result<SensitiveMnemonic, WalletCryptoError
     }
 }
 
-/// Derives the V5R1 wallet contract used by lifecycle and transaction signing.
+/// Derives the wallet contract used by lifecycle and transaction signing.
 ///
-/// The contract `wallet_id` combines the TON `network_global_id` with the V5R1
+/// Its V5-compatible `wallet_id` combines the TON `network_global_id` with the
 /// client context. Mainnet and testnet therefore derive different contracts.
-pub(crate) fn derive_v5r1_wallet(
+pub(crate) fn derive_wallet(
     mnemonic: &str,
     network: Network,
 ) -> Result<SensitiveWallet, WalletCryptoError> {
@@ -164,36 +164,37 @@ pub(crate) fn derive_v5r1_wallet(
         .to_key_pair()
         .map_err(|_| WalletCryptoError::InvalidMnemonic)?;
 
-    let contract_wallet_id = v5r1_contract_wallet_id(network);
+    let contract_wallet_id = wallet_contract_id(network);
 
-    TonWallet::new_with_params(WalletVersion::V5R1, key_pair, 0, contract_wallet_id)
+    TonWallet::new_with_params(WalletVersion::Wallet, key_pair, 0, contract_wallet_id)
         .map(SensitiveWallet)
         .map_err(|_| WalletCryptoError::WalletConstruction)
 }
 
-const fn v5r1_contract_wallet_id(network: Network) -> i32 {
+/// Returns the network-specific contract identifier used by the wallet.
+const fn wallet_contract_id(network: Network) -> i32 {
     match network {
         Network::Mainnet => WALLET_V5R1_ID_DEFAULT,
         Network::Testnet => WALLET_V5R1_ID_DEFAULT_TESTNET,
     }
 }
 
-/// Derives the V5R1 address and `StateInit` from public metadata only.
+/// Derives the wallet address and `StateInit` from public metadata only.
 ///
 /// The public key is sufficient because wallet code and initial data are
 /// deterministic. No signing key or mnemonic is involved.
-pub(crate) fn derive_v5r1_public_state(
+pub(crate) fn derive_wallet_public_state(
     public_key: &[u8],
     network: Network,
 ) -> Result<(TonAddress, StateInit), WalletCryptoError> {
     let public_key =
         TonHash::from_slice(public_key).map_err(|_| WalletCryptoError::WalletConstruction)?;
-    let wallet_id = v5r1_contract_wallet_id(network);
+    let wallet_id = wallet_contract_id(network);
 
-    let code = WalletVersion::get_code(WalletVersion::V5R1)
+    let code = WalletVersion::get_code(WalletVersion::Wallet)
         .map_err(|_| WalletCryptoError::WalletConstruction)?
         .clone();
-    let data = ton::ton_wallet::WalletV5Data::new(wallet_id, public_key)
+    let data = ton::ton_wallet::WalletData::new(wallet_id, public_key)
         .to_cell()
         .map_err(|_| WalletCryptoError::WalletConstruction)?;
     let state_init = StateInit::new(code, data);
@@ -208,6 +209,20 @@ pub(crate) fn derive_v5r1_public_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pins the embedded wallet contract to the reviewed upstream build.
+    #[test]
+    fn wallet_code_matches_upstream_hash() -> Result<(), Box<dyn std::error::Error>> {
+        const EXPECTED_HASH: [u8; 32] = [
+            0x99, 0xcc, 0xa0, 0x9e, 0xd5, 0xdf, 0xc6, 0x04, 0xfb, 0xfe, 0x67, 0xe1, 0xd2, 0xd6,
+            0x9a, 0x00, 0xba, 0x74, 0x85, 0x2b, 0x23, 0x65, 0xa2, 0x3b, 0x49, 0x62, 0x8b, 0x56,
+            0x33, 0x79, 0x78, 0x98,
+        ];
+        let code = WalletVersion::get_code(WalletVersion::Wallet)?;
+        let hash = code.cell_hash()?;
+        assert_eq!(hash.as_slice(), EXPECTED_HASH.as_slice());
+        Ok(())
+    }
 
     #[test]
     fn sensitive_mnemonic_rejects_invalid_utf8_and_invalid_ton_words() {
