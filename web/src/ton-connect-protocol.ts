@@ -1,3 +1,5 @@
+import type {DeviceInfo} from "@tonconnect/protocol"
+
 import type {TonConnectAccountInfo} from "./ton-connect-types"
 import type {
   AppManifest,
@@ -126,7 +128,7 @@ export function accountReply(account: TonConnectAccountInfo): unknown {
   }
 }
 
-export function deviceInfo(): unknown {
+export function deviceInfo(): DeviceInfo {
   return {
     platform: "browser",
     appName: "tonkeeper",

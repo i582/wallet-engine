@@ -45,6 +45,9 @@ export function prepareTransaction(options: PrepareTransactionOptions): Prepared
   if (payload.messages?.length !== 1 || payload.items !== undefined) {
     return {ok: false, code: 400, message: "Unsupported transaction shape"}
   }
+  if ("validUntil" in payload) {
+    return {ok: false, code: 1, message: "Malformed transaction"}
+  }
   const message: RawMessage | undefined = payload.messages[0]
   if (!isValidMessage(message, payload, account, descriptor)) {
     return {ok: false, code: 1, message: "Malformed transaction"}
@@ -64,7 +67,7 @@ export function prepareTransaction(options: PrepareTransactionOptions): Prepared
       operationId: `ton-connect:${sessionId}:${canonicalRequestId(request.id)}`,
       destination: message.address,
       amount: {kind: "exact", nanograms: message.amount},
-      validUntil: payload.valid_until ?? payload.validUntil,
+      validUntil: payload.valid_until,
       payload: message.payload,
       stateInit: message.stateInit,
     },
@@ -81,6 +84,9 @@ function isValidMessage(
     return false
   }
   if (message.extra_currency !== undefined) {
+    return false
+  }
+  if ("extraCurrency" in message) {
     return false
   }
   if (payload.network !== undefined && payload.network !== account.network) {

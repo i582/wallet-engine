@@ -99,7 +99,6 @@ export interface RawMessage {
 
 export interface RawTransactionPayload {
   readonly valid_until?: number
-  readonly validUntil?: number
   readonly network?: string
   readonly from?: string
   readonly messages?: RawMessage[]

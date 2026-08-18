@@ -8,6 +8,8 @@ xtask/target/
 
 # Generated foreign-language bindings
 /bindings/
+/tests/ton-connect/dapp/dist/
+/tests/ton-connect/dapp/node_modules/
 
 # IDE files
 .idea/
@@ -37,3 +39,6 @@ coverage/
 lcov.info
 mutants.out/
 mutants.out.old/
+
+# Local research notes and checked-out reference implementations
+research/

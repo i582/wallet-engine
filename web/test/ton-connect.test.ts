@@ -7,6 +7,7 @@ import {
   parseTonConnectLink,
   type TonConnectStorage,
 } from "../src/ton-connect"
+import {deviceInfo} from "../src/ton-connect-protocol"
 import {prepareTransaction} from "../src/ton-connect-transaction"
 import type {WalletClient} from "../src/wallet-client"
 import type {WalletLifecycle} from "../src/wallet-lifecycle"
@@ -305,6 +306,16 @@ describe("TON Connect wallet runtime", () => {
 })
 
 describe("TON Connect transaction mapping", () => {
+  test("uses the canonical browser DeviceInfo names", () => {
+    expect(deviceInfo()).toEqual({
+      platform: "browser",
+      appName: "tonkeeper",
+      appVersion: "0.1.0",
+      maxProtocolVersion: 2,
+      features: [{name: "SendTransaction", maxMessages: 1, extraCurrencySupported: false}],
+    })
+  })
+
   test("binds the wallet, validity, payload, and deterministic operation id", () => {
     const prepared = prepareTransaction({
       request: {
@@ -369,6 +380,40 @@ describe("TON Connect transaction mapping", () => {
       dappName: "Example dApp",
     })
     expect(prepared).toMatchObject({ok: false, code: 400})
+  })
+
+  test("rejects SDK-only camelCase transaction names on the wire", () => {
+    const base = {
+      network: "-3",
+      messages: [{address: "EQDestination", amount: "1000000"}],
+    }
+    const payloads = [
+      {...base, validUntil: 1_900_000_000},
+      {
+        ...base,
+        messages: [{...base.messages[0], extraCurrency: {1: "5"}}],
+      },
+    ]
+    for (const payload of payloads) {
+      const prepared = prepareTransaction({
+        request: {
+          method: "sendTransaction",
+          id: "1",
+          params: [JSON.stringify(payload)],
+        },
+        account: {address: "0:account", network: "-3", walletStateInit: "x", publicKey: []},
+        descriptor: {
+          recordId: "wallet",
+          address: "0QWallet",
+          publicKey: [],
+          network: "testnet",
+          secretRef: {value: "wallet-secret"},
+        },
+        sessionId: "session",
+        dappName: "Example dApp",
+      })
+      expect(prepared).toMatchObject({ok: false, code: 1})
+    }
   })
 })
 
