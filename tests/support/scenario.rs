@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
+use std::future::{Future, poll_fn};
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -65,6 +66,22 @@ fn step_timeout() -> Duration {
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|seconds| *seconds > 0)
         .map_or(DEFAULT_STEP_TIMEOUT, Duration::from_secs)
+}
+
+/// Polls an asynchronous scenario operation once before reporting that it started.
+fn block_on_started<F>(future: F, started: Sender<()>) -> F::Output
+where
+    F: Future,
+{
+    let mut future = Box::pin(future);
+    let mut started = Some(started);
+    block_on(poll_fn(move |context| {
+        let result = future.as_mut().poll(context);
+        if let Some(started) = started.take() {
+            let _ = started.send(());
+        }
+        result
+    }))
 }
 
 pub(crate) fn scenario(name: impl Into<String>) -> Scenario {
@@ -1738,10 +1755,19 @@ impl ScenarioRunner {
                         let result = block_on(client.cancel_load_more_activity());
                         let _ = sender.send(OperationResult::Unit(result));
                     }),
-                    UserAction::Shutdown => std::thread::spawn(move || {
-                        let result = block_on(client.shutdown());
-                        let _ = sender.send(OperationResult::Unit(result));
-                    }),
+                    UserAction::Shutdown => {
+                        let (started_sender, started_receiver) = channel();
+                        let thread = std::thread::spawn(move || {
+                            let result = block_on_started(client.shutdown(), started_sender);
+                            let _ = sender.send(OperationResult::Unit(result));
+                        });
+                        started_receiver
+                            .recv_timeout(step_timeout())
+                            .map_err(|error| {
+                                format!("shutdown operation `{name}` did not start: {error}")
+                            })?;
+                        thread
+                    }
                     UserAction::WaitForChange { after_revision } => std::thread::spawn(move || {
                         let result = block_on(client.wait_for_change(after_revision));
                         let _ = sender.send(OperationResult::Snapshot(Box::new(result)));

@@ -108,6 +108,21 @@ jobs:
         working-directory: ton-connect-bridge
         run: go build -o bridge3 ./cmd/bridge3
 
+      - name: Install Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: tests/ton-connect/dapp/package-lock.json
+
+      - name: Install TON Connect dApp dependencies
+        working-directory: tests/ton-connect/dapp
+        run: npm ci
+
+      - name: Build TON Connect dApp
+        working-directory: tests/ton-connect/dapp
+        run: npm run build
+
       - name: Install test tools
         uses: taiki-e/install-action@15449e3094499af05d8d964a1c884208e4b8b595 # v2.81.11
         with:
