@@ -32,6 +32,7 @@ wallet_engine_wallets.tsv
 # Code intelligence and local tooling
 .codegraph/
 .codebase-memory/
+.playwright-mcp/
 .mcp.json
 
 # Coverage and reports

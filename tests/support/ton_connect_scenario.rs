@@ -6,30 +6,48 @@ use std::{
     num::{NonZeroU32, NonZeroUsize},
     path::PathBuf,
     process::{Child, Command, Stdio},
+    sync::Arc,
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use futures::executor::block_on;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Map;
+use ton::block_tlb::StateInit;
+use ton::ton_core::traits::tlb::TLB as _;
+use ton::ton_wallet::{Mnemonic, WALLET_V5R1_ID_DEFAULT_TESTNET, WalletVersion};
 use ton_connect_client::{IncomingRequest, TonConnectClient, TonConnectClientConfig};
 use ton_connect_core::{
     ConnectEvent, ConnectEventPayload, ConnectItem, ConnectItemReply, ConnectLink, DeviceInfo,
     DevicePlatform, Ed25519PublicKey, Feature, FriendlyAddress, HeartbeatMode, HttpBridgeUrl,
-    KnownAppRequest, NetworkId, PreparedBridgePost, RawMessage, ReturnStrategy, RpcErrorCode,
-    SendTransactionFeature, SessionCrypto, TonAddressItemReply, TransactionPayload, WalletResponse,
-    WalletResponseError, WalletResponseSuccess, WalletResult, WalletStateInit,
+    KnownAppRequest, NetworkId, PreparedBridgePost, RawMessage, RequestContextError,
+    ReturnStrategy, RpcErrorCode, SendTransactionFeature, SessionCrypto, TonAddressItemReply,
+    TransactionPayload, WalletResponse, WalletResponseError, WalletResponseSuccess, WalletResult,
+    WalletStateInit,
 };
-use ton_core::{cell::TonCell, traits::tlb::TLB as _};
+use ton_core::cell::TonCell;
+use wallet_engine::{
+    Boc, ImportWalletRequest, Network, NonEmptyString, ProviderConfig, SendAmount, SendPhase,
+    SendRequest, TonAddressString, TonConnectAccountInfo, TonConnectDevice,
+    TonConnectDevicePlatform, TonConnectIncomingRequest, TonConnectIncomingRequestKind,
+    TonConnectRpcErrorCode, TonConnectSession, TonConnectSessionConfig, WalletClient,
+    WalletClientConfig, WalletLifecycle, ton_connect_session_from_link,
+};
+
+use super::{host::MemoryPlatformHost, localnet::LocalnetHttpHost, test_wallet};
 
 type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 
 const PROCESS_START_TIMEOUT: Duration = Duration::from_secs(10);
 const EVENT_TIMEOUT: Duration = Duration::from_secs(10);
 const WALLET_ADDRESS: &str = "{wallet_address}";
+const DEPLOYMENT_ADDRESS: &str = "{deployment_address}";
+const DEPLOYMENT_STATE_INIT: &str = "{deployment_state_init}";
 const TEST_SIGNED_BOC: &str = "te6ccgEBAQEAAgAAAA==";
 const TON_TESTNET_NETWORK_ID: &str = "-3";
+const ENGINE_RECORD_ID: &str = "ton-connect-localnet-wallet";
 
 /// Starts a named Given/When/Then scenario and records its steps for deferred execution.
 pub(crate) fn scenario(name: impl Into<String>) -> Scenario {
@@ -83,12 +101,66 @@ pub(crate) const fn dapp_sends_transaction(transaction: DappTransactionConfig) -
 
 /// Commands the wallet to assert the pending message and return a signed `BoC`.
 pub(crate) const fn wallet_approves_transaction(expected_message: DappTransactionMessage) -> When {
-    When::WalletAnswersTransaction(TransactionDecision::Approve, expected_message)
+    When::WalletAnswersTransaction(
+        TransactionDecision::Approve,
+        DappTransactionMessages::One(expected_message),
+    )
+}
+
+/// Commands the wallet to assert an exact two-message batch and return a signed `BoC`.
+pub(crate) const fn wallet_approves_transaction_messages(
+    first: DappTransactionMessage,
+    second: DappTransactionMessage,
+) -> When {
+    When::WalletAnswersTransaction(
+        TransactionDecision::Approve,
+        DappTransactionMessages::Two(first, second),
+    )
+}
+
+/// Commands wallet-engine to sign, submit, and acknowledge one TON Connect transaction on localnet.
+pub(crate) const fn wallet_executes_transaction_on_localnet(
+    expected_message: DappTransactionMessage,
+) -> When {
+    When::WalletExecutesTransactionOnLocalnet(DappTransactionMessages::One(expected_message))
 }
 
 /// Commands the wallet to assert the pending message and reject it with protocol error 300.
 pub(crate) const fn wallet_rejects_transaction(expected_message: DappTransactionMessage) -> When {
-    When::WalletAnswersTransaction(TransactionDecision::Reject, expected_message)
+    When::WalletAnswersTransaction(
+        TransactionDecision::UserReject,
+        DappTransactionMessages::One(expected_message),
+    )
+}
+
+/// Commands the wallet to assert that the pending transaction is expired and return error 1.
+pub(crate) const fn wallet_rejects_expired_transaction(
+    expected_message: DappTransactionMessage,
+) -> When {
+    When::WalletAnswersTransaction(
+        TransactionDecision::Expired,
+        DappTransactionMessages::One(expected_message),
+    )
+}
+
+/// Commands the wallet to verify a mismatched `from` address and return protocol error 1.
+pub(crate) const fn wallet_rejects_transaction_for_account_mismatch(
+    expected_message: DappTransactionMessage,
+) -> When {
+    When::WalletAnswersTransaction(
+        TransactionDecision::AccountMismatch,
+        DappTransactionMessages::One(expected_message),
+    )
+}
+
+/// Commands the wallet to assert the pending message and return unknown-app error 100.
+pub(crate) const fn wallet_rejects_transaction_from_unknown_app(
+    expected_message: DappTransactionMessage,
+) -> When {
+    When::WalletAnswersTransaction(
+        TransactionDecision::UnknownApp,
+        DappTransactionMessages::One(expected_message),
+    )
 }
 
 /// Expects a complete protocol-v2 `tc` link with exactly one copy of every
@@ -130,6 +202,120 @@ pub(crate) const fn dapp_received_transaction_success() -> Expectation {
 /// Expects the dApp SDK to surface the wallet's rejection as `UserRejectsError`.
 pub(crate) const fn dapp_received_transaction_rejection() -> Expectation {
     Expectation::DappReceivedTransactionRejection
+}
+
+/// Expects the SDK to reject a transaction for a network other than the connected account.
+pub(crate) const fn dapp_rejected_transaction_wrong_network() -> Expectation {
+    Expectation::DappRejectedTransactionPreflight(TransactionPreflightRejection::WrongNetwork)
+}
+
+/// Expects the SDK to reject a transaction that exceeds the wallet's advertised message limit.
+pub(crate) const fn dapp_rejected_transaction_for_message_limit() -> Expectation {
+    Expectation::DappRejectedTransactionPreflight(TransactionPreflightRejection::MessageLimit)
+}
+
+/// Expects the SDK to reject extra currencies that the wallet did not advertise.
+pub(crate) const fn dapp_rejected_transaction_for_extra_currency() -> Expectation {
+    Expectation::DappRejectedTransactionPreflight(TransactionPreflightRejection::ExtraCurrency)
+}
+
+/// Expects a wallet error 1 to become the SDK's high-level bad-request error.
+pub(crate) const fn dapp_received_transaction_bad_request() -> Expectation {
+    Expectation::DappReceivedTransactionBadRequest
+}
+
+/// Expects an account-mismatch wallet error to become the SDK's high-level bad-request error.
+pub(crate) const fn dapp_received_transaction_account_mismatch() -> Expectation {
+    Expectation::DappReceivedTransactionAccountMismatch
+}
+
+/// Expects wallet error 100 to become the SDK's high-level unknown-app error.
+pub(crate) const fn dapp_received_transaction_unknown_app() -> Expectation {
+    Expectation::DappReceivedTransactionUnknownApp
+}
+
+/// Starts an on-chain expectation for the account derived from deployment `StateInit`.
+pub(crate) const fn deployment_target() -> DeploymentTargetExpectationBuilder {
+    DeploymentTargetExpectationBuilder
+}
+
+/// Starts an on-chain expectation for the wallet that signed the TON Connect request.
+pub(crate) const fn source_wallet_account() -> OnChainAccountExpectationBuilder {
+    OnChainAccountExpectationBuilder::new(OnChainAccountTarget::SourceWallet)
+}
+
+pub(crate) struct DeploymentTargetExpectationBuilder;
+
+impl DeploymentTargetExpectationBuilder {
+    /// Requires the deterministic target to have no active account before submission.
+    pub(crate) const fn absent(self) -> Expectation {
+        let Self = self;
+        Expectation::DeploymentTargetAbsent
+    }
+
+    /// Requires the deterministic target to become active after the deploy message.
+    pub(crate) const fn active(self) -> OnChainAccountExpectationBuilder {
+        let Self = self;
+        OnChainAccountExpectationBuilder::new(OnChainAccountTarget::Deployment).active()
+    }
+}
+
+pub(crate) struct OnChainAccountExpectationBuilder {
+    target: OnChainAccountTarget,
+    state: &'static str,
+    balance_range: Option<(&'static str, &'static str)>,
+}
+
+impl OnChainAccountExpectationBuilder {
+    /// Creates an account assertion with no assumed state or balance requirement.
+    const fn new(target: OnChainAccountTarget) -> Self {
+        Self {
+            target,
+            state: "",
+            balance_range: None,
+        }
+    }
+
+    /// Requires the selected localnet account to be deployed and active.
+    #[must_use]
+    pub(crate) const fn active(mut self) -> Self {
+        self.state = "active";
+        self
+    }
+
+    /// Requires the account balance to remain inside an inclusive nanogram range.
+    #[must_use]
+    pub(crate) const fn balance_between(
+        mut self,
+        minimum: &'static str,
+        maximum: &'static str,
+    ) -> Self {
+        self.balance_range = Some((minimum, maximum));
+        self
+    }
+
+    /// Finalizes the account expectation with an exact wallet `seqno` value.
+    pub(crate) const fn seqno(self, seqno: u32) -> Expectation {
+        Expectation::OnChainAccount(OnChainAccountExpectation {
+            target: self.target,
+            state: self.state,
+            balance_range: self.balance_range,
+            seqno,
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum OnChainAccountTarget {
+    Deployment,
+    SourceWallet,
+}
+
+pub(crate) struct OnChainAccountExpectation {
+    target: OnChainAccountTarget,
+    state: &'static str,
+    balance_range: Option<(&'static str, &'static str)>,
+    seqno: u32,
 }
 
 pub(crate) struct Scenario {
@@ -183,7 +369,8 @@ pub(crate) enum When {
     DappDisconnects,
     WalletAnswersDisconnect,
     DappSendsTransaction(DappTransactionConfig),
-    WalletAnswersTransaction(TransactionDecision, DappTransactionMessage),
+    WalletAnswersTransaction(TransactionDecision, DappTransactionMessages),
+    WalletExecutesTransactionOnLocalnet(DappTransactionMessages),
 }
 
 pub(crate) enum Expectation {
@@ -194,12 +381,28 @@ pub(crate) enum Expectation {
     DappRejectedWrongNetwork,
     DappReceivedTransactionSuccess,
     DappReceivedTransactionRejection,
+    DappRejectedTransactionPreflight(TransactionPreflightRejection),
+    DappReceivedTransactionBadRequest,
+    DappReceivedTransactionAccountMismatch,
+    DappReceivedTransactionUnknownApp,
+    DeploymentTargetAbsent,
+    OnChainAccount(OnChainAccountExpectation),
 }
 
 #[derive(Clone, Copy)]
 pub(crate) enum TransactionDecision {
     Approve,
-    Reject,
+    UserReject,
+    Expired,
+    AccountMismatch,
+    UnknownApp,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum TransactionPreflightRejection {
+    WrongNetwork,
+    MessageLimit,
+    ExtraCurrency,
 }
 
 #[derive(Clone)]
@@ -223,7 +426,7 @@ impl BridgeFixtureBuilder {
 
     /// Uses the bridge's in-memory backend so every scenario starts without persisted sessions.
     #[must_use]
-    pub(crate) const fn memory(self) -> BridgeFixture {
+    pub(crate) const fn in_memory(self) -> BridgeFixture {
         let Self = self;
         BridgeFixture {
             storage: BridgeStorage::Memory,
@@ -304,9 +507,10 @@ impl DappManifestConfig {
 
 #[derive(Clone, Copy)]
 pub(crate) struct DappTransactionConfig {
-    valid_for_seconds: u64,
+    validity: DappTransactionValidity,
     network: &'static str,
-    message: DappTransactionMessage,
+    from: Option<&'static str>,
+    messages: DappTransactionMessages,
 }
 
 #[derive(Clone, Copy)]
@@ -314,6 +518,26 @@ pub(crate) struct DappTransactionMessage {
     destination: &'static str,
     amount: &'static str,
     payload: Option<&'static str>,
+    state_init: Option<&'static str>,
+    extra_currency: Option<DappExtraCurrency>,
+}
+
+#[derive(Clone, Copy)]
+enum DappTransactionValidity {
+    Future(u64),
+    Past(u64),
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum DappTransactionMessages {
+    One(DappTransactionMessage),
+    Two(DappTransactionMessage, DappTransactionMessage),
+}
+
+#[derive(Clone, Copy)]
+struct DappExtraCurrency {
+    id: u32,
+    amount: &'static str,
 }
 
 struct RenderedDappTransaction {
@@ -326,56 +550,102 @@ impl DappTransactionConfig {
     #[must_use]
     pub(crate) const fn new(network: &'static str, message: DappTransactionMessage) -> Self {
         Self {
-            valid_for_seconds: 300,
+            validity: DappTransactionValidity::Future(300),
             network,
-            message,
+            from: None,
+            messages: DappTransactionMessages::One(message),
         }
     }
 
     /// Overrides how long the generated transaction remains valid after the action starts.
     #[must_use]
     pub(crate) const fn valid_for_seconds(mut self, seconds: u64) -> Self {
-        self.valid_for_seconds = seconds;
+        self.validity = DappTransactionValidity::Future(seconds);
+        self
+    }
+
+    /// Makes the generated validity timestamp precede the action by the selected duration.
+    #[must_use]
+    pub(crate) const fn expired_seconds_ago(mut self, seconds: u64) -> Self {
+        self.validity = DappTransactionValidity::Past(seconds);
+        self
+    }
+
+    /// Overrides the connected account used as the transaction's fixed `from` address.
+    #[must_use]
+    pub(crate) const fn from(mut self, from: &'static str) -> Self {
+        self.from = Some(from);
+        self
+    }
+
+    /// Adds a second raw message for capability-limit scenarios.
+    #[must_use]
+    pub(crate) const fn and_message(mut self, message: DappTransactionMessage) -> Self {
+        self.messages = match self.messages {
+            DappTransactionMessages::One(first) | DappTransactionMessages::Two(first, _) => {
+                DappTransactionMessages::Two(first, message)
+            }
+        };
         self
     }
 
     /// Resolves the wallet-address placeholder and timestamps the transaction for this run.
     fn render(&self, wallet: &WalletFixture) -> TestResult<RenderedDappTransaction> {
-        let account = test_account(&wallet.network)?;
+        let account = wallet_account(wallet)?;
+        let from = self
+            .from
+            .map_or_else(|| account.address.to_string(), str::to_owned);
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-        let valid_until = now
-            .checked_add(self.valid_for_seconds)
-            .ok_or_else(|| failure("transaction validity timestamp overflow"))?;
-        let message = self.message.render(wallet)?;
+        let valid_until = match self.validity {
+            DappTransactionValidity::Future(seconds) => now
+                .checked_add(seconds)
+                .ok_or_else(|| failure("transaction validity timestamp overflow"))?,
+            DappTransactionValidity::Past(seconds) => now
+                .checked_sub(seconds)
+                .ok_or_else(|| failure("transaction validity timestamp underflow"))?,
+        };
+        let messages = self.messages.render(wallet)?;
 
         let mut wire_transaction = Map::new();
         let _ = wire_transaction.insert("valid_until".to_owned(), valid_until.into());
         let _ = wire_transaction.insert("network".to_owned(), self.network.into());
-        let _ = wire_transaction.insert("from".to_owned(), account.address.to_string().into());
-        let _ = wire_transaction.insert(
-            "messages".to_owned(),
-            serde_json::Value::Array(vec![serde_json::to_value(&message)?]),
-        );
+        let _ = wire_transaction.insert("from".to_owned(), from.clone().into());
+        let _ = wire_transaction.insert("messages".to_owned(), serde_json::to_value(&messages)?);
         let wire_request = serde_json::from_value(serde_json::Value::Object(wire_transaction))?;
 
-        let mut sdk_message = serde_json::to_value(message)?;
-        if let Some(object) = sdk_message.as_object_mut()
-            && let Some(extra_currency) = object.remove("extra_currency")
-        {
-            let _ = object.insert("extraCurrency".to_owned(), extra_currency);
+        let mut sdk_messages = serde_json::to_value(messages)?;
+        let sdk_messages = sdk_messages
+            .as_array_mut()
+            .ok_or_else(|| failure("serialized transaction messages are not an array"))?;
+        for sdk_message in sdk_messages.iter_mut() {
+            if let Some(object) = sdk_message.as_object_mut()
+                && let Some(extra_currency) = object.remove("extra_currency")
+            {
+                let _ = object.insert("extraCurrency".to_owned(), extra_currency);
+            }
         }
         let mut sdk_request = Map::new();
         let _ = sdk_request.insert("validUntil".to_owned(), valid_until.into());
         let _ = sdk_request.insert("network".to_owned(), self.network.into());
-        let _ = sdk_request.insert("from".to_owned(), account.address.to_string().into());
+        let _ = sdk_request.insert("from".to_owned(), from.into());
         let _ = sdk_request.insert(
             "messages".to_owned(),
-            serde_json::Value::Array(vec![sdk_message]),
+            serde_json::Value::Array(sdk_messages.clone()),
         );
         Ok(RenderedDappTransaction {
             sdk_request: serde_json::Value::Object(sdk_request),
             wire_request,
         })
+    }
+}
+
+impl DappTransactionMessages {
+    /// Renders every expected message in order using the active wallet fixture.
+    fn render(&self, wallet: &WalletFixture) -> TestResult<Vec<RawMessage>> {
+        match self {
+            Self::One(message) => Ok(vec![message.render(wallet)?]),
+            Self::Two(first, second) => Ok(vec![first.render(wallet)?, second.render(wallet)?]),
+        }
     }
 }
 
@@ -387,6 +657,8 @@ impl DappTransactionMessage {
             destination,
             amount,
             payload: None,
+            state_init: None,
+            extra_currency: None,
         }
     }
 
@@ -397,22 +669,59 @@ impl DappTransactionMessage {
         self
     }
 
+    /// Adds a base64-encoded one-cell `StateInit` to the expected transfer message.
+    #[must_use]
+    pub(crate) const fn state_init(mut self, state_init: &'static str) -> Self {
+        self.state_init = Some(state_init);
+        self
+    }
+
+    /// Adds one extra-currency amount to the expected raw transfer message.
+    #[must_use]
+    pub(crate) const fn extra_currency(mut self, id: u32, amount: &'static str) -> Self {
+        self.extra_currency = Some(DappExtraCurrency { id, amount });
+        self
+    }
+
     /// Resolves dynamic placeholders and validates the message with the production wire type.
     fn render(&self, wallet: &WalletFixture) -> TestResult<RawMessage> {
-        let account = test_account(&wallet.network)?;
+        let account = wallet_account(wallet)?;
         let destination = FriendlyAddress::from_raw(
             account.address,
             true,
             wallet.network == TON_TESTNET_NETWORK_ID,
         )?;
+        let deployment = (self.destination.contains(DEPLOYMENT_ADDRESS)
+            || self
+                .state_init
+                .is_some_and(|value| value.contains(DEPLOYMENT_STATE_INIT)))
+        .then(test_deployment_target)
+        .transpose()?;
         let destination = self
             .destination
             .replace(WALLET_ADDRESS, destination.as_str());
+        let destination = deployment.as_ref().map_or_else(
+            || destination.clone(),
+            |target| destination.replace(DEPLOYMENT_ADDRESS, target.address.as_str()),
+        );
         let mut message = Map::new();
         let _ = message.insert("address".to_owned(), destination.into());
         let _ = message.insert("amount".to_owned(), self.amount.into());
         if let Some(payload) = self.payload {
             let _ = message.insert("payload".to_owned(), payload.into());
+        }
+        if let Some(state_init) = self.state_init {
+            let state_init = deployment.as_ref().map_or_else(
+                || state_init.to_owned(),
+                |target| state_init.replace(DEPLOYMENT_STATE_INIT, &target.state_init),
+            );
+            let _ = message.insert("stateInit".to_owned(), state_init.into());
+        }
+        if let Some(extra_currency) = self.extra_currency {
+            let _ = message.insert(
+                "extra_currency".to_owned(),
+                serde_json::json!({ extra_currency.id.to_string(): extra_currency.amount }),
+            );
         }
         Ok(serde_json::from_value(serde_json::Value::Object(message))?)
     }
@@ -456,9 +765,22 @@ struct RenderedDappManifestConfig {
 #[derive(Clone)]
 pub(crate) struct WalletFixture {
     network: String,
+    max_messages: u32,
+    extra_currency_supported: bool,
+    backend: WalletBackend,
+}
+
+#[derive(Clone)]
+enum WalletBackend {
+    Protocol,
+    EngineLocalnet { balance_nanograms: &'static str },
 }
 
 pub(crate) struct WalletFixtureBuilder;
+
+pub(crate) struct EngineLocalnetWalletFixtureBuilder {
+    wallet: WalletFixture,
+}
 
 impl WalletFixtureBuilder {
     /// Configures the network reported by the deterministic wallet account.
@@ -467,7 +789,44 @@ impl WalletFixtureBuilder {
         let Self = self;
         WalletFixture {
             network: network.into(),
+            max_messages: 1,
+            extra_currency_supported: false,
+            backend: WalletBackend::Protocol,
         }
+    }
+}
+
+impl WalletFixture {
+    /// Overrides the `SendTransaction.maxMessages` capability reported during connect.
+    #[must_use]
+    pub(crate) const fn max_messages(mut self, max_messages: u32) -> Self {
+        self.max_messages = max_messages;
+        self
+    }
+
+    /// Overrides the wallet's advertised support for TEP-92 extra currencies.
+    #[must_use]
+    pub(crate) const fn extra_currency_supported(mut self, supported: bool) -> Self {
+        self.extra_currency_supported = supported;
+        self
+    }
+
+    /// Selects the wallet-engine and Acton localnet backend for approved TON Connect sends.
+    #[must_use]
+    pub(crate) const fn on_localnet(self) -> EngineLocalnetWalletFixtureBuilder {
+        EngineLocalnetWalletFixtureBuilder { wallet: self }
+    }
+}
+
+impl EngineLocalnetWalletFixtureBuilder {
+    /// Funds the uninitialized source wallet with this exact nanogram balance.
+    #[must_use]
+    pub(crate) fn with_balance_nanograms(
+        mut self,
+        balance_nanograms: &'static str,
+    ) -> WalletFixture {
+        self.wallet.backend = WalletBackend::EngineLocalnet { balance_nanograms };
+        self.wallet
     }
 }
 
@@ -492,6 +851,61 @@ impl From<WalletFixture> for Given {
     }
 }
 
+struct EngineWalletHarness {
+    localnet: Arc<LocalnetHttpHost>,
+    client: Arc<WalletClient>,
+    account: TonConnectAccountInfo,
+}
+
+impl EngineWalletHarness {
+    /// Imports the stable test wallet, funds it on localnet, and creates its real client.
+    fn start(balance_nanograms: &str) -> TestResult<Self> {
+        let platform_host = Arc::new(MemoryPlatformHost::default());
+        let lifecycle = WalletLifecycle::new(platform_host.clone());
+        let descriptor = block_on(lifecycle.import_wallet(ImportWalletRequest {
+            record_id: ENGINE_RECORD_ID.to_owned(),
+            network: Network::Testnet,
+            recovery_words: test_wallet().recovery_words(),
+        }))?;
+        let account = lifecycle.ton_connect_account(descriptor.clone())?;
+        let expected_account = engine_account_info()?;
+        if account != expected_account
+            || descriptor.address.as_str() != test_wallet().testnet_v5_address()
+        {
+            return Err(failure(format!(
+                "wallet lifecycle derived unexpected localnet account: {account:?}"
+            )));
+        }
+
+        let localnet = Arc::new(
+            LocalnetHttpHost::start(descriptor.address.as_str(), balance_nanograms)
+                .map_err(failure)?,
+        );
+        let client = WalletClient::new(
+            WalletClientConfig {
+                record_id: NonEmptyString::try_from(ENGINE_RECORD_ID)?,
+                address: descriptor.address,
+                public_key: descriptor.public_key,
+                local_secret_ref: Some(descriptor.secret_ref),
+                network: Network::Testnet,
+                send_validity_seconds: 300,
+                resolution_margin_seconds: 60,
+                providers: ProviderConfig {
+                    toncenter_base_url: localnet.provider_base_url(),
+                    request_timeout_ms: 15_000,
+                },
+            },
+            localnet.clone(),
+            platform_host,
+        )?;
+        Ok(Self {
+            localnet,
+            client,
+            account,
+        })
+    }
+}
+
 struct ScenarioRunner {
     name: String,
     http: Client,
@@ -505,7 +919,10 @@ struct ScenarioRunner {
     connect_link: Option<String>,
     transaction_sdk_request: Option<serde_json::Value>,
     transaction_request: Option<TransactionPayload>,
+    expected_signed_boc: Option<String>,
     wallet_client: Option<TonConnectClient>,
+    wallet_session: Option<Arc<TonConnectSession>>,
+    engine_wallet: Option<EngineWalletHarness>,
 }
 
 impl ScenarioRunner {
@@ -527,7 +944,10 @@ impl ScenarioRunner {
             connect_link: None,
             transaction_sdk_request: None,
             transaction_request: None,
+            expected_signed_boc: None,
             wallet_client: None,
+            wallet_session: None,
+            engine_wallet: None,
         })
     }
 
@@ -561,8 +981,11 @@ impl ScenarioRunner {
             Step::When(When::DappSendsTransaction(transaction)) => {
                 self.send_transaction(&transaction)
             }
-            Step::When(When::WalletAnswersTransaction(decision, expected_message)) => {
-                self.answer_transaction(decision, &expected_message)
+            Step::When(When::WalletAnswersTransaction(decision, expected_messages)) => {
+                self.answer_transaction(decision, &expected_messages)
+            }
+            Step::When(When::WalletExecutesTransactionOnLocalnet(expected_messages)) => {
+                self.execute_transaction_on_localnet(&expected_messages)
             }
             Step::Then(Expectation::ConnectLinkCreated) => self.assert_connect_link(),
             Step::Then(Expectation::ManifestAvailable) => self.assert_manifest_available(),
@@ -576,6 +999,24 @@ impl ScenarioRunner {
             }
             Step::Then(Expectation::DappReceivedTransactionRejection) => {
                 self.assert_dapp_received_transaction_rejection()
+            }
+            Step::Then(Expectation::DappRejectedTransactionPreflight(reason)) => {
+                self.assert_dapp_rejected_transaction_preflight(reason)
+            }
+            Step::Then(Expectation::DappReceivedTransactionBadRequest) => {
+                self.assert_dapp_received_transaction_bad_request()
+            }
+            Step::Then(Expectation::DappReceivedTransactionAccountMismatch) => {
+                self.assert_dapp_received_transaction_account_mismatch()
+            }
+            Step::Then(Expectation::DappReceivedTransactionUnknownApp) => {
+                self.assert_dapp_received_transaction_unknown_app()
+            }
+            Step::Then(Expectation::DeploymentTargetAbsent) => {
+                self.assert_deployment_target_absent()
+            }
+            Step::Then(Expectation::OnChainAccount(expectation)) => {
+                self.assert_on_chain_account(&expectation)
             }
         }
     }
@@ -627,10 +1068,10 @@ impl ScenarioRunner {
             .ok_or_else(|| failure("wallet fixture is missing"))?;
         let parsed_link = ConnectLink::parse(link)?;
         let payload = ConnectEventPayload {
-            items: vec![ConnectItemReply::TonAddress(test_account(
-                &wallet_fixture.network,
+            items: vec![ConnectItemReply::TonAddress(wallet_account(
+                wallet_fixture,
             )?)],
-            device: test_device()?,
+            device: test_device(wallet_fixture)?,
         };
         let requested_network = parsed_link.request().and_then(|request| {
             request.items.as_slice().iter().find_map(|item| match item {
@@ -639,6 +1080,63 @@ impl ScenarioRunner {
             })
         });
         let ttl = NonZeroU32::new(300).ok_or_else(|| failure("invalid message TTL"))?;
+
+        if matches!(wallet_fixture.backend, WalletBackend::EngineLocalnet { .. }) {
+            if wallet_fixture.max_messages != 1 || wallet_fixture.extra_currency_supported {
+                return Err(failure(
+                    "wallet-engine localnet profile advertises one message without extra currencies",
+                ));
+            }
+            let account = self
+                .engine_wallet
+                .as_ref()
+                .ok_or_else(|| failure("wallet-engine localnet profile is not running"))?
+                .account
+                .clone();
+            let session = ton_connect_session_from_link(
+                link.to_owned(),
+                TonConnectSessionConfig {
+                    bridge_url: bridge_url.to_owned(),
+                    max_event_bytes: 64 * 1024,
+                    message_ttl_seconds: ttl.get(),
+                },
+            )?;
+            let prompt = session
+                .connect_prompt()?
+                .ok_or_else(|| failure("wallet-engine did not expose the connect prompt"))?;
+            let expected_manifest = parsed_link
+                .request()
+                .ok_or_else(|| failure("connect link has no request"))?
+                .manifest_url
+                .as_str();
+            if prompt.manifest_url != expected_manifest
+                || prompt.requested_network.as_deref() != requested_network.map(NetworkId::as_str)
+            {
+                return Err(failure(format!(
+                    "wallet-engine exposed a different connect prompt: {prompt:?}"
+                )));
+            }
+            let post = session.approve_connect(
+                account,
+                None,
+                TonConnectDevice {
+                    platform: TonConnectDevicePlatform::Linux,
+                    app_name: "wallet-engine-test".to_owned(),
+                    app_version: "0.1.0".to_owned(),
+                },
+            )?;
+            drop(
+                self.http
+                    .post(&post.url)
+                    .header("content-type", "text/plain; charset=utf-8")
+                    .body(post.body)
+                    .send()?
+                    .error_for_status()?,
+            );
+            session.complete_pending_post()?;
+            self.wallet_session = Some(session);
+            return Ok(());
+        }
 
         if requested_network
             .is_some_and(|network| network.as_str() != wallet_fixture.network.as_str())
@@ -755,8 +1253,16 @@ impl ScenarioRunner {
     fn answer_transaction(
         &mut self,
         decision: TransactionDecision,
-        expected_message: &DappTransactionMessage,
+        expected_messages: &DappTransactionMessages,
     ) -> TestResult {
+        let uses_engine = self
+            .wallet_fixture
+            .as_ref()
+            .is_some_and(|wallet| matches!(&wallet.backend, WalletBackend::EngineLocalnet { .. }));
+        if uses_engine {
+            return self.answer_engine_transaction(decision, expected_messages);
+        }
+
         let incoming = self.receive_wallet_request()?;
         let KnownAppRequest::SendTransaction(request) = incoming.decode()? else {
             return Err(failure(format!(
@@ -778,26 +1284,76 @@ impl ScenarioRunner {
             .wallet_fixture
             .as_ref()
             .ok_or_else(|| failure("wallet fixture is missing"))?;
-        let expected_message = expected_message.render(wallet)?;
+        let expected_messages = expected_messages.render(wallet)?;
         let TransactionPayload::Raw(payload) = &request.payload else {
             return Err(failure("wallet expected a raw transaction message"));
         };
-        if payload.messages.as_slice() != std::slice::from_ref(&expected_message) {
+        if payload.messages.as_slice() != expected_messages.as_slice() {
             return Err(failure(format!(
-                "wallet received different messages: expected {expected_message:?}, got {:?}",
+                "wallet received different messages: expected {expected_messages:?}, got {:?}",
                 payload.messages
             )));
         }
 
+        let expected_context_error = match decision {
+            TransactionDecision::Expired => Some(RequestContextError::Expired),
+            TransactionDecision::AccountMismatch => Some(RequestContextError::AccountMismatch),
+            TransactionDecision::Approve
+            | TransactionDecision::UserReject
+            | TransactionDecision::UnknownApp => None,
+        };
+        if let Some(expected_error) = expected_context_error {
+            let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+            let account = wallet_account(wallet)?;
+            let active_network = NetworkId::try_from(wallet.network.as_str())?;
+            if request
+                .payload
+                .validate_context(now, &active_network, &account.address)
+                != Err(expected_error)
+            {
+                return Err(failure(format!(
+                    "wallet expected context error {expected_error:?}, got {:?}",
+                    request.payload
+                )));
+            }
+        }
+
         let response = match decision {
-            TransactionDecision::Approve => WalletResponse::Success(WalletResponseSuccess {
-                result: WalletResult::String(TEST_SIGNED_BOC.to_owned()),
-                id: request.id,
-            }),
-            TransactionDecision::Reject => WalletResponse::Error {
+            TransactionDecision::Approve => {
+                self.expected_signed_boc = Some(TEST_SIGNED_BOC.to_owned());
+                WalletResponse::Success(WalletResponseSuccess {
+                    result: WalletResult::String(TEST_SIGNED_BOC.to_owned()),
+                    id: request.id,
+                })
+            }
+            TransactionDecision::UserReject => WalletResponse::Error {
                 error: WalletResponseError {
                     code: RpcErrorCode::UserDeclined,
                     message: "User rejected transaction".to_owned(),
+                    data: None,
+                },
+                id: request.id,
+            },
+            TransactionDecision::Expired => WalletResponse::Error {
+                error: WalletResponseError {
+                    code: RpcErrorCode::BadRequest,
+                    message: "Transaction has expired".to_owned(),
+                    data: None,
+                },
+                id: request.id,
+            },
+            TransactionDecision::AccountMismatch => WalletResponse::Error {
+                error: WalletResponseError {
+                    code: RpcErrorCode::BadRequest,
+                    message: "Transaction signer does not match connected account".to_owned(),
+                    data: None,
+                },
+                id: request.id,
+            },
+            TransactionDecision::UnknownApp => WalletResponse::Error {
+                error: WalletResponseError {
+                    code: RpcErrorCode::UnknownApp,
+                    message: "Unknown or revoked dApp session".to_owned(),
                     data: None,
                 },
                 id: request.id,
@@ -809,6 +1365,196 @@ impl ScenarioRunner {
             .ok_or_else(|| failure("wallet is not connected"))?
             .prepare_response(&incoming, &response)?;
         self.post_bridge_message(&post)
+    }
+
+    /// Validates and rejects a pending production-session send without submitting it on-chain.
+    fn answer_engine_transaction(
+        &mut self,
+        decision: TransactionDecision,
+        expected_messages: &DappTransactionMessages,
+    ) -> TestResult {
+        if !matches!(decision, TransactionDecision::UserReject) {
+            return Err(failure(
+                "wallet-engine localnet profile only supports an explicit user rejection here",
+            ));
+        }
+        let incoming = self.receive_engine_wallet_request()?;
+        if incoming.kind != TonConnectIncomingRequestKind::SendTransaction
+            || incoming.error_code.is_some()
+            || incoming.error_message.is_some()
+        {
+            return Err(failure(format!(
+                "wallet-engine decoded an unexpected TON Connect request: {incoming:?}"
+            )));
+        }
+        let send_request = incoming
+            .send_request
+            .as_ref()
+            .ok_or_else(|| failure("wallet-engine TON Connect request has no send intent"))?;
+        self.assert_engine_send_request(send_request, expected_messages)?;
+
+        let session = self
+            .wallet_session
+            .as_ref()
+            .ok_or_else(|| failure("production TON Connect session is not connected"))?;
+        let post = session.prepare_error(
+            incoming.id,
+            TonConnectRpcErrorCode::UserDeclined,
+            "User rejected transaction".to_owned(),
+        )?;
+        drop(
+            self.http
+                .post(&post.url)
+                .header("content-type", "text/plain; charset=utf-8")
+                .body(post.body)
+                .send()?
+                .error_for_status()?,
+        );
+        session.complete_pending_post()?;
+        self.expected_signed_boc = None;
+        Ok(())
+    }
+
+    /// Executes one decoded TON Connect send with the real wallet engine and acknowledges its BOC.
+    fn execute_transaction_on_localnet(
+        &mut self,
+        expected_messages: &DappTransactionMessages,
+    ) -> TestResult {
+        let incoming = self.receive_engine_wallet_request()?;
+        if incoming.kind != TonConnectIncomingRequestKind::SendTransaction
+            || incoming.error_code.is_some()
+            || incoming.error_message.is_some()
+        {
+            return Err(failure(format!(
+                "wallet-engine decoded an unexpected TON Connect request: {incoming:?}"
+            )));
+        }
+        let send_request = incoming
+            .send_request
+            .ok_or_else(|| failure("wallet-engine TON Connect request has no send intent"))?;
+        self.assert_engine_send_request(&send_request, expected_messages)?;
+
+        let result = block_on(
+            self.engine_wallet
+                .as_ref()
+                .ok_or_else(|| failure("wallet-engine localnet profile is not running"))?
+                .client
+                .send(send_request),
+        )?;
+        if result.phase != SendPhase::Submitted {
+            return Err(failure(format!(
+                "wallet-engine did not submit the TON Connect transfer: {result:?}"
+            )));
+        }
+        let signed_boc = result.signed_boc.to_base64();
+        let session = self
+            .wallet_session
+            .as_ref()
+            .ok_or_else(|| failure("production TON Connect session is not connected"))?;
+        let post = session.prepare_send_success(incoming.id, signed_boc.clone())?;
+        drop(
+            self.http
+                .post(&post.url)
+                .header("content-type", "text/plain; charset=utf-8")
+                .body(post.body)
+                .send()?
+                .error_for_status()?,
+        );
+        session.complete_pending_post()?;
+        self.expected_signed_boc = Some(signed_boc);
+        Ok(())
+    }
+
+    /// Compares wallet-engine's public send intent with the exact decrypted protocol payload.
+    fn assert_engine_send_request(
+        &self,
+        actual: &SendRequest,
+        expected_messages: &DappTransactionMessages,
+    ) -> TestResult {
+        let wallet = self
+            .wallet_fixture
+            .as_ref()
+            .ok_or_else(|| failure("wallet fixture is missing"))?;
+        let expected_messages = expected_messages.render(wallet)?;
+        let TransactionPayload::Raw(payload) = self
+            .transaction_request
+            .as_ref()
+            .ok_or_else(|| failure("dApp has not sent a transaction"))?
+        else {
+            return Err(failure("wallet-engine expected a raw transaction payload"));
+        };
+        if payload.messages.as_slice() != expected_messages.as_slice() {
+            return Err(failure(format!(
+                "wallet-engine expected messages {expected_messages:?}, got {:?}",
+                payload.messages
+            )));
+        }
+        let [message] = payload.messages.as_slice() else {
+            return Err(failure(
+                "wallet-engine localnet profile requires exactly one message",
+            ));
+        };
+        let expected = SendRequest {
+            operation_id: actual.operation_id.clone(),
+            destination: TonAddressString::try_from(message.address.to_string())?,
+            amount: SendAmount::exact(message.amount.as_str().to_owned())?,
+            valid_until: payload.valid_until,
+            payload: message
+                .payload
+                .as_ref()
+                .map(|value| Boc::try_from(value.as_bytes().to_vec()))
+                .transpose()?,
+            state_init: message
+                .state_init
+                .as_ref()
+                .map(|value| Boc::try_from(value.as_bytes().to_vec()))
+                .transpose()?,
+            comment: None,
+        };
+        if actual != &expected || !actual.operation_id.as_str().starts_with("ton-connect:") {
+            return Err(failure(format!(
+                "wallet-engine produced a different send intent: expected {expected:?}, got {actual:?}"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Reads one SSE request through the production FFI-safe TON Connect session wrapper.
+    fn receive_engine_wallet_request(&self) -> TestResult<TonConnectIncomingRequest> {
+        let session = self
+            .wallet_session
+            .as_ref()
+            .ok_or_else(|| failure("production TON Connect session is not connected"))?;
+        let subscription = session.begin_events_subscription()?;
+        let mut response = self
+            .http
+            .get(subscription)
+            .timeout(EVENT_TIMEOUT)
+            .send()?
+            .error_for_status()?;
+        let deadline = Instant::now()
+            .checked_add(EVENT_TIMEOUT)
+            .ok_or_else(|| failure("event timeout overflow"))?;
+        let mut buffer = [0_u8; 8 * 1024];
+        loop {
+            if Instant::now() >= deadline {
+                return Err(failure(
+                    "wallet-engine did not receive the TON Connect request",
+                ));
+            }
+            let read = io::Read::read(&mut response, &mut buffer)?;
+            if read == 0 {
+                continue;
+            }
+            let chunk = buffer
+                .get(..read)
+                .ok_or_else(|| failure("SSE read exceeded its buffer"))?;
+            let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+            let events = session.ingest_sse_chunk(chunk.to_vec(), now)?;
+            if let Some(event) = events.into_iter().next() {
+                return Ok(event);
+            }
+        }
     }
 
     /// Reads one authenticated dApp request from the wallet's resumable SSE subscription.
@@ -1042,14 +1788,14 @@ impl ScenarioRunner {
             .wallet_fixture
             .as_ref()
             .ok_or_else(|| failure("wallet fixture is missing"))?;
-        let expected_account = expected_dapp_account(&wallet.network)?;
+        let expected_account = expected_dapp_account(wallet)?;
         if state.account.as_ref() != Some(&expected_account) {
             return Err(failure(format!(
                 "dApp received a different account: expected {expected_account:?}, got {:?}",
                 state.account
             )));
         }
-        let expected_device = expected_dapp_device()?;
+        let expected_device = expected_dapp_device(wallet)?;
         if state.device.as_ref() != Some(&expected_device) {
             return Err(failure(format!(
                 "dApp received different device capabilities: expected {expected_device:?}, got {:?}",
@@ -1149,7 +1895,11 @@ impl ScenarioRunner {
             .as_ref()
             .and_then(serde_json::Value::as_object)
             .ok_or_else(|| failure("dApp transaction success has no object result"))?;
-        if result.get("boc").and_then(serde_json::Value::as_str) != Some(TEST_SIGNED_BOC)
+        let expected_boc = self
+            .expected_signed_boc
+            .as_deref()
+            .ok_or_else(|| failure("wallet did not retain the signed transaction BOC"))?;
+        if result.get("boc").and_then(serde_json::Value::as_str) != Some(expected_boc)
             || result
                 .keys()
                 .any(|key| !matches!(key.as_str(), "boc" | "traceId"))
@@ -1207,6 +1957,218 @@ impl ScenarioRunner {
                 "transaction_failed",
             ],
         )
+    }
+
+    /// Verifies SDK preflight errors and proves that no request reached the bridge transport.
+    fn assert_dapp_rejected_transaction_preflight(
+        &self,
+        reason: TransactionPreflightRejection,
+    ) -> TestResult {
+        let state = self.wait_for_dapp_transaction_state("error")?;
+        self.assert_dapp_connection_snapshot(&state)?;
+        self.assert_transaction_request(&state)?;
+        if state.transaction.result.is_some() {
+            return Err(failure(format!(
+                "dApp retained a result for a preflight-rejected transaction: {:?}",
+                state.transaction.result
+            )));
+        }
+        let error = state
+            .transaction
+            .error
+            .as_ref()
+            .ok_or_else(|| failure("dApp did not report transaction preflight rejection"))?;
+        match reason {
+            TransactionPreflightRejection::WrongNetwork => {
+                let wallet = self
+                    .wallet_fixture
+                    .as_ref()
+                    .ok_or_else(|| failure("wallet fixture is missing"))?;
+                let requested_network = self
+                    .transaction_sdk_request
+                    .as_ref()
+                    .and_then(|request| request.get("network"))
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| failure("transaction request has no network"))?;
+                let expected_cause = serde_json::json!({
+                    "expectedChainId": wallet.network,
+                    "actualChainId": requested_network,
+                });
+                if error.name != "WalletWrongNetworkError"
+                    || !error.message.contains("wrong network")
+                    || error.cause.as_ref() != Some(&expected_cause)
+                {
+                    return Err(failure(format!(
+                        "dApp reported an unexpected transaction network error: {error:?}"
+                    )));
+                }
+            }
+            TransactionPreflightRejection::MessageLimit => {
+                Self::assert_unsupported_transaction_feature(
+                    error,
+                    2,
+                    false,
+                    "Max support messages number is 1, but 2 is required",
+                )?;
+            }
+            TransactionPreflightRejection::ExtraCurrency => {
+                Self::assert_unsupported_transaction_feature(
+                    error,
+                    1,
+                    true,
+                    "Extra currencies support is required",
+                )?;
+            }
+        }
+        if state.journal.iter().any(|event| {
+            matches!(
+                event.kind.as_str(),
+                "transaction_sent" | "transaction_succeeded"
+            )
+        }) {
+            return Err(failure(format!(
+                "SDK preflight rejection still reached transport: {:?}",
+                state.journal
+            )));
+        }
+        assert_journal_order(
+            &state.journal,
+            &[
+                "connect_link_created",
+                "wallet_connected",
+                "transaction_requested",
+                "transaction_failed",
+            ],
+        )
+    }
+
+    /// Compares a capability preflight failure with the SDK's structured required-feature cause.
+    fn assert_unsupported_transaction_feature(
+        error: &DappError,
+        min_messages: u64,
+        extra_currency_required: bool,
+        message_fragment: &str,
+    ) -> TestResult {
+        let expected_cause = serde_json::json!({
+            "requiredFeature": {
+                "featureName": "SendTransaction",
+                "value": {
+                    "minMessages": min_messages,
+                    "extraCurrencyRequired": extra_currency_required,
+                },
+            },
+        });
+        if error.name != "WalletNotSupportFeatureError"
+            || !error.message.contains(message_fragment)
+            || error.cause.as_ref() != Some(&expected_cause)
+        {
+            return Err(failure(format!(
+                "dApp reported an unexpected feature error: {error:?}"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Verifies that wallet error 1 becomes `BadRequestError` after a request reached transport.
+    fn assert_dapp_received_transaction_bad_request(&self) -> TestResult {
+        self.assert_dapp_received_transaction_error("BadRequestError", "Transaction has expired")
+    }
+
+    /// Verifies SDK mapping of a wallet-side fixed-signer validation failure.
+    fn assert_dapp_received_transaction_account_mismatch(&self) -> TestResult {
+        self.assert_dapp_received_transaction_error(
+            "BadRequestError",
+            "Transaction signer does not match connected account",
+        )
+    }
+
+    /// Verifies that wallet error 100 becomes the SDK's `UnknownAppError`.
+    fn assert_dapp_received_transaction_unknown_app(&self) -> TestResult {
+        self.assert_dapp_received_transaction_error(
+            "UnknownAppError",
+            "Unknown or revoked dApp session",
+        )
+    }
+
+    /// Verifies one terminal wallet protocol error and its transport journal ordering.
+    fn assert_dapp_received_transaction_error(
+        &self,
+        expected_name: &str,
+        expected_message: &str,
+    ) -> TestResult {
+        let state = self.wait_for_dapp_transaction_state("error")?;
+        self.assert_dapp_connection_snapshot(&state)?;
+        self.assert_transaction_request(&state)?;
+        if state.transaction.result.is_some() {
+            return Err(failure(format!(
+                "dApp retained a result for an errored transaction: {:?}",
+                state.transaction.result
+            )));
+        }
+        let error = state
+            .transaction
+            .error
+            .as_ref()
+            .ok_or_else(|| failure("dApp did not report the wallet protocol error"))?;
+        if error.name != expected_name
+            || !error.message.contains(expected_message)
+            || error.cause.is_some()
+        {
+            return Err(failure(format!(
+                "dApp reported an unexpected protocol error: {error:?}"
+            )));
+        }
+        assert_journal_order(
+            &state.journal,
+            &[
+                "connect_link_created",
+                "wallet_connected",
+                "transaction_requested",
+                "transaction_sent",
+                "transaction_failed",
+            ],
+        )
+    }
+
+    /// Verifies the deploy destination has neither active code nor funds before the send.
+    fn assert_deployment_target_absent(&self) -> TestResult {
+        let target = test_deployment_target()?;
+        self.engine_wallet
+            .as_ref()
+            .ok_or_else(|| failure("wallet-engine localnet profile is not running"))?
+            .localnet
+            .assert_account_absent(&target.address)
+            .map_err(failure)
+    }
+
+    /// Verifies one source or deployment account against localnet state, balance, and seqno.
+    fn assert_on_chain_account(&self, expectation: &OnChainAccountExpectation) -> TestResult {
+        if expectation.state.is_empty() {
+            return Err(failure("on-chain account expectation has no state"));
+        }
+        let engine = self
+            .engine_wallet
+            .as_ref()
+            .ok_or_else(|| failure("wallet-engine localnet profile is not running"))?;
+        let address = match expectation.target {
+            OnChainAccountTarget::Deployment => test_deployment_target()?.address,
+            OnChainAccountTarget::SourceWallet => engine.account.address.clone(),
+        };
+        engine
+            .localnet
+            .assert_account(&address, expectation.state, Some(expectation.seqno))
+            .map_err(failure)?;
+        if let Some((minimum, maximum)) = expectation.balance_range {
+            let minimum = minimum.parse::<u128>()?;
+            let maximum = maximum.parse::<u128>()?;
+            let actual = engine.localnet.account_balance(&address).map_err(failure)?;
+            if actual < minimum || actual > maximum {
+                return Err(failure(format!(
+                    "on-chain balance for {address} must be in {minimum}..={maximum}, got {actual}"
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Compares the dApp actor's retained SDK request with the exact value sent by the harness.
@@ -1302,6 +2264,21 @@ impl ScenarioRunner {
 
     /// Lazily starts the bridge and dApp exactly once in dependency order.
     fn ensure_processes(&mut self) -> TestResult {
+        if self.engine_wallet.is_none() {
+            let wallet = self
+                .wallet_fixture
+                .as_ref()
+                .ok_or_else(|| failure("wallet fixture is missing"))?;
+            if let WalletBackend::EngineLocalnet { balance_nanograms } = wallet.backend {
+                if wallet.network != TON_TESTNET_NETWORK_ID {
+                    return Err(failure(
+                        "wallet-engine localnet profile requires the TON testnet network ID",
+                    ));
+                }
+                self.engine_wallet = Some(EngineWalletHarness::start(balance_nanograms)?);
+            }
+        }
+
         if self.bridge_process.is_none() {
             let fixture = self
                 .bridge_fixture
@@ -1529,6 +2506,65 @@ fn free_port() -> TestResult<u16> {
     Ok(listener.local_addr()?.port())
 }
 
+struct DeploymentTarget {
+    address: String,
+    state_init: String,
+}
+
+/// Selects the protocol-only account or the real wallet-engine account for this fixture.
+fn wallet_account(wallet: &WalletFixture) -> TestResult<TonAddressItemReply> {
+    match wallet.backend {
+        WalletBackend::Protocol => test_account(&wallet.network),
+        WalletBackend::EngineLocalnet { .. } => {
+            let account = engine_account_info()?;
+            let public_key = <[u8; 32]>::try_from(account.public_key.as_slice())
+                .map_err(|_| failure("test wallet public key must contain 32 bytes"))?;
+            Ok(TonAddressItemReply::new(
+                account.address.parse()?,
+                NetworkId::try_from(account.network.as_str())?,
+                WalletStateInit::try_from(account.wallet_state_init.as_str())?,
+                Ed25519PublicKey::from_bytes(public_key),
+            ))
+        }
+    }
+}
+
+/// Derives the public TON Connect account material used by the wallet-engine localnet profile.
+fn engine_account_info() -> TestResult<TonConnectAccountInfo> {
+    let (state, public_key) = test_v5_state(test_wallet().recovery_phrase_bytes())?;
+    Ok(TonConnectAccountInfo {
+        address: state.derive_address(0)?.to_string(),
+        network: TON_TESTNET_NETWORK_ID.to_owned(),
+        wallet_state_init: state.as_str().to_owned(),
+        public_key,
+    })
+}
+
+/// Derives a second V5R1 wallet `StateInit` used as a deterministic deployable contract.
+fn test_deployment_target() -> TestResult<DeploymentTarget> {
+    let (state, _) = test_v5_state(test_wallet().other_recovery_phrase_bytes())?;
+    let address = FriendlyAddress::from_raw(state.derive_address(0)?, true, true)?;
+    Ok(DeploymentTarget {
+        address: address.as_str().to_owned(),
+        state_init: state.as_str().to_owned(),
+    })
+}
+
+/// Builds a canonical testnet V5R1 `StateInit` and public key from one mnemonic.
+fn test_v5_state(mnemonic: &[u8]) -> TestResult<(WalletStateInit, Vec<u8>)> {
+    let mnemonic = std::str::from_utf8(mnemonic)?;
+    let key_pair = Mnemonic::from_str(mnemonic, None)?.to_key_pair()?;
+    let code = WalletVersion::get_code(WalletVersion::V5R1)?.clone();
+    let data = WalletVersion::get_default_data(
+        WalletVersion::V5R1,
+        &key_pair,
+        WALLET_V5R1_ID_DEFAULT_TESTNET,
+    )?;
+    let state = StateInit::new(code, data);
+    let state = WalletStateInit::from_boc(state.to_boc()?)?;
+    Ok((state, key_pair.public_key.to_vec()))
+}
+
 /// Builds a deterministic valid wallet account whose connect reply reports the selected network.
 fn test_account(network: &str) -> TestResult<TonAddressItemReply> {
     let mut state = TonCell::builder();
@@ -1550,23 +2586,23 @@ fn test_account(network: &str) -> TestResult<TonAddressItemReply> {
 }
 
 /// Builds deterministic wallet metadata and advertised capabilities for exact dApp assertions.
-fn test_device() -> TestResult<DeviceInfo> {
+fn test_device(wallet: &WalletFixture) -> TestResult<DeviceInfo> {
     Ok(DeviceInfo::new(
         DevicePlatform::Linux,
         "wallet-engine-test".to_owned(),
         "0.1.0".to_owned(),
         2,
         vec![Feature::SendTransaction(SendTransactionFeature::new(
-            1,
-            Some(false),
+            wallet.max_messages,
+            Some(wallet.extra_currency_supported),
             None,
         )?)],
     )?)
 }
 
 /// Converts the protocol `network` field into the SDK account's `chain` field.
-fn expected_dapp_account(network: &str) -> TestResult<DappAccount> {
-    let reply = ConnectItemReply::TonAddress(test_account(network)?);
+fn expected_dapp_account(wallet: &WalletFixture) -> TestResult<DappAccount> {
+    let reply = ConnectItemReply::TonAddress(wallet_account(wallet)?);
     let mut sdk_account = serde_json::to_value(reply)?;
     let object = sdk_account
         .as_object_mut()
@@ -1580,10 +2616,10 @@ fn expected_dapp_account(network: &str) -> TestResult<DappAccount> {
 }
 
 /// Converts protocol device metadata into the TypeScript actor's JSON state shape.
-fn expected_dapp_device() -> TestResult<DappDevice> {
-    Ok(serde_json::from_value(serde_json::to_value(
-        test_device()?
-    )?)?)
+fn expected_dapp_device(wallet: &WalletFixture) -> TestResult<DappDevice> {
+    Ok(serde_json::from_value(serde_json::to_value(test_device(
+        wallet,
+    )?)?)?)
 }
 
 /// Requires the selected event kinds to appear as an ordered subsequence of the actor journal.
