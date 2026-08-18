@@ -1,7 +1,10 @@
 use std::collections::BTreeSet;
 
 use anyhow::{Context, Result, ensure};
-use uniffi_bindgen::ComponentInterface;
+use uniffi_bindgen::{
+    ComponentInterface,
+    interface::{AsType, Type},
+};
 
 use crate::naming;
 
@@ -61,7 +64,17 @@ pub(super) fn collect_flat_enums(component: &ComponentInterface) -> Result<Vec<F
     let mut enums = component
         .enum_definitions()
         .iter()
-        .filter(|enum_| enum_.is_flat() && !component.is_name_used_as_error(enum_.name()))
+        .filter(|enum_| {
+            let is_local = matches!(
+                enum_.as_type(),
+                Type::Enum { module_path, .. }
+                    if module_path.split("::").next() == Some(component.crate_name())
+            );
+            is_local
+                && !enum_.remote()
+                && enum_.is_flat()
+                && !component.is_name_used_as_error(enum_.name())
+        })
         .map(|enum_| {
             let rust_name = enum_.name().to_owned();
             let c_name = naming::type_name(&rust_name);

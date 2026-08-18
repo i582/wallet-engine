@@ -2,6 +2,7 @@
 
 mod cli;
 mod compound_map;
+mod coverage;
 mod custom_type_map;
 mod enum_map;
 mod error_map;

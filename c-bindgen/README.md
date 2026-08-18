@@ -20,6 +20,8 @@ The generator currently:
 - generates semantic C views for string-backed UniFFI custom types;
 - generates typed opaque declarations for Rust objects and foreign callback
   interfaces;
+- rejects generation if any local record, fielded enum, or declared error was
+  not registered after the final type closure;
 - compiles the generated facade as strict C11 in its test suite.
 
 Callback adapters and export lists will be added on top of the normalized
@@ -65,6 +67,12 @@ the real `ComponentInterface`. It records their public Rust-to-C mapping in the
 manifest and generates borrowed views, private wire helpers, and typed opaque
 handle declarations. Tests compile the facade with strict C11 warnings and
 execute its codecs against known UniFFI wire values.
+
+Before rendering, a final coverage audit compares every local non-remote record
+and enum definition with the shared type registry. Generation fails instead of
+silently publishing a partial API when a type was skipped. Its deterministic
+diagnostic groups missing records, fielded enums, and declared errors and lists
+the unresolved field types where possible.
 
 ## Rust to C mapping
 
@@ -317,6 +325,12 @@ typedef struct WalletEngineSendAmount {
 The public tags are stable and zero-based. The private codec explicitly maps
 them to UniFFI's one-based `i32` wire tags, serializes only the active payload,
 and rejects unknown public or wire tags. For `ALL`, the payload is ignored.
+
+The final coverage audit confirms that the real component has all 33 records,
+all 15 flat non-error enums, `SendAmount`, and all five declared rich errors in
+the registry. A future unsupported definition stops generation before
+`wallet_engine.h`, `wallet_engine.c`, or the manifest can present that type
+surface as complete.
 
 ### Declared rich errors
 

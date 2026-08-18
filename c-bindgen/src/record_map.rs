@@ -104,7 +104,14 @@ pub(super) fn collect_record_types(
     let mut remaining = component
         .record_definitions()
         .iter()
-        .filter(|record| !record.remote() && types.resolve(&record.as_type()).is_none())
+        .filter(|record| {
+            let is_local = matches!(
+                record.as_type(),
+                Type::Record { module_path, .. }
+                    if module_path.split("::").next() == Some(component.crate_name())
+            );
+            is_local && !record.remote() && types.resolve(&record.as_type()).is_none()
+        })
         .collect::<Vec<_>>();
     remaining.sort_by(|left, right| left.name().cmp(right.name()));
 

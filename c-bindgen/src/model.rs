@@ -4,6 +4,7 @@ use uniffi_bindgen::ComponentInterface;
 
 use crate::{
     compound_map::{CompoundTypeRef, CompoundTypes},
+    coverage::validate_reachable_type_coverage,
     custom_type_map::{SemanticCustomType, collect_semantic_custom_types},
     enum_map::FlatEnum,
     error_map::{ErrorType, collect_error_types},
@@ -16,7 +17,7 @@ use crate::{
     type_registry::TypeRegistry,
 };
 
-pub(super) const MANIFEST_SCHEMA_VERSION: u32 = 12;
+pub(super) const MANIFEST_SCHEMA_VERSION: u32 = 13;
 const EXPERIMENTAL_ABI_VERSION: u32 = 0;
 const EXPECTED_CRATE_NAME: &str = "wallet_engine";
 const EXPECTED_NAMESPACE: &str = "wallet_engine";
@@ -212,6 +213,7 @@ impl BindingsModel {
         let fielded_enum_types = collect_fielded_enum_types(component, &mut type_registry)?;
         let compound_types = CompoundTypes::collect(component, &mut type_registry)?;
         let error_types = collect_error_types(component, &mut type_registry)?;
+        validate_reachable_type_coverage(component, &type_registry)?;
         let object_handles = collect_object_handles(component, &mut type_registry)?;
         let manifest = Manifest::from_components(
             components,
@@ -378,7 +380,7 @@ impl Manifest {
         Self {
             schema_version: MANIFEST_SCHEMA_VERSION,
             generation: GenerationManifest {
-                phase: "fielded-enums",
+                phase: "type-coverage",
                 artifacts: [
                     "wallet_engine.h",
                     "wallet_engine.c",
@@ -680,7 +682,7 @@ mod tests {
         let manifest = model.manifest();
         let enum_ = &manifest.generation.rendered_flat_enums[0];
 
-        assert_eq!(manifest.generation.phase, "fielded-enums");
+        assert_eq!(manifest.generation.phase, "type-coverage");
         assert_eq!(enum_.rust, "Network");
         assert_eq!(enum_.variants[0].value, 0);
         assert_eq!(enum_.variants[1].value, 1);
