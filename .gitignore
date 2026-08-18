@@ -25,6 +25,10 @@ Thumbs.db
 *.mnemonic
 wallet_engine_secrets.tsv
 wallet_engine_wallets.tsv
+wallet_engine_wallets.tsv.bak
+wallet_engine_journal.tsv
+wallet_engine_cpp.log
+wallet_engine_toncenter_api_key
 
 # Code intelligence and local tooling
 .codegraph/

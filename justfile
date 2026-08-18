@@ -126,6 +126,7 @@ bindings-cpp:
 build-cpp: example-cpp-bindgen-build
 
 test-cpp: example-cpp-bindgen-build
+    env QT_QPA_PLATFORM=offscreen WALLET_ENGINE_QT_SMOKE_TEST=1 ./target/cpp-bindgen-example/wallet_engine_cpp_bindgen_example
 
 web-install:
     bun install --cwd web --frozen-lockfile

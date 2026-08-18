@@ -8,6 +8,14 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(WALLET_ENGINE_ROOT "${CMAKE_CURRENT_LIST_DIR}/../..")
 set(WALLET_ENGINE_BINDINGS "${WALLET_ENGINE_ROOT}/bindings/cpp-experimental")
 
+foreach(QT_HOMEBREW_PREFIX IN ITEMS /opt/homebrew/opt/qt /usr/local/opt/qt)
+    if(EXISTS "${QT_HOMEBREW_PREFIX}")
+        list(PREPEND CMAKE_PREFIX_PATH "${QT_HOMEBREW_PREFIX}")
+    endif()
+endforeach()
+
+find_package(Qt6 REQUIRED COMPONENTS Concurrent Network Widgets)
+
 find_library(
     WALLET_ENGINE_LIBRARY
     NAMES wallet_engine
@@ -29,10 +37,21 @@ target_link_libraries(
     PUBLIC "${WALLET_ENGINE_LIBRARY}"
 )
 
-add_executable(wallet_engine_cpp_bindgen_example main.cpp)
+add_executable(
+    wallet_engine_cpp_bindgen_example
+    app_log.cpp
+    app_log.hpp
+    main.cpp
+    qt_http_host.cpp
+    qt_http_host.hpp
+)
 target_link_libraries(
     wallet_engine_cpp_bindgen_example
-    PRIVATE wallet_engine_cpp_bindgen
+    PRIVATE
+        wallet_engine_cpp_bindgen
+        Qt6::Concurrent
+        Qt6::Network
+        Qt6::Widgets
 )
 
 if(MSVC)

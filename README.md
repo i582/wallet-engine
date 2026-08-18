@@ -84,8 +84,9 @@ just bindings-cpp
 ```
 
 The output is written to `bindings/cpp-experimental`. See the
-[generated C++ example](examples/cpp-bindgen/README.md) for a minimal
-`WalletPlatformHost` implementation and build commands.
+[generated C++ Qt example](examples/cpp-bindgen/README.md) for a small desktop
+wallet with balance refresh, activity, transfer preview/send, native HTTP and
+platform-host implementations, and build commands.
 
 This repository does not track generated bindings. Generate them from the same
 revision that you use to build the Rust library.
