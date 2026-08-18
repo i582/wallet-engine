@@ -138,6 +138,9 @@ mod tests {
                 u64? optional_revision;
                 string? optional_name;
                 Network? optional_network;
+                sequence<u64> revisions;
+                sequence<string> names;
+                sequence<Network> networks;
             };
 
             enum Network { "mainnet", "testnet" };

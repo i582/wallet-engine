@@ -1,8 +1,8 @@
 use std::fmt::Write as _;
 
 use crate::{
-    enum_map::FlatEnum, model::BindingsModel, optional_map::OptionalType, template,
-    type_map::BuiltinType, type_registry::NestedWireSize,
+    enum_map::FlatEnum, model::BindingsModel, optional_map::OptionalType,
+    sequence_map::SequenceType, template, type_map::BuiltinType, type_registry::NestedWireSize,
 };
 
 const BASE: &str = include_str!("../../templates/codecs/base.c.tmpl");
@@ -20,6 +20,12 @@ const STRING_CODEC: &str = include_str!("../../templates/codecs/string.c.tmpl");
 const BYTES_CODEC: &str = include_str!("../../templates/codecs/bytes.c.tmpl");
 const FLAT_ENUM_CODEC: &str = include_str!("../../templates/codecs/flat_enum.c.tmpl");
 const OPTIONAL_CODEC: &str = include_str!("../../templates/codecs/optional.c.tmpl");
+const ARENA_RUNTIME: &str = include_str!("../../templates/codecs/arena.c.tmpl");
+const SEQUENCE_CODEC: &str = include_str!("../../templates/codecs/sequence.c.tmpl");
+const SEQUENCE_FIXED_MEASURE: &str =
+    include_str!("../../templates/codecs/sequence_measure_fixed.c.tmpl");
+const SEQUENCE_LENGTH_PREFIXED_VIEW_MEASURE: &str =
+    include_str!("../../templates/codecs/sequence_measure_length_prefixed_view.c.tmpl");
 
 pub(super) fn render(model: &BindingsModel) -> String {
     let mut output = if model.has_wire_types() {
@@ -44,11 +50,11 @@ pub(super) fn render(model: &BindingsModel) -> String {
         || model.has_builtin_type(BuiltinType::Int32)
         || model.has_builtin_type(BuiltinType::String)
         || model.has_builtin_type(BuiltinType::Bytes)
-        || model.has_flat_enums()
+        || model.needs_i32_wire_codec()
     {
         output.push_str(U32_WIRE_CODEC);
     }
-    if model.has_builtin_type(BuiltinType::Int32) || model.has_flat_enums() {
+    if model.needs_i32_wire_codec() {
         output.push_str(I32_CODEC);
     }
     if model.has_builtin_type(BuiltinType::UInt64) || model.has_builtin_type(BuiltinType::Int64) {
@@ -66,6 +72,9 @@ pub(super) fn render(model: &BindingsModel) -> String {
             model.private_ffi().rustbuffer_free(),
         ));
     }
+    if model.has_sequence_types() {
+        output.push_str(ARENA_RUNTIME);
+    }
     if model.has_builtin_type(BuiltinType::String) {
         output.push_str(STRING_CODEC);
     }
@@ -77,6 +86,9 @@ pub(super) fn render(model: &BindingsModel) -> String {
     }
     for optional in model.optional_types() {
         output.push_str(&render_optional(optional));
+    }
+    for sequence in model.sequence_types() {
+        output.push_str(&render_sequence(sequence));
     }
 
     output
@@ -141,6 +153,33 @@ fn render_optional(optional: &OptionalType) -> String {
             ("C_NAME", optional.c_name()),
             ("INNER_FUNCTION_NAME", optional.inner_function_name()),
             ("SOME_WIRE_SIZE", &some_wire_size),
+        ],
+    )
+}
+
+fn render_sequence(sequence: &SequenceType) -> String {
+    let (minimum_inner_wire_size, measure_items) = match sequence.inner_wire_size() {
+        NestedWireSize::Fixed(inner_size) => {
+            let inner_size = inner_size.to_string();
+            let measure_items =
+                template::render(SEQUENCE_FIXED_MEASURE, &[("INNER_WIRE_SIZE", &inner_size)]);
+            (inner_size, measure_items)
+        }
+        NestedWireSize::LengthPrefixedView => (
+            String::from("4"),
+            String::from(SEQUENCE_LENGTH_PREFIXED_VIEW_MEASURE),
+        ),
+    };
+
+    template::render(
+        SEQUENCE_CODEC,
+        &[
+            ("FUNCTION_NAME", sequence.function_name()),
+            ("C_NAME", sequence.c_name()),
+            ("INNER_C_NAME", sequence.inner_c_name()),
+            ("INNER_FUNCTION_NAME", sequence.inner_function_name()),
+            ("MIN_INNER_WIRE_SIZE", &minimum_inner_wire_size),
+            ("MEASURE_ITEMS", &measure_items),
         ],
     )
 }
@@ -224,6 +263,26 @@ mod tests {
         assert!(codec.contains("wire_size = 9u;"));
         assert!(codec.contains("wallet_engine_private_lower_optional_u64"));
         assert!(codec.contains("wallet_engine_private_lift_optional_u64"));
+        Ok(())
+    }
+
+    #[test]
+    fn renders_sequence_count_items_and_callback_arena() -> Result<()> {
+        let component = ComponentInterface::from_webidl(
+            r"
+            namespace wallet_engine {};
+            dictionary Example { sequence<u64> revisions; };
+            ",
+            "wallet_engine",
+        )?;
+        let model = BindingsModel::from_components(&[component])?;
+        let codec = render(&model);
+
+        assert!(codec.contains("wallet_engine_private_write_sequence_u64"));
+        assert!(codec.contains("wallet_engine_private_write_i32(writer"));
+        assert!(codec.contains("wallet_engine_private_read_u64"));
+        assert!(codec.contains("wallet_engine_private_arena_alloc"));
+        assert!(codec.contains("wire_size += value.len * 8u;"));
         Ok(())
     }
 }

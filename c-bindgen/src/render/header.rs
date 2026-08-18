@@ -7,6 +7,7 @@ const STRING_VIEW_TEMPLATE: &str = include_str!("../../templates/types/string_vi
 const BYTES_VIEW_TEMPLATE: &str = include_str!("../../templates/types/bytes_view.h.tmpl");
 const FLAT_ENUM_TEMPLATE: &str = include_str!("../../templates/types/flat_enum.h.tmpl");
 const OPTIONAL_TEMPLATE: &str = include_str!("../../templates/types/optional.h.tmpl");
+const SEQUENCE_TEMPLATE: &str = include_str!("../../templates/types/sequence.h.tmpl");
 
 pub(super) fn render(model: &BindingsModel) -> String {
     let abi_version = model.abi_version().to_string();
@@ -49,6 +50,16 @@ pub(super) fn render(model: &BindingsModel) -> String {
                 ("RUST_NAME", optional.rust_name()),
                 ("C_NAME", optional.c_name()),
                 ("INNER_C_NAME", optional.inner_c_name()),
+            ],
+        ));
+    }
+    for sequence in model.sequence_types() {
+        type_declarations.push_str(&template::render(
+            SEQUENCE_TEMPLATE,
+            &[
+                ("RUST_NAME", sequence.rust_name()),
+                ("C_NAME", sequence.c_name()),
+                ("INNER_C_NAME", sequence.inner_c_name()),
             ],
         ));
     }
@@ -140,6 +151,24 @@ mod tests {
         assert!(header.contains("typedef struct WalletEngineOptionalU64"));
         assert!(header.contains("bool has_value;"));
         assert!(header.contains("uint64_t value;"));
+        Ok(())
+    }
+
+    #[test]
+    fn renders_sequence_as_a_borrowed_list_view() -> Result<()> {
+        let component = ComponentInterface::from_webidl(
+            r"
+            namespace wallet_engine {};
+            dictionary Example { sequence<string> names; };
+            ",
+            "wallet_engine",
+        )?;
+        let model = BindingsModel::from_components(&[component])?;
+        let header = render(&model);
+
+        assert!(header.contains("typedef struct WalletEngineStringListView"));
+        assert!(header.contains("const WalletEngineStringView *data;"));
+        assert!(header.contains("size_t len;"));
         Ok(())
     }
 }

@@ -13,6 +13,7 @@ The generator currently:
 - generates UniFFI-compatible wire codecs for builtin values;
 - generates public C types and codecs for flat non-error enums;
 - generates public C wrappers and codecs for supported optional values;
+- generates borrowed C list views and codecs for supported sequences;
 - compiles the generated facade as strict C11 in its test suite.
 
 Compound codecs, callback adapters, and export lists will be added on top of
@@ -41,11 +42,11 @@ and callable instead of being postponed until the complete API model is
 implemented. C++ compatibility is deliberately deferred until the C ABI is
 complete and stable.
 
-The current type slice discovers the builtins, flat non-error enums, and
-supported optional values used by the real `ComponentInterface`, records their
-public Rust-to-C mapping in the manifest, and generates borrowed views plus
-private wire helpers. Tests compile the facade with strict C11 warnings and
-execute its codecs against known UniFFI wire values.
+The current type slice discovers the builtins, flat non-error enums, supported
+optional values, and sequences used by the real `ComponentInterface`, records
+their public Rust-to-C mapping in the manifest, and generates borrowed views
+plus private wire helpers. Tests compile the facade with strict C11 warnings
+and execute its codecs against known UniFFI wire values.
 
 ## Rust to C mapping
 
@@ -123,6 +124,7 @@ metadata; it never frees Rust-owned memory with the C allocator.
 | `Vec<u8>` / `Bytes` | length-prefixed `RustBuffer` | big-endian `i32` length followed by bytes |
 | flat enum | `RustBuffer` | big-endian `i32` UniFFI discriminant |
 | `Option<T>` | `RustBuffer` | one-byte `0`/`1` tag followed by nested `T` for `Some` |
+| `Vec<T>` / `Sequence<T>` | `RustBuffer` | big-endian `i32` item count followed by each nested `T` |
 
 Lowering rejects malformed views, invalid UTF-8, lengths above `INT32_MAX`
 where UniFFI uses a signed 32-bit length, and arithmetic overflow. Lifting
@@ -130,8 +132,9 @@ checks buffer bounds and rejects trailing data for a complete `Bytes` value.
 
 The pure codec behavior is tested in `tests/codec.c`. That C11 executable
 checks exact wire bytes and write/read round trips for every integer width,
-booleans, strings, bytes, a flat enum, and optional values, together with
-malformed, truncated, trailing, and unknown-tag inputs.
+booleans, strings, bytes, a flat enum, optional values, and sequences of
+scalars, strings, and flat enums, together with malformed, truncated,
+trailing, invalid UTF-8, and unknown-tag inputs.
 
 ### Flat enums
 
@@ -205,12 +208,26 @@ and non-empty validation stays in the Rust custom-type lift implementation.
 
 ### Compound values
 
-| Rust / UniFFI | Planned public C | Rule |
-|---|---|---|
-| `Vec<T>` | `WalletEngineTListView { const T *data; size_t len; }` | Borrowed contiguous sequence. |
-| record `T` | `WalletEngineTView` | Fields are converted recursively. |
-| enum with fields | kind/tag plus generated payload union | Only the payload selected by the tag is active. |
-| error enum `E` | stable error code plus generated payload | Declared errors are separate from immediate ABI failures. |
+| Rust / UniFFI | Public C | Status | Rule |
+|---|---|---|---|
+| `Vec<T>` | `WalletEngineTListView { const T *data; size_t len; }` | Implemented for builtin and flat-enum items | Borrowed contiguous sequence. |
+| record `T` | `WalletEngineTView` | Planned | Fields are converted recursively. |
+| enum with fields | kind/tag plus generated payload union | Planned | Only the payload selected by the tag is active. |
+| error enum `E` | stable error code plus generated payload | Planned | Declared errors are separate from immediate ABI failures. |
+
+For example, `Vec<String>` becomes `WalletEngineStringListView` containing
+`const WalletEngineStringView *data` and `size_t len`. UniFFI sequence results
+cannot point directly at their wire buffer: integers are big-endian and each
+string carries a length prefix. The private decoder therefore materializes the
+item array in a temporary arena. The public list and all nested views are valid
+only during the result callback. Sequence lift already takes the private arena
+and provides rollback/cleanup helpers; the later method renderer will clear it
+after the callback returns. Rust-owned `RustBuffer` memory is still released
+only through UniFFI.
+
+The current slice composes sequences over registered builtins and flat enums.
+Sequences over records and custom types become available when those item types
+are registered by their later type slices.
 
 ### Objects and callables
 

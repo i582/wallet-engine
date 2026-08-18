@@ -7,6 +7,7 @@ mod model;
 mod naming;
 mod optional_map;
 mod render;
+mod sequence_map;
 mod template;
 mod type_map;
 mod type_registry;

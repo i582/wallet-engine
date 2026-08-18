@@ -1,0 +1,10 @@
+    for (size_t index = 0u; index < value.len; index += 1u) {
+        const size_t item_len = value.data[index].len;
+        if ((item_len != 0u && value.data[index].data == NULL)
+            || item_len > (size_t)INT32_MAX
+            || wire_size > SIZE_MAX - 4u
+            || item_len > SIZE_MAX - wire_size - 4u) {
+            return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
+        }
+        wire_size += item_len + 4u;
+    }

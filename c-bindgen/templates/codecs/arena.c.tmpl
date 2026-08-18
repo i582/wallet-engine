@@ -1,0 +1,55 @@
+typedef struct WalletEnginePrivateArenaBlock {
+    struct WalletEnginePrivateArenaBlock *next;
+    max_align_t alignment;
+} WalletEnginePrivateArenaBlock;
+
+typedef struct WalletEnginePrivateArena {
+    WalletEnginePrivateArenaBlock *head;
+} WalletEnginePrivateArena;
+
+WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_arena_alloc(
+    WalletEnginePrivateArena *arena,
+    size_t size,
+    void **out_data
+) {
+    WalletEnginePrivateArenaBlock *block;
+    if (arena == NULL || out_data == NULL || size > SIZE_MAX - sizeof(*block)) {
+        return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
+    }
+    *out_data = NULL;
+    if (size == 0u) {
+        return WALLET_ENGINE_ABI_STATUS_OK;
+    }
+    block = malloc(sizeof(*block) + size);
+    if (block == NULL) {
+        return WALLET_ENGINE_ABI_STATUS_ALLOCATION_FAILED;
+    }
+    block->next = arena->head;
+    arena->head = block;
+    *out_data = block + 1;
+    memset(*out_data, 0, size);
+    return WALLET_ENGINE_ABI_STATUS_OK;
+}
+
+WALLET_ENGINE_PRIVATE void wallet_engine_private_arena_rewind(
+    WalletEnginePrivateArena *arena,
+    WalletEnginePrivateArenaBlock *mark
+) {
+    if (arena == NULL) {
+        return;
+    }
+    while (arena->head != mark) {
+        WalletEnginePrivateArenaBlock *block = arena->head;
+        if (block == NULL) {
+            return;
+        }
+        arena->head = block->next;
+        free(block);
+    }
+}
+
+WALLET_ENGINE_PRIVATE void wallet_engine_private_arena_clear(
+    WalletEnginePrivateArena *arena
+) {
+    wallet_engine_private_arena_rewind(arena, NULL);
+}

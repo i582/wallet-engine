@@ -2,14 +2,19 @@ use crate::{model::BindingsModel, template};
 
 const FACADE_TEMPLATE: &str = include_str!("../../templates/facade.c.tmpl");
 const WIRE_INCLUDES_TEMPLATE: &str = include_str!("../../templates/wire_includes.c.tmpl");
+const ARENA_INCLUDES_TEMPLATE: &str = include_str!("../../templates/arena_includes.c.tmpl");
 
 pub(super) fn render(model: &BindingsModel) -> String {
     let wire_includes = if model.has_wire_types() {
-        WIRE_INCLUDES_TEMPLATE
+        let mut includes = String::from(WIRE_INCLUDES_TEMPLATE);
+        if model.has_sequence_types() {
+            includes.push_str(ARENA_INCLUDES_TEMPLATE);
+        }
+        includes
     } else {
-        ""
+        String::new()
     };
-    let mut facade = template::render(FACADE_TEMPLATE, &[("WIRE_INCLUDES", wire_includes)]);
+    let mut facade = template::render(FACADE_TEMPLATE, &[("WIRE_INCLUDES", &wire_includes)]);
     facade.push_str(&super::codec::render(model));
     facade
 }
