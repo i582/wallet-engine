@@ -3,6 +3,11 @@ import {WalletLifecycle as RawWalletLifecycle} from "../../bindings/wasm/wallet_
 import {initializeWalletEngine} from "./initialize"
 import type {BrowserPlatformHost} from "./platform-host"
 import type {
+  TonConnectAccountInfo,
+  TonConnectProofSignRequest,
+  TonConnectProofSignature,
+} from "./ton-connect-types"
+import type {
   CreateWalletRequest,
   CreatedWallet,
   ImportWalletRequest,
@@ -41,6 +46,18 @@ export class WalletLifecycle {
   async deleteWallet(descriptor: WalletDescriptor): Promise<void> {
     this.assertOpen()
     await this.raw.deleteWallet(descriptor)
+  }
+
+  tonConnectAccount(descriptor: WalletDescriptor): TonConnectAccountInfo {
+    this.assertOpen()
+    return this.raw.tonConnectAccount(descriptor) as TonConnectAccountInfo
+  }
+
+  async signTonConnectProof(
+    request: TonConnectProofSignRequest,
+  ): Promise<TonConnectProofSignature> {
+    this.assertOpen()
+    return (await this.raw.signTonConnectProof(request)) as TonConnectProofSignature
   }
 
   close(): void {

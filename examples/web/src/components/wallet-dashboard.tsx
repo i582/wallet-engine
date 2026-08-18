@@ -5,15 +5,24 @@ import {
   Check,
   Copy,
   PaperPlaneTilt,
+  PlugsConnected,
   Receipt,
   Trash,
   WarningCircle,
+  X,
 } from "@phosphor-icons/react"
 import type {Icon} from "@phosphor-icons/react"
-import type {ActivityItem, SendPreview, SendResult, WalletSnapshot} from "@ton/wallet-engine"
-import {type ReactElement, useId, useState} from "react"
+import type {
+  ActivityItem,
+  SendPreview,
+  SendResult,
+  TonConnectInteraction,
+  WalletSnapshot,
+} from "@ton/wallet-engine"
+import {type ReactElement, useEffect, useId, useState} from "react"
 
 import {SendForm} from "@/components/send-form"
+import {TonConnectDialog} from "@/components/ton-connect-dialog"
 import {TransactionView} from "@/components/transaction-view"
 import {Alert, AlertDescription, AlertTitle} from "@/components/ui/alert"
 import {Button} from "@/components/ui/button"
@@ -33,12 +42,18 @@ export interface WalletDashboardProps {
   readonly refreshing: boolean
   readonly loadingMore: boolean
   readonly error?: string
+  readonly connectedDappName?: string
+  readonly tonConnectInteraction?: TonConnectInteraction
+  readonly onDismissError: () => void
   readonly onRefresh: () => Promise<void>
   readonly onLoadMore: () => Promise<void>
   readonly onForget: () => Promise<void>
   readonly onPreviewSend: (destination: string, amountNanograms: string) => Promise<SendPreview>
   readonly onCancelSendPreview: () => Promise<void>
   readonly onSend: (destination: string, amountNanograms: string) => Promise<SendResult>
+  readonly onStartTonConnect: (link: string) => Promise<void>
+  readonly onRespondTonConnect: (interactionId: string, approved: boolean) => void
+  readonly onDisconnectTonConnect: () => Promise<void>
 }
 
 export function WalletDashboard({
@@ -47,17 +62,30 @@ export function WalletDashboard({
   refreshing,
   loadingMore,
   error,
+  connectedDappName,
+  tonConnectInteraction,
+  onDismissError,
   onRefresh,
   onLoadMore,
   onForget,
   onPreviewSend,
   onCancelSendPreview,
   onSend,
+  onStartTonConnect,
+  onRespondTonConnect,
+  onDisconnectTonConnect,
 }: WalletDashboardProps): ReactElement {
   const [copied, setCopied] = useState<boolean>(false)
   const [sendOpen, setSendOpen] = useState<boolean>(false)
   const [deleteOpen, setDeleteOpen] = useState<boolean>(false)
+  const [tonConnectOpen, setTonConnectOpen] = useState<boolean>(false)
   const [selectedActivity, setSelectedActivity] = useState<ActivityItem>()
+
+  useEffect(() => {
+    if (connectedDappName) {
+      setTonConnectOpen(false)
+    }
+  }, [connectedDappName])
 
   async function copyAddress(): Promise<void> {
     await navigator.clipboard.writeText(snapshot.address)
@@ -109,7 +137,7 @@ export function WalletDashboard({
         </CardContent>
       </Card>
 
-      <div className="mt-5 grid grid-cols-3 gap-3">
+      <div className="mt-5 grid grid-cols-4 gap-3">
         <WalletAction
           icon={<PaperPlaneTilt aria-hidden="true" size={21} />}
           label="Send"
@@ -134,6 +162,11 @@ export function WalletDashboard({
           label="Refresh"
           onClick={onRefresh}
         />
+        <WalletAction
+          icon={<PlugsConnected aria-hidden="true" size={21} />}
+          label="Connect"
+          onClick={() => setTonConnectOpen(true)}
+        />
       </div>
 
       {sendOpen ? (
@@ -154,13 +187,32 @@ export function WalletDashboard({
       {deleteOpen ? (
         <DeleteWalletDialog onCancel={() => setDeleteOpen(false)} onConfirm={onForget} />
       ) : null}
+      {tonConnectOpen || tonConnectInteraction ? (
+        <TonConnectDialog
+          connectedDappName={connectedDappName}
+          interaction={tonConnectInteraction}
+          onClose={() => setTonConnectOpen(false)}
+          onDisconnect={onDisconnectTonConnect}
+          onRespond={onRespondTonConnect}
+          onStart={onStartTonConnect}
+        />
+      ) : null}
 
       <div className="mt-5 min-h-0 flex-1 overflow-y-auto pb-2">
         {error ? (
-          <Alert>
+          <Alert className="relative pr-12">
             <WarningCircle aria-hidden="true" className="mt-0.5 text-destructive" size={19} />
             <AlertTitle>Something went wrong</AlertTitle>
             <AlertDescription>{error}</AlertDescription>
+            <Button
+              aria-label="Dismiss error"
+              className="absolute right-2 top-2 size-8 text-muted-foreground"
+              size="icon"
+              variant="ghost"
+              onClick={onDismissError}
+            >
+              <X aria-hidden="true" size={17} />
+            </Button>
           </Alert>
         ) : null}
 

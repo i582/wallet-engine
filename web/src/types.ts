@@ -226,6 +226,9 @@ export interface SendRequest {
   readonly operationId: string
   readonly destination: string
   readonly amount: SendAmount
+  readonly validUntil?: number
+  readonly payload?: string
+  readonly stateInit?: string
   /** Optional plaintext UTF-8 comment. */
   readonly comment?: string
 }
@@ -251,6 +254,8 @@ export interface SendResult {
   readonly operationId: string
   /** Normalized signed external-message hash in standard padded Base64. */
   readonly messageHash: Base64Hash
+  /** Signed external-message BoC returned to TON Connect callers. */
+  readonly signedBoc: string
   readonly phase: SendPhase
 }
 

@@ -25,9 +25,11 @@ describe("BrowserWalletStore", () => {
       requireUserPresence: false,
     })
     await first.saveWallet(descriptor)
+    await first.save("ton-connect-session", "encrypted-session-state")
 
     const restored: BrowserWalletStore = new BrowserWalletStore()
     expect(await restored.loadWallet()).toEqual(descriptor)
+    expect(await restored.load("ton-connect-session")).toBe("encrypted-session-state")
     expect(
       await restored.read({
         secretRef: descriptor.secretRef,
@@ -38,7 +40,9 @@ describe("BrowserWalletStore", () => {
 
     await restored.delete(descriptor.secretRef)
     await restored.clearWallet()
+    await restored.remove("ton-connect-session")
     expect(await restored.loadWallet()).toBeUndefined()
+    expect(await restored.load("ton-connect-session")).toBeUndefined()
   })
 
   test("keeps the send journal independent from wallet storage", async () => {

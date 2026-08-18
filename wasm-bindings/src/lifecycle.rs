@@ -63,4 +63,25 @@ impl WalletLifecycle {
             .await
             .map_err(|error| engine_error(&error))
     }
+
+    #[wasm_bindgen(js_name = tonConnectAccount)]
+    pub fn ton_connect_account(&self, descriptor: JsValue) -> Result<JsValue, JsValue> {
+        let descriptor = from_value(descriptor)?;
+        let account = self
+            .inner
+            .ton_connect_account(descriptor)
+            .map_err(|error| engine_error(&error))?;
+        to_value(&account)
+    }
+
+    #[wasm_bindgen(js_name = signTonConnectProof)]
+    pub async fn sign_ton_connect_proof(&self, request: JsValue) -> Result<JsValue, JsValue> {
+        let request = from_value(request)?;
+        let signature = self
+            .inner
+            .sign_ton_connect_proof(request)
+            .await
+            .map_err(|error| engine_error(&error))?;
+        to_value(&signature)
+    }
 }
