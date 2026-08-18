@@ -12,9 +12,12 @@ use crate::domain::{
     SendPhase, SendRequest, SendSnapshot, bounded_diagnostic,
 };
 use crate::types::Boc;
-use crate::{Base64Hash, NonEmptyString, SendAmount, TonAddressString, UnsignedDecimalString};
+use crate::{
+    Base64Hash, NonEmptyString, SendExpiration, SendMessage, TonAddressString,
+    UnsignedDecimalString,
+};
 
-const JOURNAL_SCHEMA_VERSION: u32 = 2;
+const JOURNAL_SCHEMA_VERSION: u32 = 3;
 const FIRST_JOURNAL_VERSION: u64 = 1;
 pub(crate) const SEND_SLOT: &str = "outgoing-transfer";
 
@@ -69,20 +72,8 @@ pub(crate) struct PreparedTransfer {
     /// The configured source address after the mnemonic-derived wallet matches it.
     pub source: TonAddressString,
 
-    /// The validated destination TON address from the request.
-    pub destination: TonAddressString,
-
-    /// The exact-value or whole-balance policy encoded into the wallet action.
-    pub amount: SendAmount,
-
-    /// The optional plaintext comment encoded into the internal message.
-    pub comment: Option<String>,
-
-    /// The optional caller-built internal-message body.
-    pub payload: Option<Boc>,
-
-    /// The optional destination-contract deployment state.
-    pub state_init: Option<Boc>,
+    /// The complete outgoing internal message encoded into the wallet action.
+    pub message: SendMessage,
 
     /// The fresh wallet sequence number signed into the external message.
     pub seqno: u32,
@@ -312,19 +303,8 @@ struct DurableSendRecord {
     record_id: NonEmptyString,
     /// The validated source TON address.
     source: TonAddressString,
-    /// The validated destination TON address.
-    destination: TonAddressString,
-    /// The exact-value or whole-balance policy stored with the signed message.
-    amount: SendAmount,
-    /// The optional plaintext comment stored with the signed message.
-    #[serde(default)]
-    comment: Option<String>,
-    /// The optional caller-built internal-message body.
-    #[serde(default)]
-    payload: Option<Boc>,
-    /// The optional destination-contract deployment state.
-    #[serde(default)]
-    state_init: Option<Boc>,
+    /// The complete outgoing internal message stored with the signed message.
+    message: SendMessage,
     /// The wallet sequence number signed into the external message.
     seqno: u32,
     /// Reports whether the signed message contains the wallet `StateInit`.
@@ -914,11 +894,7 @@ impl SendWorkflow {
             operation_id: prepared.operation_id.clone(),
             record_id: prepared.record_id.clone(),
             source: prepared.source.clone(),
-            destination: prepared.destination.clone(),
-            amount: prepared.amount.clone(),
-            comment: prepared.comment.clone(),
-            payload: prepared.payload.clone(),
-            state_init: prepared.state_init.clone(),
+            message: prepared.message.clone(),
             seqno: prepared.seqno,
             needs_state_init: prepared.needs_state_init,
             valid_until: prepared.valid_until,
@@ -964,11 +940,12 @@ impl SendWorkflow {
         if prepared.operation_id != self.request.operation_id
             || prepared.record_id != self.record_id
             || prepared.source != self.source
-            || prepared.destination != self.request.destination
-            || prepared.amount != self.request.amount
-            || prepared.comment != self.request.comment
-            || prepared.payload != self.request.payload
-            || prepared.state_init != self.request.state_init
+            || prepared.message != self.request.intent.message
+            || matches!(
+                &self.request.intent.expiration,
+                SendExpiration::Exact { unix_timestamp }
+                    if prepared.valid_until != *unix_timestamp
+            )
             || prepared.seqno != account.seqno
             || prepared.needs_state_init != account.needs_state_init()
         {
@@ -1215,7 +1192,10 @@ mod verification {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{NonEmptyString, ProtectedSecretRef, TonAddressString};
+    use crate::{
+        NonEmptyString, ProtectedSecretRef, SendAmount, SendExpiration, SendIntent,
+        SendMessageBody, TonAddressString,
+    };
     use ton::ton_core::cell::TonCell;
 
     const RAW_SOURCE: &str = "0:1111111111111111111111111111111111111111111111111111111111111111";
@@ -1304,32 +1284,6 @@ mod tests {
                 Err(SendWorkflowError::InvalidJournal(_))
             ));
         }
-    }
-
-    #[test]
-    fn durable_records_from_before_comment_support_remain_compatible() {
-        let mut payload: serde_json::Value =
-            serde_json::from_slice(&durable_payload(SendStage::Cancelled))
-                .expect("durable fixture is JSON");
-        payload
-            .as_object_mut()
-            .expect("durable fixture is an object")
-            .remove("comment");
-        payload
-            .as_object_mut()
-            .expect("durable fixture is an object")
-            .remove("confirmed_transaction_hash");
-        payload
-            .as_object_mut()
-            .expect("durable fixture is an object")
-            .remove("confirmed_transaction_lt");
-        let record = JournalRecord {
-            version: 1,
-            payload: serde_json::to_vec(&payload).expect("legacy durable fixture serializes"),
-        };
-
-        let decoded = decode_durable_record(&record).expect("legacy durable record decodes");
-        assert_eq!(decoded.comment, None);
     }
 
     #[test]
@@ -1540,13 +1494,23 @@ mod tests {
             Box::new(|prepared| prepared.operation_id = non_empty("other-operation")),
             Box::new(|prepared| prepared.record_id = non_empty("other-record")),
             Box::new(|prepared| prepared.source = other_address()),
-            Box::new(|prepared| prepared.destination = other_address()),
+            Box::new(|prepared| prepared.message.destination = other_address()),
             Box::new(|prepared| {
-                prepared.amount = SendAmount::exact("2").expect("valid exact amount");
+                prepared.message.amount = SendAmount::exact("2").expect("valid exact amount");
             }),
-            Box::new(|prepared| prepared.comment = Some("different".to_owned())),
             Box::new(|prepared| {
-                prepared.payload = Some(
+                prepared.message.body = SendMessageBody::Comment {
+                    text: "different".to_owned(),
+                };
+            }),
+            Box::new(|prepared| {
+                prepared.message.body = SendMessageBody::RawPayload {
+                    boc: Boc::try_from(TonCell::EMPTY_BOC.to_vec())
+                        .expect("the empty-cell BOC fixture is valid"),
+                };
+            }),
+            Box::new(|prepared| {
+                prepared.message.state_init = Some(
                     Boc::try_from(TonCell::EMPTY_BOC.to_vec())
                         .expect("the empty-cell BOC fixture is valid"),
                 );
@@ -1579,6 +1543,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn prepared_transfer_must_preserve_exact_expiration() {
+        let mut request = request();
+        request.intent.expiration = SendExpiration::Exact {
+            unix_timestamp: 1_800_000_300,
+        };
+        let (mut workflow, mut prepared) = preparing_workflow_with(request);
+        prepared.valid_until = 1_800_000_301;
+
+        assert_eq!(
+            workflow.transfer_prepared(prepared),
+            Err(SendWorkflowError::PreparedTransferMismatch)
+        );
+        assert_eq!(workflow.snapshot().phase, SendPhase::Preparing);
+    }
+
     fn workflow() -> SendWorkflow {
         SendWorkflow::new(non_empty("record"), source(), request(), local_secret_ref())
     }
@@ -1586,13 +1566,16 @@ mod tests {
     fn request() -> SendRequest {
         SendRequest {
             operation_id: NonEmptyString::try_from("operation").expect("valid operation"),
-            destination: TonAddressString::try_from(RAW_DESTINATION)
-                .expect("valid destination address"),
-            amount: SendAmount::exact("1").expect("valid exact amount"),
-            valid_until: None,
-            payload: None,
-            state_init: None,
-            comment: None,
+            intent: SendIntent {
+                expiration: SendExpiration::EngineDefault,
+                message: SendMessage {
+                    destination: TonAddressString::try_from(RAW_DESTINATION)
+                        .expect("valid destination address"),
+                    amount: SendAmount::exact("1").expect("valid exact amount"),
+                    body: SendMessageBody::Empty,
+                    state_init: None,
+                },
+            },
         }
     }
 
@@ -1626,11 +1609,12 @@ mod tests {
             operation_id: non_empty("operation"),
             record_id: non_empty("record"),
             source: source(),
-            destination: destination(),
-            amount: SendAmount::exact("1").expect("valid exact amount"),
-            comment: None,
-            payload: None,
-            state_init: None,
+            message: SendMessage {
+                destination: destination(),
+                amount: SendAmount::exact("1").expect("valid exact amount"),
+                body: SendMessageBody::Empty,
+                state_init: None,
+            },
             seqno: 7,
             needs_state_init: false,
             valid_until: 1_800_000_300,
@@ -1641,7 +1625,13 @@ mod tests {
     }
 
     fn preparing_workflow() -> (SendWorkflow, PreparedTransfer) {
-        let mut workflow = workflow();
+        preparing_workflow_with(request())
+    }
+
+    /// Advances a request fixture to the transfer-preparation stage.
+    fn preparing_workflow_with(request: SendRequest) -> (SendWorkflow, PreparedTransfer) {
+        let mut workflow =
+            SendWorkflow::new(non_empty("record"), source(), request, local_secret_ref());
         assert!(matches!(
             workflow.begin(),
             Ok(SendDirective::LoadJournal(_))
@@ -1685,11 +1675,7 @@ mod tests {
             operation_id: prepared.operation_id,
             record_id: prepared.record_id,
             source: prepared.source,
-            destination: prepared.destination,
-            amount: prepared.amount,
-            comment: prepared.comment,
-            payload: prepared.payload,
-            state_init: prepared.state_init,
+            message: prepared.message,
             seqno: prepared.seqno,
             needs_state_init: prepared.needs_state_init,
             valid_until: prepared.valid_until,

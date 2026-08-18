@@ -408,7 +408,7 @@ private struct TonConnectTransactionView: View {
     let preview: SendPreview
 
     private var amount: String {
-        guard case .exact(let nanograms) = preview.amount else { return "All balance" }
+        guard case .exact(let nanograms) = preview.message.amount else { return "All balance" }
         return "\(GramAmount.format(nanograms: nanograms)) GRAM"
     }
 
@@ -419,7 +419,7 @@ private struct TonConnectTransactionView: View {
 
             VStack(spacing: 0) {
                 PreviewRow(label: "Send", value: amount)
-                PreviewRow(label: "To", value: compact(preview.destination))
+                PreviewRow(label: "To", value: compact(preview.message.destination))
                 PreviewRow(
                     label: "Network fee",
                     value: "\(GramAmount.format(nanograms: preview.emulation.walletFeesNanograms)) GRAM"

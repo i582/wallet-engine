@@ -1704,12 +1704,15 @@ private struct SendWalletView: View {
                 let result = try await session.send(
                     SendRequest(
                         operationId: UUID().uuidString.lowercased(),
-                        destination: normalizedDestination,
-                        amount: .exact(nanograms: nanograms),
-                        validUntil: nil,
-                        payload: nil,
-                        stateInit: nil,
-                        comment: nil,
+                        intent: SendIntent(
+                            expiration: .engineDefault,
+                            message: SendMessage(
+                                destination: normalizedDestination,
+                                amount: .exact(nanograms: nanograms),
+                                body: .empty,
+                                stateInit: nil
+                            )
+                        )
                     )
                 )
                 switch result.phase {

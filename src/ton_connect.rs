@@ -22,8 +22,8 @@ use ton_connect_core::{
 };
 
 use crate::{
-    Boc, NonEmptyString, SendAmount, SendRequest, TonConnectAccountInfo, WalletClientError,
-    bounded_diagnostic,
+    Boc, NonEmptyString, SendAmount, SendExpiration, SendIntent, SendMessage, SendMessageBody,
+    SendRequest, TonConnectAccountInfo, WalletClientError, bounded_diagnostic,
 };
 
 /// Limits and bridge identity for one wallet-side TON Connect session.
@@ -748,13 +748,25 @@ fn decode_send_request(
     .map_err(session_error)?;
     let send_request = SendRequest {
         operation_id,
-        destination: crate::TonAddressString::try_from(message.address.to_string())
-            .map_err(session_error)?,
-        amount: SendAmount::exact(message.amount.as_str().to_owned()).map_err(session_error)?,
-        valid_until: payload.valid_until,
-        payload: payload_boc,
-        state_init,
-        comment: None,
+        intent: SendIntent {
+            expiration: payload
+                .valid_until
+                .map_or(SendExpiration::EngineDefault, |value| {
+                    SendExpiration::Exact {
+                        unix_timestamp: value,
+                    }
+                }),
+            message: SendMessage {
+                destination: crate::TonAddressString::try_from(message.address.to_string())
+                    .map_err(session_error)?,
+                amount: SendAmount::exact(message.amount.as_str().to_owned())
+                    .map_err(session_error)?,
+                body: payload_boc.map_or(SendMessageBody::Empty, |boc| {
+                    SendMessageBody::RawPayload { boc }
+                }),
+                state_init,
+            },
+        },
     };
     Ok(TonConnectIncomingRequest {
         id: request_id.to_owned(),
@@ -967,15 +979,23 @@ mod tests {
             first_incoming
                 .send_request
                 .as_ref()
-                .and_then(|request| request.valid_until),
-            Some(1_900_000_000)
+                .map(|request| &request.intent.expiration),
+            Some(&SendExpiration::Exact {
+                unix_timestamp: 1_900_000_000,
+            })
         );
+        assert!(matches!(
+            first_incoming
+                .send_request
+                .as_ref()
+                .map(|request| &request.intent.message.body),
+            Some(SendMessageBody::RawPayload { .. })
+        ));
         assert!(
             first_incoming
                 .send_request
                 .as_ref()
-                .and_then(|request| request.payload.as_ref())
-                .is_some()
+                .is_some_and(|request| request.intent.message.state_init.is_none())
         );
 
         let persisted = session.persisted()?;

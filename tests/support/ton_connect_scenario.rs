@@ -29,11 +29,12 @@ use ton_connect_core::{
 };
 use ton_core::cell::TonCell;
 use wallet_engine::{
-    Boc, ImportWalletRequest, Network, NonEmptyString, ProviderConfig, SendAmount, SendPhase,
-    SendRequest, TonAddressString, TonConnectAccountInfo, TonConnectDevice,
-    TonConnectDevicePlatform, TonConnectIncomingRequest, TonConnectIncomingRequestKind,
-    TonConnectRpcErrorCode, TonConnectSession, TonConnectSessionConfig, WalletClient,
-    WalletClientConfig, WalletLifecycle, ton_connect_session_from_link,
+    Boc, ImportWalletRequest, Network, NonEmptyString, ProviderConfig, SendAmount, SendExpiration,
+    SendIntent, SendMessage, SendMessageBody, SendPhase, SendRequest, TonAddressString,
+    TonConnectAccountInfo, TonConnectDevice, TonConnectDevicePlatform, TonConnectIncomingRequest,
+    TonConnectIncomingRequestKind, TonConnectRpcErrorCode, TonConnectSession,
+    TonConnectSessionConfig, WalletClient, WalletClientConfig, WalletLifecycle,
+    ton_connect_session_from_link,
 };
 
 use super::{host::MemoryPlatformHost, localnet::LocalnetHttpHost, test_wallet};
@@ -1494,22 +1495,35 @@ impl ScenarioRunner {
                 "wallet-engine localnet profile requires exactly one message",
             ));
         };
+        let body = message
+            .payload
+            .as_ref()
+            .map(|value| Boc::try_from(value.as_bytes().to_vec()))
+            .transpose()?
+            .map_or(SendMessageBody::Empty, |boc| SendMessageBody::RawPayload {
+                boc,
+            });
         let expected = SendRequest {
             operation_id: actual.operation_id.clone(),
-            destination: TonAddressString::try_from(message.address.to_string())?,
-            amount: SendAmount::exact(message.amount.as_str().to_owned())?,
-            valid_until: payload.valid_until,
-            payload: message
-                .payload
-                .as_ref()
-                .map(|value| Boc::try_from(value.as_bytes().to_vec()))
-                .transpose()?,
-            state_init: message
-                .state_init
-                .as_ref()
-                .map(|value| Boc::try_from(value.as_bytes().to_vec()))
-                .transpose()?,
-            comment: None,
+            intent: SendIntent {
+                expiration: payload
+                    .valid_until
+                    .map_or(SendExpiration::EngineDefault, |value| {
+                        SendExpiration::Exact {
+                            unix_timestamp: value,
+                        }
+                    }),
+                message: SendMessage {
+                    destination: TonAddressString::try_from(message.address.to_string())?,
+                    amount: SendAmount::exact(message.amount.as_str().to_owned())?,
+                    body,
+                    state_init: message
+                        .state_init
+                        .as_ref()
+                        .map(|value| Boc::try_from(value.as_bytes().to_vec()))
+                        .transpose()?,
+                },
+            },
         };
         if actual != &expected || !actual.operation_id.as_str().starts_with("ton-connect:") {
             return Err(failure(format!(

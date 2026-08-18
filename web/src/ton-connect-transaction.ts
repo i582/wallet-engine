@@ -65,11 +65,21 @@ export function prepareTransaction(options: PrepareTransactionOptions): Prepared
     },
     sendRequest: {
       operationId: `ton-connect:${sessionId}:${canonicalRequestId(request.id)}`,
-      destination: message.address,
-      amount: {kind: "exact", nanograms: message.amount},
-      validUntil: payload.valid_until,
-      payload: message.payload,
-      stateInit: message.stateInit,
+      intent: {
+        expiration:
+          payload.valid_until === undefined
+            ? {kind: "engineDefault"}
+            : {kind: "exact", unixTimestamp: payload.valid_until},
+        message: {
+          destination: message.address,
+          amount: {kind: "exact", nanograms: message.amount},
+          body:
+            message.payload === undefined
+              ? {kind: "empty"}
+              : {kind: "rawPayload", boc: message.payload},
+          stateInit: message.stateInit,
+        },
+      },
     },
   }
 }

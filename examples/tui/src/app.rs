@@ -7,8 +7,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use num_bigint::BigUint;
 use wallet_engine::{
     CreateWalletRequest, CreatedWallet, ImportWalletRequest, Network, NonEmptyString,
-    ProviderConfig, SendAmount, SendPhase, SendPreviewRequest, SendRequest, TonAddressString,
-    WalletClient, WalletClientConfig, WalletDescriptor, WalletLifecycle, WalletSnapshot,
+    ProviderConfig, SendAmount, SendExpiration, SendIntent, SendMessage, SendMessageBody, SendPhase,
+    SendPreviewRequest, SendRequest, TonAddressString, WalletClient, WalletClientConfig,
+    WalletDescriptor, WalletLifecycle, WalletSnapshot,
 };
 
 use crate::http_host::ReqwestHttpHost;
@@ -553,15 +554,19 @@ impl App {
             }
         };
 
+        let intent = SendIntent {
+            expiration: SendExpiration::EngineDefault,
+            message: SendMessage {
+                destination,
+                amount,
+                body: SendMessageBody::Empty,
+                state_init: None,
+            },
+        };
         self.status = Some("Checking transfer…".to_owned());
         match client
             .preview_send(SendPreviewRequest {
-                destination: destination.clone(),
-                amount: amount.clone(),
-                valid_until: None,
-                payload: None,
-                state_init: None,
-                comment: None,
+                intent: intent.clone(),
             })
             .await
         {
@@ -582,12 +587,7 @@ impl App {
         };
         let request = SendRequest {
             operation_id,
-            destination,
-            amount,
-            valid_until: None,
-            payload: None,
-            state_init: None,
-            comment: None,
+            intent,
         };
         match client.send(request).await {
             Ok(result) => {

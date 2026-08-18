@@ -178,6 +178,8 @@ QString secret_reason_text(SecretAccessReason reason) {
         return QStringLiteral("create-wallet");
     case SecretAccessReason::kSignTransfer:
         return QStringLiteral("sign-transfer");
+    case SecretAccessReason::kSignTonConnectProof:
+        return QStringLiteral("sign-ton-connect-proof");
     case SecretAccessReason::kRevealRecoveryPhrase:
         return QStringLiteral("reveal-recovery-phrase");
     }
@@ -916,6 +918,22 @@ struct PreviewResult {
     QString error;
 };
 
+/** Builds the transfer intent used by both preview and signed submission. */
+SendIntent transfer_intent(const TransferDraft &draft) {
+    const auto body = draft.comment.has_value() ?
+        SendMessageBody(SendMessageBody::kComment {*draft.comment}) :
+        SendMessageBody(SendMessageBody::kEmpty {});
+    return {
+        SendExpiration(SendExpiration::kEngineDefault {}),
+        SendMessage {
+            draft.destination,
+            SendAmount(SendAmount::kExact {draft.amount_nanograms}),
+            body,
+            std::nullopt,
+        },
+    };
+}
+
 PreviewResult preview_transfer(
     const std::shared_ptr<WalletClient> &client,
     const TransferDraft &draft
@@ -923,9 +941,7 @@ PreviewResult preview_transfer(
     try {
         return {
             client->preview_send({
-                draft.destination,
-                SendAmount(SendAmount::kExact {draft.amount_nanograms}),
-                draft.comment,
+                transfer_intent(draft),
             }),
             {},
         };
@@ -950,9 +966,7 @@ SubmitResult submit_transfer(
         return {
             client->send({
                 operation_id,
-                draft.destination,
-                SendAmount(SendAmount::kExact {draft.amount_nanograms}),
-                draft.comment,
+                transfer_intent(draft),
             }),
             {},
         };

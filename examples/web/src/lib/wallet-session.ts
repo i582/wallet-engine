@@ -115,8 +115,14 @@ export class WalletSession {
   async previewSend(destination: string, amountNanograms: string): Promise<SendPreview> {
     this.assertOpen()
     return await this.client.previewSend({
-      destination,
-      amount: {kind: "exact", nanograms: amountNanograms},
+      intent: {
+        expiration: {kind: "engineDefault"},
+        message: {
+          destination,
+          amount: {kind: "exact", nanograms: amountNanograms},
+          body: {kind: "empty"},
+        },
+      },
     })
   }
 
@@ -130,8 +136,14 @@ export class WalletSession {
     try {
       return await this.client.send({
         operationId: crypto.randomUUID(),
-        destination,
-        amount: {kind: "exact", nanograms: amountNanograms},
+        intent: {
+          expiration: {kind: "engineDefault"},
+          message: {
+            destination,
+            amount: {kind: "exact", nanograms: amountNanograms},
+            body: {kind: "empty"},
+          },
+        },
       })
     } catch (cause) {
       const diagnostic: string | undefined = this.client.snapshot().send.errorMessage

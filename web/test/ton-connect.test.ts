@@ -232,8 +232,12 @@ describe("TON Connect wallet runtime", () => {
         order.push("preview")
         previewRequests.push(request)
         return {
-          destination: "EQDestination",
-          amount: {kind: "exact", nanograms: "1000000"},
+          message: {
+            destination: "EQDestination",
+            amount: {kind: "exact", nanograms: "1000000"},
+            body: {kind: "rawPayload", boc: "te6ccgEBAQEAAgAAAA=="},
+            stateInit: "te6ccgEBAQEAAgAAAA==",
+          },
           validUntil: 1_900_000_000,
           messageBocBase64: "te6ccgEBAQEAAgAAAA==",
           emulation: {
@@ -290,9 +294,13 @@ describe("TON Connect wallet runtime", () => {
     expect(order).toEqual(["preview", "interaction"])
     expect(previewRequests).toEqual([
       expect.objectContaining({
-        validUntil: 1_900_000_000,
-        payload: "te6ccgEBAQEAAgAAAA==",
-        stateInit: "te6ccgEBAQEAAgAAAA==",
+        intent: {
+          expiration: {kind: "exact", unixTimestamp: 1_900_000_000},
+          message: expect.objectContaining({
+            body: {kind: "rawPayload", boc: "te6ccgEBAQEAAgAAAA=="},
+            stateInit: "te6ccgEBAQEAAgAAAA==",
+          }),
+        },
       }),
     ])
     expect(transactionPreview).toEqual(
@@ -356,8 +364,14 @@ describe("TON Connect transaction mapping", () => {
     expect(prepared.ok).toBe(true)
     if (prepared.ok) {
       expect(prepared.sendRequest.operationId).toBe("ton-connect:session:7")
-      expect(prepared.sendRequest.validUntil).toBe(1_900_000_000)
-      expect(prepared.sendRequest.payload).toBe("te6ccgEBAQEAAgAAAA==")
+      expect(prepared.sendRequest.intent.expiration).toEqual({
+        kind: "exact",
+        unixTimestamp: 1_900_000_000,
+      })
+      expect(prepared.sendRequest.intent.message.body).toEqual({
+        kind: "rawPayload",
+        boc: "te6ccgEBAQEAAgAAAA==",
+      })
     }
   })
 

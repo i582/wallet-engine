@@ -222,31 +222,62 @@ export type SendAmount =
       readonly kind: "all"
     }
 
-export interface SendRequest {
-  readonly operationId: string
+/** The body encoded into one outgoing internal TON message. */
+export type SendMessageBody =
+  | {
+      /** Encode no body bits or references. */
+      readonly kind: "empty"
+    }
+  | {
+      /** Encode a zero opcode followed by this UTF-8 text as TON snake data. */
+      readonly kind: "comment"
+      readonly text: string
+    }
+  | {
+      /** Preserve this Base64-encoded BOC cell as the message body. */
+      readonly kind: "rawPayload"
+      readonly boc: string
+    }
+
+/** One outgoing internal TON message. */
+export interface SendMessage {
   readonly destination: string
   readonly amount: SendAmount
-  readonly validUntil?: number
-  readonly payload?: string
+  readonly body: SendMessageBody
+  /** Destination-contract StateInit encoded as a Base64 BOC. */
   readonly stateInit?: string
-  /** Optional plaintext UTF-8 comment. */
-  readonly comment?: string
+}
+
+/** The policy used to select the wallet message expiration boundary. */
+export type SendExpiration =
+  | {
+      /** Derive expiration from fresh provider time and engine configuration. */
+      readonly kind: "engineDefault"
+    }
+  | {
+      /** Preserve this Unix expiration timestamp in seconds. */
+      readonly kind: "exact"
+      readonly unixTimestamp: number
+    }
+
+/** The message and expiration choices accepted by preview and send. */
+export interface SendIntent {
+  readonly expiration: SendExpiration
+  readonly message: SendMessage
+}
+
+export interface SendRequest {
+  readonly operationId: string
+  readonly intent: SendIntent
 }
 
 export interface SendPreviewRequest {
-  readonly destination: string
-  readonly amount: SendAmount
-  readonly validUntil?: number
-  readonly payload?: string
-  readonly stateInit?: string
-  /** Optional plaintext UTF-8 comment. */
-  readonly comment?: string
+  readonly intent: SendIntent
 }
 
 export interface SendPreview {
-  readonly destination: string
-  readonly amount: SendAmount
-  readonly comment?: string
+  readonly message: SendMessage
+  /** Resolved Unix expiration timestamp used by this emulation. */
   readonly validUntil: number
   /** Complete fake-signed external-message BOC in standard padded Base64. */
   readonly messageBocBase64: string

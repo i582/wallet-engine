@@ -20,8 +20,9 @@ use ton_connect_core::{
     WalletResult, WalletStateInit,
 };
 use wallet_engine::{
-    Boc, Network, NonEmptyString, SendAmount, SendPhase, SendRequest, TonAddressString,
-    TonConnectProofSignRequest, WalletClient, WalletDescriptor, WalletLifecycle,
+    Boc, Network, NonEmptyString, SendAmount, SendExpiration, SendIntent, SendMessage,
+    SendMessageBody, SendPhase, SendRequest, TonAddressString, TonConnectProofSignRequest,
+    WalletClient, WalletDescriptor, WalletLifecycle,
 };
 
 const DEFAULT_BRIDGE_URL: &str = "https://connect.ton.org/bridge";
@@ -435,16 +436,19 @@ async fn handle_send_transaction(
         Err(code) => return rpc_error(request_id, code, "Unsupported transaction shape"),
     };
     let (approval_tx, approval_rx) = oneshot::channel();
-    let SendAmount::Exact { nanograms } = &engine_request.amount else {
+    let SendAmount::Exact { nanograms } = &engine_request.intent.message.amount else {
         return rpc_error(request_id, RpcErrorCode::BadRequest, "Invalid amount");
     };
     if events
         .send(TonConnectEvent::TransactionPrompt(TransactionPrompt {
             dapp_name: dapp_name.to_owned(),
-            destination: engine_request.destination.to_string(),
+            destination: engine_request.intent.message.destination.to_string(),
             amount_nanograms: nanograms.to_string(),
-            deploys_contract: engine_request.state_init.is_some(),
-            has_payload: engine_request.payload.is_some(),
+            deploys_contract: engine_request.intent.message.state_init.is_some(),
+            has_payload: matches!(
+                engine_request.intent.message.body,
+                SendMessageBody::RawPayload { .. }
+            ),
             response: Some(approval_tx),
         }))
         .is_err()
@@ -524,13 +528,23 @@ fn engine_send_request(
             session_id, request.id
         ))
         .map_err(|_| RpcErrorCode::BadRequest)?,
-        destination: TonAddressString::try_from(message.address.as_str())
-            .map_err(|_| RpcErrorCode::BadRequest)?,
-        amount: SendAmount::exact(message.amount.as_str()).map_err(|_| RpcErrorCode::BadRequest)?,
-        valid_until: payload.valid_until,
-        payload: body,
-        state_init,
-        comment: None,
+        intent: SendIntent {
+            expiration: payload.valid_until.map_or(SendExpiration::EngineDefault, |value| {
+                SendExpiration::Exact {
+                    unix_timestamp: value,
+                }
+            }),
+            message: SendMessage {
+                destination: TonAddressString::try_from(message.address.as_str())
+                    .map_err(|_| RpcErrorCode::BadRequest)?,
+                amount: SendAmount::exact(message.amount.as_str())
+                    .map_err(|_| RpcErrorCode::BadRequest)?,
+                body: body.map_or(SendMessageBody::Empty, |boc| {
+                    SendMessageBody::RawPayload { boc }
+                }),
+                state_init,
+            },
+        },
     })
 }
 
@@ -659,10 +673,21 @@ mod tests {
             engine_send_request(ClientId::from_bytes([7_u8; 32]), &request, &descriptor)
                 .map_err(|code| anyhow!("unexpected RPC error: {code:?}"))?;
 
-        assert_eq!(converted.destination.as_str(), destination.as_str());
-        assert_eq!(converted.valid_until, Some(1_900_000_000));
-        assert!(converted.payload.is_some());
-        assert!(converted.state_init.is_some());
+        assert_eq!(
+            converted.intent.message.destination.as_str(),
+            destination.as_str()
+        );
+        assert_eq!(
+            converted.intent.expiration,
+            SendExpiration::Exact {
+                unix_timestamp: 1_900_000_000,
+            }
+        );
+        assert!(matches!(
+            converted.intent.message.body,
+            SendMessageBody::RawPayload { .. }
+        ));
+        assert!(converted.intent.message.state_init.is_some());
         Ok(())
     }
 

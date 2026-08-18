@@ -10,6 +10,7 @@ use crate::{
 
 use super::WalletClient;
 use super::emulation::{build_emulation_request, is_message_not_accepted, parse_emulation};
+use super::expiration::resolve_send_expiration;
 use super::http::{build_toncenter_v2_request, process_response};
 use super::provider::parse_account;
 use super::send_http::{build_seqno_request, parse_seqno};
@@ -27,9 +28,6 @@ impl WalletClient {
         &self,
         request: SendPreviewRequest,
     ) -> Result<SendPreview, WalletClientError> {
-        if request.payload.is_some() && request.comment.is_some() {
-            return Err(WalletClientError::InvalidSendRequest);
-        }
         let (
             generation,
             config,
@@ -91,7 +89,7 @@ impl WalletClient {
 
         let available = account.balance_nanograms.clone();
 
-        if let SendAmount::Exact { nanograms } = &request.amount
+        if let SendAmount::Exact { nanograms } = &request.intent.message.amount
             && nanograms > &available
         {
             return Err(self.preview_error(
@@ -126,30 +124,19 @@ impl WalletClient {
         };
 
         let provider_time = account.sync_utime;
-        let valid_until = if let Some(valid_until) = request.valid_until {
-            if valid_until <= provider_time {
-                return Err(self.preview_error(
-                    generation,
-                    WalletClientError::SendPreviewFailed {
-                        diagnostic:
-                            "transfer expiration timestamp is not after fresh provider time"
-                                .to_owned(),
-                    },
-                ));
-            }
-            valid_until
-        } else {
-            provider_time
-                .checked_add(config.send_validity_seconds)
-                .ok_or_else(|| {
-                    self.preview_error(
-                        generation,
-                        WalletClientError::SendPreviewFailed {
-                            diagnostic: "transfer expiration timestamp overflow".to_owned(),
-                        },
-                    )
-                })?
-        };
+        let valid_until = resolve_send_expiration(
+            &request.intent.expiration,
+            provider_time,
+            config.send_validity_seconds,
+        )
+        .map_err(|error| {
+            self.preview_error(
+                generation,
+                WalletClientError::SendPreviewFailed {
+                    diagnostic: error.to_string(),
+                },
+            )
+        })?;
 
         let fresh = FreshSendAccount {
             status: account.status,
@@ -209,7 +196,7 @@ impl WalletClient {
             ));
         }
 
-        if let SendAmount::Exact { nanograms } = &request.amount {
+        if let SendAmount::Exact { nanograms } = &request.intent.message.amount {
             // Exact sends must leave a positive remainder after the emulated
             // wallet fee. Use `SendAmount::All` when the intent is to drain
             // the wallet with carry-all-balance mode instead.
@@ -231,9 +218,7 @@ impl WalletClient {
         }
 
         let preview = SendPreview {
-            destination: request.destination,
-            amount: request.amount,
-            comment: request.comment,
+            message: request.intent.message,
             valid_until,
             message_boc_base64: boc,
             emulation: evaluated.summary,
@@ -251,12 +236,7 @@ impl WalletClient {
         request: SendRequest,
     ) -> Result<SendPreview, WalletClientError> {
         self.preview_send(SendPreviewRequest {
-            destination: request.destination,
-            amount: request.amount,
-            valid_until: request.valid_until,
-            payload: request.payload,
-            state_init: request.state_init,
-            comment: request.comment,
+            intent: request.intent,
         })
         .await
     }

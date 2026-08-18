@@ -15,10 +15,10 @@ use ton::ton_core::cell::TonCell;
 use ton::ton_core::traits::tlb::TLB;
 use wallet_engine::{
     AccountStatus, ActivityCursor, DomainError, HttpHostErrorKind, Network, NonEmptyString,
-    PendingReason, ProtectedSecretRef, ProviderConfig, ResourcePhase, SendAmount, SendPhase,
-    SendPreview, SendPreviewRequest, SendRequest, SendResult, SendSnapshot, TonAddressString,
-    WalletClient, WalletClientConfig, WalletClientError, WalletHttpHost, WalletOperationOutcome,
-    WalletUpdate,
+    PendingReason, ProtectedSecretRef, ProviderConfig, ResourcePhase, SendAmount, SendExpiration,
+    SendIntent, SendMessage, SendMessageBody, SendPhase, SendPreview, SendPreviewRequest,
+    SendRequest, SendResult, SendSnapshot, TonAddressString, WalletClient, WalletClientConfig,
+    WalletClientError, WalletHttpHost, WalletOperationOutcome, WalletUpdate,
 };
 
 use super::host::{MemoryPlatformHost, PlatformCallKind, RequestKind, ScenarioHttpHost};
@@ -1668,12 +1668,17 @@ impl ScenarioRunner {
                         let destination = TonAddressString::try_from(destination)
                             .map_err(|error| format!("invalid scenario destination: {error}"))?;
                         let request = SendPreviewRequest {
-                            destination,
-                            amount: action.amount,
-                            valid_until: None,
-                            payload: None,
-                            state_init: None,
-                            comment: action.comment,
+                            intent: SendIntent {
+                                expiration: SendExpiration::EngineDefault,
+                                message: SendMessage {
+                                    destination,
+                                    amount: action.amount,
+                                    body: action.comment.map_or(SendMessageBody::Empty, |text| {
+                                        SendMessageBody::Comment { text }
+                                    }),
+                                    state_init: None,
+                                },
+                            },
                         };
                         std::thread::spawn(move || {
                             let result = block_on(client.preview_send(request));
@@ -1692,12 +1697,17 @@ impl ScenarioRunner {
                                 .map_err(|error| {
                                     format!("invalid scenario operation identifier: {error}")
                                 })?,
-                            destination,
-                            amount: action.amount,
-                            valid_until: None,
-                            payload: None,
-                            state_init: None,
-                            comment: action.comment,
+                            intent: SendIntent {
+                                expiration: SendExpiration::EngineDefault,
+                                message: SendMessage {
+                                    destination,
+                                    amount: action.amount,
+                                    body: action.comment.map_or(SendMessageBody::Empty, |text| {
+                                        SendMessageBody::Comment { text }
+                                    }),
+                                    state_init: None,
+                                },
+                            },
                         };
                         std::thread::spawn(move || {
                             let result = block_on(client.send(request));

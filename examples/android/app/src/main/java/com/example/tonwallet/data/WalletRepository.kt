@@ -9,6 +9,10 @@ import org.ton.wallet.engine.Network
 import org.ton.wallet.engine.ProviderConfig
 import org.ton.wallet.engine.ResourcePhase
 import org.ton.wallet.engine.SendAmount
+import org.ton.wallet.engine.SendExpiration
+import org.ton.wallet.engine.SendIntent
+import org.ton.wallet.engine.SendMessage
+import org.ton.wallet.engine.SendMessageBody
 import org.ton.wallet.engine.SendPhase
 import org.ton.wallet.engine.SendRequest
 import org.ton.wallet.engine.WalletClient
@@ -92,9 +96,15 @@ class WalletRepository(private val store: SecureWalletStore) {
         val result = client(wallet).send(
             SendRequest(
                 operationId = UUID.randomUUID().toString().lowercase(),
-                destination = destination.trim(),
-                amount = SendAmount.Exact(nanograms = amountNanograms),
-                comment = null,
+                intent = SendIntent(
+                    expiration = SendExpiration.EngineDefault,
+                    message = SendMessage(
+                        destination = destination.trim(),
+                        amount = SendAmount.Exact(nanograms = amountNanograms),
+                        body = SendMessageBody.Empty,
+                        stateInit = null,
+                    ),
+                ),
             ),
         )
         when (result.phase) {
