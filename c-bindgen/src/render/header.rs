@@ -1,6 +1,12 @@
 use std::fmt::Write as _;
 
-use crate::{error_map::ErrorType, model::BindingsModel, template, type_map::BuiltinType};
+use crate::{
+    error_map::ErrorType,
+    model::BindingsModel,
+    object_map::{HandleKind, ObjectHandle},
+    template,
+    type_map::BuiltinType,
+};
 
 const HEADER_TEMPLATE: &str = include_str!("../../templates/header.h.tmpl");
 const STRING_VIEW_TEMPLATE: &str = include_str!("../../templates/types/string_view.h.tmpl");
@@ -17,6 +23,10 @@ const ERROR_PAYLOAD_STRUCT_TEMPLATE: &str =
     include_str!("../../templates/types/error_payload_struct.h.tmpl");
 const ERROR_PAYLOAD_MEMBER_TEMPLATE: &str =
     include_str!("../../templates/types/error_payload_member.h.tmpl");
+const RUST_OBJECT_HANDLE_TEMPLATE: &str =
+    include_str!("../../templates/types/rust_object_handle.h.tmpl");
+const FOREIGN_CALLBACK_INTERFACE_HANDLE_TEMPLATE: &str =
+    include_str!("../../templates/types/foreign_callback_interface_handle.h.tmpl");
 
 pub(super) fn render(model: &BindingsModel) -> String {
     let abi_version = model.abi_version().to_string();
@@ -105,6 +115,9 @@ pub(super) fn render(model: &BindingsModel) -> String {
     for error in model.error_types() {
         type_declarations.push_str(&render_error(error));
     }
+    for handle in model.object_handles() {
+        type_declarations.push_str(&render_object_handle(handle));
+    }
 
     template::render(
         HEADER_TEMPLATE,
@@ -112,6 +125,20 @@ pub(super) fn render(model: &BindingsModel) -> String {
             ("ABI_VERSION", &abi_version),
             ("UNIFFI_CONTRACT_VERSION", &uniffi_contract_version),
             ("TYPE_DECLARATIONS", &type_declarations),
+        ],
+    )
+}
+
+fn render_object_handle(handle: &ObjectHandle) -> String {
+    let source = match handle.kind() {
+        HandleKind::RustObject => RUST_OBJECT_HANDLE_TEMPLATE,
+        HandleKind::ForeignCallbackInterface => FOREIGN_CALLBACK_INTERFACE_HANDLE_TEMPLATE,
+    };
+    template::render(
+        source,
+        &[
+            ("RUST_NAME", handle.rust_name()),
+            ("C_NAME", handle.c_name()),
         ],
     )
 }
@@ -252,6 +279,30 @@ mod tests {
         assert!(header.contains("typedef struct WalletEngineOptionalU64"));
         assert!(header.contains("bool has_value;"));
         assert!(header.contains("uint64_t value;"));
+        Ok(())
+    }
+
+    #[test]
+    fn renders_typed_opaque_object_and_callback_interface_handles() -> Result<()> {
+        let component = ComponentInterface::from_webidl(
+            r"
+            namespace wallet_engine {};
+
+            interface Client { constructor(); };
+            [Trait, WithForeign]
+            interface Host { void execute(); };
+            callback interface LegacyHost { void execute(); };
+            ",
+            "wallet_engine",
+        )?;
+        let model = BindingsModel::from_components(&[component])?;
+        let header = render(&model);
+
+        assert!(header.contains("typedef struct WalletEngineClient WalletEngineClient;"));
+        assert!(header.contains("typedef struct WalletEngineHost WalletEngineHost;"));
+        assert!(header.contains("typedef struct WalletEngineLegacyHost WalletEngineLegacyHost;"));
+        assert!(!header.contains("uint64_t WalletEngineClient"));
+        assert!(!header.contains("uint64_t WalletEngineHost"));
         Ok(())
     }
 

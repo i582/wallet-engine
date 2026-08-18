@@ -5,6 +5,7 @@ use uniffi_bindgen::ComponentInterface;
 use crate::{
     enum_map::FlatEnum,
     error_map::{ErrorType, collect_error_types},
+    object_map::{ObjectHandle, collect_object_handles},
     optional_map::{OptionalType, collect_optional_types},
     record_map::{RecordType, collect_record_types},
     sequence_map::{SequenceType, collect_sequence_types},
@@ -12,7 +13,7 @@ use crate::{
     type_registry::TypeRegistry,
 };
 
-pub(super) const MANIFEST_SCHEMA_VERSION: u32 = 8;
+pub(super) const MANIFEST_SCHEMA_VERSION: u32 = 9;
 const EXPERIMENTAL_ABI_VERSION: u32 = 0;
 const EXPECTED_CRATE_NAME: &str = "wallet_engine";
 const EXPECTED_NAMESPACE: &str = "wallet_engine";
@@ -26,6 +27,7 @@ pub(super) struct BindingsModel {
     sequence_types: Vec<SequenceType>,
     record_types: Vec<RecordType>,
     error_types: Vec<ErrorType>,
+    object_handles: Vec<ObjectHandle>,
     private_ffi: PrivateFfi,
     manifest: Manifest,
 }
@@ -53,6 +55,7 @@ struct GenerationManifest {
     rendered_sequence_types: Vec<SequenceTypeManifest>,
     rendered_record_types: Vec<RecordTypeManifest>,
     rendered_error_types: Vec<ErrorTypeManifest>,
+    rendered_object_handles: Vec<ObjectHandleManifest>,
     rendered_semantic_operation_count: usize,
     pending_semantic_operation_count: usize,
 }
@@ -144,6 +147,13 @@ struct ErrorFieldManifest {
 }
 
 #[derive(Debug, Serialize)]
+struct ObjectHandleManifest {
+    rust: String,
+    c: String,
+    kind: &'static str,
+}
+
+#[derive(Debug, Serialize)]
 struct ComponentManifest {
     crate_name: String,
     namespace: String,
@@ -190,14 +200,15 @@ impl BindingsModel {
         }
         let record_types = collect_record_types(component, &mut type_registry)?;
         let error_types = collect_error_types(component, &mut type_registry)?;
+        let object_handles = collect_object_handles(component, &mut type_registry)?;
         let manifest = Manifest::from_components(
             components,
-            type_registry.builtin_types(),
-            type_registry.flat_enums(),
+            &type_registry,
             &optional_types,
             &sequence_types,
             &record_types,
             &error_types,
+            &object_handles,
         );
         let private_ffi = PrivateFfi {
             rustbuffer_alloc: component.ffi_rustbuffer_alloc().name().to_owned(),
@@ -212,6 +223,7 @@ impl BindingsModel {
             sequence_types,
             record_types,
             error_types,
+            object_handles,
             private_ffi,
             manifest,
         })
@@ -309,6 +321,10 @@ impl BindingsModel {
         &self.error_types
     }
 
+    pub(super) fn object_handles(&self) -> &[ObjectHandle] {
+        &self.object_handles
+    }
+
     pub(super) const fn private_ffi(&self) -> &PrivateFfi {
         &self.private_ffi
     }
@@ -321,12 +337,12 @@ impl BindingsModel {
 impl Manifest {
     fn from_components(
         components: &[ComponentInterface],
-        builtin_types: &[BuiltinType],
-        flat_enums: &[FlatEnum],
+        type_registry: &TypeRegistry,
         optional_types: &[OptionalType],
         sequence_types: &[SequenceType],
         record_types: &[RecordType],
         error_types: &[ErrorType],
+        object_handles: &[ObjectHandle],
     ) -> Self {
         let component_manifests = components
             .iter()
@@ -340,18 +356,23 @@ impl Manifest {
         Self {
             schema_version: MANIFEST_SCHEMA_VERSION,
             generation: GenerationManifest {
-                phase: "rich-errors",
+                phase: "opaque-handles",
                 artifacts: [
                     "wallet_engine.h",
                     "wallet_engine.c",
                     "wallet_engine.c-api.json",
                 ],
-                rendered_builtin_types: builtin_types
+                rendered_builtin_types: type_registry
+                    .builtin_types()
                     .iter()
                     .copied()
                     .map(BuiltinTypeManifest::from)
                     .collect(),
-                rendered_flat_enums: flat_enums.iter().map(FlatEnumManifest::from).collect(),
+                rendered_flat_enums: type_registry
+                    .flat_enums()
+                    .iter()
+                    .map(FlatEnumManifest::from)
+                    .collect(),
                 rendered_optional_types: optional_types
                     .iter()
                     .map(OptionalTypeManifest::from)
@@ -362,6 +383,10 @@ impl Manifest {
                     .collect(),
                 rendered_record_types: record_types.iter().map(RecordTypeManifest::from).collect(),
                 rendered_error_types: error_types.iter().map(ErrorTypeManifest::from).collect(),
+                rendered_object_handles: object_handles
+                    .iter()
+                    .map(ObjectHandleManifest::from)
+                    .collect(),
                 rendered_semantic_operation_count: 0,
                 pending_semantic_operation_count,
             },
@@ -478,6 +503,16 @@ impl From<&ErrorType> for ErrorTypeManifest {
     }
 }
 
+impl From<&ObjectHandle> for ObjectHandleManifest {
+    fn from(value: &ObjectHandle) -> Self {
+        Self {
+            rust: value.rust_name().to_owned(),
+            c: value.c_name().to_owned(),
+            kind: value.kind().manifest_name(),
+        }
+    }
+}
+
 impl PrivateFfi {
     pub(super) fn rustbuffer_alloc(&self) -> &str {
         &self.rustbuffer_alloc
@@ -568,6 +603,7 @@ mod tests {
         assert!(manifest.generation.rendered_sequence_types.is_empty());
         assert!(manifest.generation.rendered_record_types.is_empty());
         assert!(manifest.generation.rendered_error_types.is_empty());
+        assert!(manifest.generation.rendered_object_handles.is_empty());
         assert_eq!(manifest.components.len(), 1);
         assert_eq!(manifest.components[0].crate_name, "wallet_engine");
         Ok(())
@@ -596,7 +632,7 @@ mod tests {
         let manifest = model.manifest();
         let enum_ = &manifest.generation.rendered_flat_enums[0];
 
-        assert_eq!(manifest.generation.phase, "rich-errors");
+        assert_eq!(manifest.generation.phase, "opaque-handles");
         assert_eq!(enum_.rust, "Network");
         assert_eq!(enum_.variants[0].value, 0);
         assert_eq!(enum_.variants[1].value, 1);
@@ -691,6 +727,30 @@ mod tests {
         );
         assert_eq!(error.variants[1].fields[0].c_type, "uint64_t");
         assert!(!serde_json::to_string(model.manifest())?.contains("wire_tag"));
+        Ok(())
+    }
+
+    #[test]
+    fn manifest_records_opaque_object_handle_kinds() -> Result<()> {
+        let component = ComponentInterface::from_webidl(
+            r"
+            namespace wallet_engine {};
+            interface Client { constructor(); };
+            [Trait, WithForeign]
+            interface Host { void execute(); };
+            ",
+            "wallet_engine",
+        )?;
+        let model = BindingsModel::from_components(&[component])?;
+        let handles = &model.manifest().generation.rendered_object_handles;
+
+        assert_eq!(handles.len(), 2);
+        assert_eq!(handles[0].rust, "Client");
+        assert_eq!(handles[0].c, "WalletEngineClient");
+        assert_eq!(handles[0].kind, "rust_object");
+        assert_eq!(handles[1].rust, "Host");
+        assert_eq!(handles[1].kind, "foreign_callback_interface");
+        assert!(!serde_json::to_string(model.manifest())?.contains("u64"));
         Ok(())
     }
 }

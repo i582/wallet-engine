@@ -177,6 +177,11 @@ mod tests {
                 Failed(Network kind, string diagnostic, u64? retry_after_ms);
                 Many(sequence<string> diagnostics);
             };
+
+            interface ObjectFixture { constructor(); };
+
+            [Trait, WithForeign]
+            interface HostFixture { void execute(); };
             "#,
             "wallet_engine",
         )

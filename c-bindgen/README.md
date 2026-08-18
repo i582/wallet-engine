@@ -16,6 +16,8 @@ The generator currently:
 - generates borrowed C list views and codecs for supported sequences;
 - generates field-for-field C views and codecs for supported records;
 - generates tag-plus-payload C values and codecs for supported rich errors;
+- generates typed opaque declarations for Rust objects and foreign callback
+  interfaces;
 - compiles the generated facade as strict C11 in its test suite.
 
 Remaining compound types, callback adapters, and export lists will be added on
@@ -55,9 +57,10 @@ implemented. C++ compatibility is deliberately deferred until the C ABI is
 complete and stable.
 
 The current type slice discovers the builtins, flat non-error enums, supported
-optional values, sequences, records, and rich declared errors used by the real
-`ComponentInterface`, records their public Rust-to-C mapping in the manifest,
-and generates borrowed views plus private wire helpers. Tests compile the
+optional values, sequences, records, rich declared errors, Rust objects, and
+foreign callback interfaces used by the real `ComponentInterface`. It records
+their public Rust-to-C mapping in the manifest and generates borrowed views,
+private wire helpers, and typed opaque handle declarations. Tests compile the
 facade with strict C11 warnings and execute its codecs against known UniFFI
 wire values.
 
@@ -309,12 +312,33 @@ error becomes available after the custom-type slice. The fielded non-error
 
 ### Objects and callables
 
-| Rust / UniFFI | Planned public C |
-|---|---|
-| `Arc<WalletClient>` | opaque `WalletEngineWalletClient *` with retain/release |
-| synchronous `Result<T, E>` | immediate ABI status plus typed inline result callback |
-| `async fn method(...) -> Result<T, E>` | `wallet_engine_*_start`, typed result callback, and cancellable operation handle |
-| `#[uniffi::export(foreign)]` trait | versioned C callback table plus one-shot completion handles |
+Rust objects and foreign callback interfaces now get distinct public incomplete
+struct declarations. For example:
+
+```c
+typedef struct WalletEngineWalletClient WalletEngineWalletClient;
+typedef struct WalletEngineWalletHttpHost WalletEngineWalletHttpHost;
+```
+
+Generated functions will accept pointers to these types, so C cannot
+accidentally pass a host interface where a wallet object is required. UniFFI's
+private raw object representation is an opaque `u64` handle, but that integer
+does not appear in the public header or manifest. This slice declares the types
+only; it does not yet create, retain, release, or invoke them.
+
+The real metadata currently produces four opaque declarations:
+`WalletEngineWalletClient` and `WalletEngineWalletLifecycle` for Rust-owned
+objects, plus `WalletEngineWalletHttpHost` and
+`WalletEngineWalletPlatformHost` for foreign callback interfaces. Both modern
+`#[uniffi::export(foreign)]` traits and legacy UniFFI callback interfaces are
+recognized.
+
+| Rust / UniFFI | Public C | Status |
+|---|---|---|
+| `Arc<WalletClient>` | opaque `WalletEngineWalletClient *` | Type declaration implemented; constructors and retain/release planned |
+| `#[uniffi::export(foreign)]` trait | opaque typed instance plus versioned callback table | Type declaration implemented; callback adapter planned |
+| synchronous `Result<T, E>` | immediate ABI status plus typed inline result callback | Planned |
+| `async fn method(...) -> Result<T, E>` | `wallet_engine_*_start`, typed result callback, and cancellable operation handle | Planned |
 
 Async Rust methods remain asynchronous. The C facade will drive UniFFI
 `poll`/`complete`/`free`; it will not use `block_on` or turn an async operation
