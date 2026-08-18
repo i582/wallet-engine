@@ -7,6 +7,7 @@ use crate::{
     custom_type_map::{SemanticCustomType, collect_semantic_custom_types},
     enum_map::FlatEnum,
     error_map::{ErrorType, collect_error_types},
+    fielded_enum_map::{FieldedEnumType, collect_fielded_enum_types},
     object_map::{ObjectHandle, collect_object_handles},
     optional_map::OptionalType,
     record_map::RecordType,
@@ -15,7 +16,7 @@ use crate::{
     type_registry::TypeRegistry,
 };
 
-pub(super) const MANIFEST_SCHEMA_VERSION: u32 = 11;
+pub(super) const MANIFEST_SCHEMA_VERSION: u32 = 12;
 const EXPERIMENTAL_ABI_VERSION: u32 = 0;
 const EXPECTED_CRATE_NAME: &str = "wallet_engine";
 const EXPECTED_NAMESPACE: &str = "wallet_engine";
@@ -26,6 +27,7 @@ pub(super) struct BindingsModel {
     uniffi_contract_version: u32,
     type_registry: TypeRegistry,
     custom_types: Vec<SemanticCustomType>,
+    fielded_enum_types: Vec<FieldedEnumType>,
     compound_types: CompoundTypes,
     error_types: Vec<ErrorType>,
     object_handles: Vec<ObjectHandle>,
@@ -53,10 +55,11 @@ struct GenerationManifest {
     rendered_builtin_types: Vec<BuiltinTypeManifest>,
     rendered_flat_enums: Vec<FlatEnumManifest>,
     rendered_custom_types: Vec<CustomTypeManifest>,
+    rendered_fielded_enums: Vec<TaggedEnumManifest>,
     rendered_optional_types: Vec<OptionalTypeManifest>,
     rendered_sequence_types: Vec<SequenceTypeManifest>,
     rendered_record_types: Vec<RecordTypeManifest>,
-    rendered_error_types: Vec<ErrorTypeManifest>,
+    rendered_error_types: Vec<TaggedEnumManifest>,
     rendered_object_handles: Vec<ObjectHandleManifest>,
     rendered_semantic_operation_count: usize,
     pending_semantic_operation_count: usize,
@@ -137,24 +140,24 @@ struct RecordFieldManifest {
 }
 
 #[derive(Debug, Serialize)]
-struct ErrorTypeManifest {
+struct TaggedEnumManifest {
     rust: String,
     c: String,
     tag_c: String,
-    variants: Vec<ErrorVariantManifest>,
+    variants: Vec<TaggedEnumVariantManifest>,
 }
 
 #[derive(Debug, Serialize)]
-struct ErrorVariantManifest {
+struct TaggedEnumVariantManifest {
     rust: String,
     c: String,
     value: u32,
     payload_c: Option<String>,
-    fields: Vec<ErrorFieldManifest>,
+    fields: Vec<TaggedEnumFieldManifest>,
 }
 
 #[derive(Debug, Serialize)]
-struct ErrorFieldManifest {
+struct TaggedEnumFieldManifest {
     rust: String,
     c: String,
     rust_type: String,
@@ -206,6 +209,7 @@ impl BindingsModel {
 
         let mut type_registry = TypeRegistry::collect(component)?;
         let custom_types = collect_semantic_custom_types(component, &mut type_registry)?;
+        let fielded_enum_types = collect_fielded_enum_types(component, &mut type_registry)?;
         let compound_types = CompoundTypes::collect(component, &mut type_registry)?;
         let error_types = collect_error_types(component, &mut type_registry)?;
         let object_handles = collect_object_handles(component, &mut type_registry)?;
@@ -213,6 +217,7 @@ impl BindingsModel {
             components,
             &type_registry,
             &custom_types,
+            &fielded_enum_types,
             &compound_types,
             &error_types,
             &object_handles,
@@ -227,6 +232,7 @@ impl BindingsModel {
             uniffi_contract_version: component.uniffi_contract_version(),
             type_registry,
             custom_types,
+            fielded_enum_types,
             compound_types,
             error_types,
             object_handles,
@@ -259,6 +265,7 @@ impl BindingsModel {
     pub(super) fn needs_i32_wire_codec(&self) -> bool {
         self.has_builtin_type(BuiltinType::Int32)
             || self.has_flat_enums()
+            || self.has_fielded_enum_types()
             || self.has_sequence_types()
             || self.has_error_types()
     }
@@ -279,6 +286,7 @@ impl BindingsModel {
         self.has_builtin_type(BuiltinType::String)
             || self.has_builtin_type(BuiltinType::Bytes)
             || self.has_flat_enums()
+            || self.has_fielded_enum_types()
             || self.has_optional_types()
             || self.has_sequence_types()
             || self.has_record_types()
@@ -288,6 +296,10 @@ impl BindingsModel {
     pub(super) fn needs_output_arena(&self) -> bool {
         self.has_sequence_types()
             || self.has_record_types()
+            || self
+                .fielded_enum_types
+                .iter()
+                .any(FieldedEnumType::read_needs_arena)
             || self.error_types.iter().any(ErrorType::read_needs_arena)
     }
 
@@ -297,6 +309,14 @@ impl BindingsModel {
 
     pub(super) fn custom_types(&self) -> &[SemanticCustomType] {
         &self.custom_types
+    }
+
+    pub(super) const fn has_fielded_enum_types(&self) -> bool {
+        !self.fielded_enum_types.is_empty()
+    }
+
+    pub(super) fn fielded_enum_types(&self) -> &[FieldedEnumType] {
+        &self.fielded_enum_types
     }
 
     pub(super) fn has_optional_types(&self) -> bool {
@@ -341,6 +361,7 @@ impl Manifest {
         components: &[ComponentInterface],
         type_registry: &TypeRegistry,
         custom_types: &[SemanticCustomType],
+        fielded_enum_types: &[FieldedEnumType],
         compound_types: &CompoundTypes,
         error_types: &[ErrorType],
         object_handles: &[ObjectHandle],
@@ -357,7 +378,7 @@ impl Manifest {
         Self {
             schema_version: MANIFEST_SCHEMA_VERSION,
             generation: GenerationManifest {
-                phase: "semantic-custom-types",
+                phase: "fielded-enums",
                 artifacts: [
                     "wallet_engine.h",
                     "wallet_engine.c",
@@ -375,6 +396,10 @@ impl Manifest {
                     .map(FlatEnumManifest::from)
                     .collect(),
                 rendered_custom_types: custom_types.iter().map(CustomTypeManifest::from).collect(),
+                rendered_fielded_enums: fielded_enum_types
+                    .iter()
+                    .map(TaggedEnumManifest::from)
+                    .collect(),
                 rendered_optional_types: compound_types
                     .optionals()
                     .iter()
@@ -390,7 +415,7 @@ impl Manifest {
                     .iter()
                     .map(RecordTypeManifest::from)
                     .collect(),
-                rendered_error_types: error_types.iter().map(ErrorTypeManifest::from).collect(),
+                rendered_error_types: error_types.iter().map(TaggedEnumManifest::from).collect(),
                 rendered_object_handles: object_handles
                     .iter()
                     .map(ObjectHandleManifest::from)
@@ -494,8 +519,8 @@ impl From<&RecordType> for RecordTypeManifest {
     }
 }
 
-impl From<&ErrorType> for ErrorTypeManifest {
-    fn from(value: &ErrorType) -> Self {
+impl From<&crate::tagged_enum::TaggedEnumType> for TaggedEnumManifest {
+    fn from(value: &crate::tagged_enum::TaggedEnumType) -> Self {
         Self {
             rust: value.rust_name().to_owned(),
             c: value.c_name().to_owned(),
@@ -503,7 +528,7 @@ impl From<&ErrorType> for ErrorTypeManifest {
             variants: value
                 .variants()
                 .iter()
-                .map(|variant| ErrorVariantManifest {
+                .map(|variant| TaggedEnumVariantManifest {
                     rust: variant.rust_name().to_owned(),
                     c: variant.c_constant().to_owned(),
                     value: variant.public_value(),
@@ -511,7 +536,7 @@ impl From<&ErrorType> for ErrorTypeManifest {
                     fields: variant
                         .fields()
                         .iter()
-                        .map(|field| ErrorFieldManifest {
+                        .map(|field| TaggedEnumFieldManifest {
                             rust: field.rust_name().to_owned(),
                             c: field.c_name().to_owned(),
                             rust_type: field.rust_type_name().to_owned(),
@@ -621,6 +646,7 @@ mod tests {
         assert!(manifest.generation.rendered_builtin_types.is_empty());
         assert!(manifest.generation.rendered_flat_enums.is_empty());
         assert!(manifest.generation.rendered_custom_types.is_empty());
+        assert!(manifest.generation.rendered_fielded_enums.is_empty());
         assert!(manifest.generation.rendered_optional_types.is_empty());
         assert!(manifest.generation.rendered_sequence_types.is_empty());
         assert!(manifest.generation.rendered_record_types.is_empty());
@@ -654,7 +680,7 @@ mod tests {
         let manifest = model.manifest();
         let enum_ = &manifest.generation.rendered_flat_enums[0];
 
-        assert_eq!(manifest.generation.phase, "semantic-custom-types");
+        assert_eq!(manifest.generation.phase, "fielded-enums");
         assert_eq!(enum_.rust, "Network");
         assert_eq!(enum_.variants[0].value, 0);
         assert_eq!(enum_.variants[1].value, 1);
@@ -739,6 +765,38 @@ mod tests {
         assert_eq!(record.fields[0].c_type, "WalletEngineStringView");
         assert_eq!(record.fields[1].rust_type, "u64");
         assert_eq!(record.fields[1].c_type, "uint64_t");
+        Ok(())
+    }
+
+    #[test]
+    fn manifest_records_public_fielded_enum_variants_without_private_wire_tags() -> Result<()> {
+        let component = ComponentInterface::from_webidl(
+            r"
+            namespace wallet_engine {};
+            [Enum]
+            interface SendAmount {
+                Exact(u64 nanograms);
+                All();
+            };
+            ",
+            "wallet_engine",
+        )?;
+        let model = BindingsModel::from_components(&[component])?;
+        let enum_ = &model.manifest().generation.rendered_fielded_enums[0];
+
+        assert_eq!(enum_.rust, "SendAmount");
+        assert_eq!(enum_.c, "WalletEngineSendAmount");
+        assert_eq!(enum_.tag_c, "WalletEngineSendAmountTag");
+        assert_eq!(enum_.variants[0].value, 0);
+        assert_eq!(
+            enum_.variants[0].payload_c.as_deref(),
+            Some("WalletEngineSendAmountExactPayload")
+        );
+        assert_eq!(enum_.variants[0].fields[0].rust, "nanograms");
+        assert_eq!(enum_.variants[0].fields[0].c_type, "uint64_t");
+        assert_eq!(enum_.variants[1].value, 1);
+        assert!(enum_.variants[1].payload_c.is_none());
+        assert!(!serde_json::to_string(model.manifest())?.contains("wire_tag"));
         Ok(())
     }
 

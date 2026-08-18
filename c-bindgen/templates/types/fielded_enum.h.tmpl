@@ -1,0 +1,12 @@
+
+/* Rust fielded enum `{{RUST_NAME}}` with a borrowed payload view. */
+typedef uint32_t {{TAG_C_NAME}};
+{{TAG_CONSTANTS}}
+
+{{PAYLOAD_STRUCTS}}typedef union {{PAYLOAD_C_NAME}} {
+{{PAYLOAD_MEMBERS}}} {{PAYLOAD_C_NAME}};
+
+typedef struct {{C_NAME}} {
+    {{TAG_C_NAME}} tag;
+    {{PAYLOAD_C_NAME}} payload;
+} {{C_NAME}};

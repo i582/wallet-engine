@@ -938,6 +938,73 @@ static void test_empty_record_round_trip(void) {
     assert(live_allocations == 0u);
 }
 
+static void test_fielded_enum_round_trip(void) {
+    static const char nanograms[] = {'1', '0', '0'};
+    static const uint8_t exact_wire[] = {
+        0x00u, 0x00u, 0x00u, 0x01u,
+        0x00u, 0x00u, 0x00u, 0x03u, '1', '0', '0',
+    };
+    static const uint8_t all_wire[] = {0x00u, 0x00u, 0x00u, 0x02u};
+    static uint8_t unknown_tag[] = {0x00u, 0x00u, 0x00u, 0x03u};
+    static uint8_t truncated_exact[] = {
+        0x00u, 0x00u, 0x00u, 0x01u,
+        0x00u, 0x00u, 0x00u, 0x03u, '1', '0',
+    };
+    WalletEngineSendAmount input = {
+        .tag = WALLET_ENGINE_SEND_AMOUNT_EXACT,
+        .payload = {
+            .exact = {
+                .nanograms = {nanograms, sizeof(nanograms)},
+            },
+        },
+    };
+    WalletEngineSendAmount actual = {0};
+    WalletEnginePrivateRustBuffer buffer = {0};
+
+    assert(wallet_engine_private_lower_send_amount(input, &buffer)
+        == WALLET_ENGINE_ABI_STATUS_OK);
+    assert(buffer.len == sizeof(exact_wire));
+    assert_bytes(buffer.data, exact_wire, sizeof(exact_wire));
+    assert(wallet_engine_private_lift_send_amount(&buffer, &actual)
+        == WALLET_ENGINE_ABI_STATUS_OK);
+    assert(actual.tag == WALLET_ENGINE_SEND_AMOUNT_EXACT);
+    assert(actual.payload.exact.nanograms.len == sizeof(nanograms));
+    assert_bytes(
+        (const uint8_t *)actual.payload.exact.nanograms.data,
+        (const uint8_t *)nanograms,
+        sizeof(nanograms)
+    );
+    wallet_engine_private_rustbuffer_free(buffer);
+
+    buffer = (WalletEnginePrivateRustBuffer){0};
+    assert(wallet_engine_private_lower_send_amount(
+        (WalletEngineSendAmount){.tag = WALLET_ENGINE_SEND_AMOUNT_ALL},
+        &buffer
+    ) == WALLET_ENGINE_ABI_STATUS_OK);
+    assert(buffer.len == sizeof(all_wire));
+    assert_bytes(buffer.data, all_wire, sizeof(all_wire));
+    wallet_engine_private_rustbuffer_free(buffer);
+
+    buffer = (WalletEnginePrivateRustBuffer){0};
+    assert(wallet_engine_private_lower_send_amount(
+        (WalletEngineSendAmount){.tag = (WalletEngineSendAmountTag)2u},
+        &buffer
+    ) == WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT);
+    assert(buffer.data == NULL && buffer.len == 0u && buffer.capacity == 0u);
+
+    buffer = (WalletEnginePrivateRustBuffer){
+        sizeof(unknown_tag), sizeof(unknown_tag), unknown_tag,
+    };
+    assert(wallet_engine_private_lift_send_amount(&buffer, &actual)
+        == WALLET_ENGINE_ABI_STATUS_PANIC);
+    buffer = (WalletEnginePrivateRustBuffer){
+        sizeof(truncated_exact), sizeof(truncated_exact), truncated_exact,
+    };
+    assert(wallet_engine_private_lift_send_amount(&buffer, &actual)
+        == WALLET_ENGINE_ABI_STATUS_PANIC);
+    assert(live_allocations == 0u);
+}
+
 static void test_rich_error_round_trip(void) {
     static const char diagnostic[] = {'T', 'O', 'N'};
     static const uint8_t expected[] = {
@@ -1230,6 +1297,7 @@ int main(void) {
     test_nested_compound_round_trip();
     test_custom_string_type_round_trip();
     test_empty_record_round_trip();
+    test_fielded_enum_round_trip();
     test_rich_error_round_trip();
     test_string_round_trip();
     test_empty_string_round_trip();

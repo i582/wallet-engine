@@ -15,15 +15,16 @@ The generator currently:
 - generates public C wrappers and codecs for supported optional values;
 - generates borrowed C list views and codecs for supported sequences;
 - generates field-for-field C views and codecs for supported records;
+- generates tag-plus-payload C values and codecs for fielded non-error enums;
 - generates tag-plus-payload C values and codecs for supported rich errors;
 - generates semantic C views for string-backed UniFFI custom types;
 - generates typed opaque declarations for Rust objects and foreign callback
   interfaces;
 - compiles the generated facade as strict C11 in its test suite.
 
-Fielded non-error enums, callback adapters, and export lists will be added on
-top of the normalized component model. The crate intentionally has no
-dependency on the `wallet-engine` or `c-bindings` crates.
+Callback adapters and export lists will be added on top of the normalized
+component model. The crate intentionally has no dependency on the
+`wallet-engine` or `c-bindings` crates.
 
 From the repository root, the experimental recipe builds the library and runs
 the generator without touching the production `bindings/c` output:
@@ -57,13 +58,13 @@ and callable instead of being postponed until the complete API model is
 implemented. C++ compatibility is deliberately deferred until the C ABI is
 complete and stable.
 
-The current type slice discovers the builtins, flat non-error enums, supported
-optional values, sequences, records, rich declared errors, semantic custom
-types, Rust objects, and foreign callback interfaces used by the real
-`ComponentInterface`. It records their public Rust-to-C mapping in the manifest
-and generates borrowed views, private wire helpers, and typed opaque handle
-declarations. Tests compile the facade with strict C11 warnings and execute its
-codecs against known UniFFI wire values.
+The current type slice discovers the builtins, flat and fielded non-error
+enums, supported optional values, sequences, records, rich declared errors,
+semantic custom types, Rust objects, and foreign callback interfaces used by
+the real `ComponentInterface`. It records their public Rust-to-C mapping in the
+manifest and generates borrowed views, private wire helpers, and typed opaque
+handle declarations. Tests compile the facade with strict C11 warnings and
+execute its codecs against known UniFFI wire values.
 
 ## Rust to C mapping
 
@@ -143,6 +144,7 @@ metadata; it never frees Rust-owned memory with the C allocator.
 | `Option<T>` | `RustBuffer` | one-byte `0`/`1` tag followed by nested `T` for `Some` |
 | `Vec<T>` / `Sequence<T>` | `RustBuffer` | big-endian `i32` item count followed by each nested `T` |
 | record | `RustBuffer` | fields serialized in their declared order without C padding |
+| fielded enum | `RustBuffer` | big-endian one-based `i32` variant tag followed by the selected payload fields |
 | rich error | `RustBuffer` | big-endian one-based `i32` variant tag followed by the selected payload fields |
 | string-backed custom type | `RustBuffer` | same raw/nested string representation, with a distinct semantic C view |
 
@@ -154,10 +156,10 @@ The pure codec behavior is tested in `tests/codec.c`. That C11 executable
 checks exact wire bytes and write/read round trips for every integer width,
 booleans, strings, bytes, a flat enum, optional values, sequences of scalars,
 strings, and flat enums, direct and nested records, nested options and
-sequences of records, a semantic custom string type, and a rich error with both
-fieldless and payload variants. The malformed cases cover truncated and
-trailing data, invalid UTF-8, impossible lengths, unknown tags, and arena
-rollback.
+sequences of records, a semantic custom string type, a fielded enum, and a rich
+error with both fieldless and payload variants. The malformed cases cover
+truncated and trailing data, invalid UTF-8, impossible lengths, unknown tags,
+and arena rollback.
 
 ### Flat enums
 
@@ -186,8 +188,8 @@ directions, so an unknown public value or wire tag is rejected instead of being
 passed through accidentally.
 
 The current Wallet Engine component contains 15 supported flat non-error
-enums. Fielded non-error enums and flat declared errors remain separate planned
-slices; rich declared errors are described below.
+enums. Fielded non-error enums and rich declared errors use a separate tagged
+representation described below.
 
 ### Optional values
 
@@ -239,7 +241,7 @@ and non-empty validation stays in the Rust custom-type lift implementation.
 |---|---|---|---|
 | `Vec<T>` | `WalletEngineTListView { const T *data; size_t len; }` | Implemented for registered item types | Borrowed contiguous sequence. |
 | record `T` | `WalletEngineTView` | Implemented when every field type is registered | Fields are converted recursively. |
-| enum with fields | kind/tag plus generated payload union | Planned | Only the payload selected by the tag is active. |
+| enum with fields | stable tag plus generated payload union | Implemented when every payload field type is registered | Only the payload selected by the tag is active. |
 | rich error enum `E` | stable tag plus generated payload union | Implemented when every payload field type is registered | Declared errors are separate from immediate ABI failures. |
 
 For example, `Vec<String>` becomes `WalletEngineStringListView` containing
@@ -274,13 +276,47 @@ malformed. A fieldless Rust record gets one public `uint8_t reserved` member
 because ISO C does not allow an empty struct, while its UniFFI wire value stays
 zero bytes.
 
-The real Wallet Engine metadata currently produces 30 of 33 record views. The
-custom-type closure adds `AccountSnapshot`, `ActivityCursor`, `ActivityItem`,
-`ResolutionInfo`, `SendEmulationAction`, `SendResult`, `WalletDescriptor`,
-`CreatedWallet`, `SendEmulation`, `SendSnapshot`, `WalletClientConfig`,
-`WalletSnapshot`, and `WalletUpdate` to the previous 17. The remaining
-`SendRequest`, `SendPreviewRequest`, and `SendPreview` depend on the fielded
-non-error enum `SendAmount`.
+The real Wallet Engine metadata now produces all 33 record views. Registering
+the fielded `SendAmount` type before the compound fixed point unlocks the final
+`SendRequest`, `SendPreviewRequest`, and `SendPreview` records.
+
+### Fielded enums
+
+A fielded non-error enum uses the same checked tagged-union machinery as a rich
+error, while remaining a separate public type and manifest category. The real
+component currently contains one such enum:
+
+```rust
+pub enum SendAmount {
+    Exact { nanograms: UnsignedDecimalString },
+    All,
+}
+```
+
+It becomes:
+
+```c
+typedef uint32_t WalletEngineSendAmountTag;
+#define WALLET_ENGINE_SEND_AMOUNT_EXACT ((WalletEngineSendAmountTag)0u)
+#define WALLET_ENGINE_SEND_AMOUNT_ALL ((WalletEngineSendAmountTag)1u)
+
+typedef struct WalletEngineSendAmountExactPayload {
+    WalletEngineUnsignedDecimalStringView nanograms;
+} WalletEngineSendAmountExactPayload;
+
+typedef union WalletEngineSendAmountPayload {
+    WalletEngineSendAmountExactPayload exact;
+} WalletEngineSendAmountPayload;
+
+typedef struct WalletEngineSendAmount {
+    WalletEngineSendAmountTag tag;
+    WalletEngineSendAmountPayload payload;
+} WalletEngineSendAmount;
+```
+
+The public tags are stable and zero-based. The private codec explicitly maps
+them to UniFFI's one-based `i32` wire tags, serializes only the active payload,
+and rejects unknown public or wire tags. For `ALL`, the payload is ignored.
 
 ### Declared rich errors
 
@@ -323,7 +359,7 @@ The real metadata currently produces five rich error types: `HttpHostError`,
 `JournalHostError`, `ProtectedSecretHostError`, `WalletClientError`, and
 `WalletLifecycleError`. `WalletClientError` becomes complete only after
 `UnsignedDecimalString` is registered; the generator never publishes its
-earlier partial shape. The fielded non-error `SendAmount` is still pending.
+earlier partial shape.
 
 ### Objects and callables
 

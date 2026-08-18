@@ -181,9 +181,19 @@ mod tests {
                 sequence<SemanticString> values;
             };
 
+            dictionary FieldedEnumFixture {
+                SendAmount amount;
+            };
+
             dictionary EmptyRecordFixture {};
 
             enum Network { "mainnet", "testnet" };
+
+            [Enum]
+            interface SendAmount {
+                Exact(SemanticString nanograms);
+                All();
+            };
 
             [Error]
             interface ExampleError {

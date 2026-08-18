@@ -2,9 +2,9 @@ use std::fmt::Write as _;
 
 use crate::{
     compound_map::CompoundTypeRef,
-    error_map::ErrorType,
     model::BindingsModel,
     object_map::{HandleKind, ObjectHandle},
+    tagged_enum::TaggedEnumType,
     template,
     type_map::BuiltinType,
 };
@@ -22,6 +22,7 @@ const RECORD_FIELD_TEMPLATE: &str = include_str!("../../templates/types/record_f
 const EMPTY_RECORD_FIELD_TEMPLATE: &str =
     include_str!("../../templates/types/empty_record_field.h.tmpl");
 const ERROR_TEMPLATE: &str = include_str!("../../templates/types/error.h.tmpl");
+const FIELDED_ENUM_TEMPLATE: &str = include_str!("../../templates/types/fielded_enum.h.tmpl");
 const ERROR_PAYLOAD_STRUCT_TEMPLATE: &str =
     include_str!("../../templates/types/error_payload_struct.h.tmpl");
 const ERROR_PAYLOAD_MEMBER_TEMPLATE: &str =
@@ -74,11 +75,14 @@ pub(super) fn render(model: &BindingsModel) -> String {
             ],
         ));
     }
+    for enum_ in model.fielded_enum_types() {
+        type_declarations.push_str(&render_tagged_enum(enum_, FIELDED_ENUM_TEMPLATE));
+    }
     for compound in model.compound_types() {
         type_declarations.push_str(&render_compound_type(compound));
     }
     for error in model.error_types() {
-        type_declarations.push_str(&render_error(error));
+        type_declarations.push_str(&render_tagged_enum(error, ERROR_TEMPLATE));
     }
     for handle in model.object_handles() {
         type_declarations.push_str(&render_object_handle(handle));
@@ -156,11 +160,11 @@ fn render_object_handle(handle: &ObjectHandle) -> String {
     )
 }
 
-fn render_error(error: &ErrorType) -> String {
+fn render_tagged_enum(enum_: &TaggedEnumType, source: &str) -> String {
     let mut tag_constants = String::new();
     let mut payload_structs = String::new();
     let mut payload_members = String::new();
-    for (index, variant) in error.variants().iter().enumerate() {
+    for (index, variant) in enum_.variants().iter().enumerate() {
         if index != 0 {
             tag_constants.push('\n');
         }
@@ -168,7 +172,7 @@ fn render_error(error: &ErrorType) -> String {
             tag_constants,
             "#define {} (({}){}u)",
             variant.c_constant(),
-            error.tag_c_name(),
+            enum_.tag_c_name(),
             variant.public_value(),
         );
         let Some(payload_c_name) = variant.payload_c_name() else {
@@ -202,15 +206,15 @@ fn render_error(error: &ErrorType) -> String {
     }
 
     template::render(
-        ERROR_TEMPLATE,
+        source,
         &[
-            ("RUST_NAME", error.rust_name()),
-            ("TAG_C_NAME", error.tag_c_name()),
+            ("RUST_NAME", enum_.rust_name()),
+            ("TAG_C_NAME", enum_.tag_c_name()),
             ("TAG_CONSTANTS", &tag_constants),
             ("PAYLOAD_STRUCTS", &payload_structs),
-            ("PAYLOAD_C_NAME", error.payload_c_name()),
+            ("PAYLOAD_C_NAME", enum_.payload_c_name()),
             ("PAYLOAD_MEMBERS", &payload_members),
-            ("C_NAME", error.c_name()),
+            ("C_NAME", enum_.c_name()),
         ],
     )
 }
@@ -448,6 +452,43 @@ mod tests {
         assert!(header.contains("typedef union WalletEngineHostFailurePayload"));
         assert!(header.contains("WalletEngineHostFailureFailedPayload failed;"));
         assert!(header.contains("WalletEngineHostFailureTag tag;"));
+        Ok(())
+    }
+
+    #[test]
+    fn renders_fielded_enum_as_tag_and_named_payload_union() -> Result<()> {
+        let component = ComponentInterface::from_webidl(
+            r"
+            namespace wallet_engine {};
+            [Enum]
+            interface SendAmount {
+                Exact(u64 nanograms);
+                All();
+            };
+            ",
+            "wallet_engine",
+        )?;
+        let model = BindingsModel::from_components(&[component])?;
+        let header = render(&model);
+
+        assert!(
+            header.contains("/* Rust fielded enum `SendAmount` with a borrowed payload view. */")
+        );
+        assert!(header.contains("typedef uint32_t WalletEngineSendAmountTag;"));
+        assert!(
+            header.contains(
+                "#define WALLET_ENGINE_SEND_AMOUNT_EXACT ((WalletEngineSendAmountTag)0u)"
+            )
+        );
+        assert!(
+            header
+                .contains("#define WALLET_ENGINE_SEND_AMOUNT_ALL ((WalletEngineSendAmountTag)1u)")
+        );
+        assert!(header.contains("typedef struct WalletEngineSendAmountExactPayload"));
+        assert!(header.contains("uint64_t nanograms;"));
+        assert!(header.contains("typedef union WalletEngineSendAmountPayload"));
+        assert!(header.contains("WalletEngineSendAmountExactPayload exact;"));
+        assert!(header.contains("WalletEngineSendAmountTag tag;"));
         Ok(())
     }
 }

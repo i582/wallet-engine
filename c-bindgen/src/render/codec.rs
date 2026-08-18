@@ -3,11 +3,11 @@ use std::fmt::Write as _;
 use crate::{
     compound_map::CompoundTypeRef,
     enum_map::FlatEnum,
-    error_map::{ErrorField, ErrorType, ErrorVariant},
     model::BindingsModel,
     optional_map::OptionalType,
     record_map::{RecordField, RecordType},
     sequence_map::SequenceType,
+    tagged_enum::{TaggedEnumField, TaggedEnumType, TaggedEnumVariant},
     template,
     type_map::BuiltinType,
     type_registry::NestedWireSize,
@@ -143,6 +143,9 @@ pub(super) fn render(model: &BindingsModel) -> String {
             ],
         ));
     }
+    for enum_ in model.fielded_enum_types() {
+        output.push_str(&render_tagged_enum(enum_));
+    }
     for compound in model.compound_types() {
         output.push_str(&match compound {
             CompoundTypeRef::Optional(optional) => render_optional(optional),
@@ -151,7 +154,7 @@ pub(super) fn render(model: &BindingsModel) -> String {
         });
     }
     for error in model.error_types() {
-        output.push_str(&render_error(error));
+        output.push_str(&render_tagged_enum(error));
     }
 
     output
@@ -340,16 +343,16 @@ fn render_record_measure_field(field: &RecordField) -> String {
     }
 }
 
-fn render_error(error: &ErrorType) -> String {
+fn render_tagged_enum(enum_: &TaggedEnumType) -> String {
     let mut measure_cases = String::new();
     let mut write_cases = String::new();
     let mut read_cases = String::new();
-    for variant in error.variants() {
-        measure_cases.push_str(&render_error_measure_case(variant));
-        write_cases.push_str(&render_error_write_case(variant));
-        read_cases.push_str(&render_error_read_case(error, variant));
+    for variant in enum_.variants() {
+        measure_cases.push_str(&render_tagged_enum_measure_case(variant));
+        write_cases.push_str(&render_tagged_enum_write_case(variant));
+        read_cases.push_str(&render_tagged_enum_read_case(enum_, variant));
     }
-    let template_source = if error.read_needs_arena() {
+    let template_source = if enum_.read_needs_arena() {
         ERROR_ARENA_CODEC
     } else {
         ERROR_CODEC
@@ -358,8 +361,8 @@ fn render_error(error: &ErrorType) -> String {
     template::render(
         template_source,
         &[
-            ("FUNCTION_NAME", error.function_name()),
-            ("C_NAME", error.c_name()),
+            ("FUNCTION_NAME", enum_.function_name()),
+            ("C_NAME", enum_.c_name()),
             ("MEASURE_CASES", &measure_cases),
             ("WRITE_CASES", &write_cases),
             ("READ_CASES", &read_cases),
@@ -367,10 +370,10 @@ fn render_error(error: &ErrorType) -> String {
     )
 }
 
-fn render_error_measure_case(variant: &ErrorVariant) -> String {
+fn render_tagged_enum_measure_case(variant: &TaggedEnumVariant) -> String {
     let mut fields = String::new();
     for field in variant.fields() {
-        fields.push_str(&render_error_measure_field(variant, field));
+        fields.push_str(&render_tagged_enum_measure_field(variant, field));
     }
     template::render(
         ERROR_MEASURE_CASE,
@@ -381,7 +384,10 @@ fn render_error_measure_case(variant: &ErrorVariant) -> String {
     )
 }
 
-fn render_error_measure_field(variant: &ErrorVariant, field: &ErrorField) -> String {
+fn render_tagged_enum_measure_field(
+    variant: &TaggedEnumVariant,
+    field: &TaggedEnumField,
+) -> String {
     match field.nested_wire_size() {
         NestedWireSize::Fixed(size) => {
             let size = size.to_string();
@@ -405,7 +411,7 @@ fn render_error_measure_field(variant: &ErrorVariant, field: &ErrorField) -> Str
     }
 }
 
-fn render_error_write_case(variant: &ErrorVariant) -> String {
+fn render_tagged_enum_write_case(variant: &TaggedEnumVariant) -> String {
     let mut fields = String::new();
     for field in variant.fields() {
         fields.push_str(&template::render(
@@ -428,12 +434,12 @@ fn render_error_write_case(variant: &ErrorVariant) -> String {
     )
 }
 
-fn render_error_read_case(error: &ErrorType, variant: &ErrorVariant) -> String {
+fn render_tagged_enum_read_case(enum_: &TaggedEnumType, variant: &TaggedEnumVariant) -> String {
     let mut fields = String::new();
     for field in variant.fields() {
         let read_template = if field.read_needs_arena() {
             ERROR_READ_ARENA_FIELD
-        } else if error.read_needs_arena() {
+        } else if enum_.read_needs_arena() {
             ERROR_READ_FIELD_WITH_ROLLBACK
         } else {
             ERROR_READ_FIELD
@@ -586,6 +592,33 @@ mod tests {
         assert!(codec.contains("out_value->tag = WALLET_ENGINE_HOST_FAILURE_CANCELLED;"));
         assert!(codec.contains("wallet_engine_private_lower_host_failure"));
         assert!(codec.contains("wallet_engine_private_lift_host_failure"));
+        Ok(())
+    }
+
+    #[test]
+    fn renders_fielded_enum_tag_and_payload_codecs() -> Result<()> {
+        let component = ComponentInterface::from_webidl(
+            r"
+            namespace wallet_engine {};
+            [Enum]
+            interface SendAmount {
+                Exact(u64 nanograms);
+                All();
+            };
+            ",
+            "wallet_engine",
+        )?;
+        let model = BindingsModel::from_components(&[component])?;
+        let codec = render(&model);
+
+        assert!(codec.contains("wallet_engine_private_measure_send_amount"));
+        assert!(codec.contains("case WALLET_ENGINE_SEND_AMOUNT_EXACT:"));
+        assert!(codec.contains("wallet_engine_private_write_i32(writer, INT32_C(1))"));
+        assert!(codec.contains("value.payload.exact.nanograms"));
+        assert!(codec.contains("case INT32_C(2):"));
+        assert!(codec.contains("out_value->tag = WALLET_ENGINE_SEND_AMOUNT_ALL;"));
+        assert!(codec.contains("wallet_engine_private_lower_send_amount"));
+        assert!(codec.contains("wallet_engine_private_lift_send_amount"));
         Ok(())
     }
 
