@@ -77,17 +77,7 @@ impl App {
         };
 
         match app.store.wallet() {
-            Ok(Some(descriptor)) => match app.lifecycle.upgrade_legacy_descriptor(descriptor).await
-            {
-                Ok(descriptor) => {
-                    if let Err(error) = app.store.save_wallet(descriptor.clone()) {
-                        app.status = Some(error.to_string());
-                    } else {
-                        app.open_wallet(descriptor).await;
-                    }
-                }
-                Err(error) => app.status = Some(error.to_string()),
-            },
+            Ok(Some(descriptor)) => app.open_wallet(descriptor).await,
             Ok(None) => {}
             Err(error) => app.status = Some(error.to_string()),
         }

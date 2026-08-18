@@ -27,7 +27,7 @@ nonisolated struct AppleWalletEnvironment: Sendable {
         wallet: StoredWallet,
         network: Network? = nil
     ) throws -> WalletClient {
-        guard let publicKey = wallet.publicKey, publicKey.count == 32 else {
+        guard wallet.publicKey.count == 32 else {
             throw WalletSessionError.missingPublicKey
         }
 
@@ -39,7 +39,7 @@ nonisolated struct AppleWalletEnvironment: Sendable {
         return try WalletClient(
             config: config(
                 wallet: wallet,
-                publicKey: publicKey,
+                publicKey: wallet.publicKey,
                 network: network ?? wallet.network.engineValue
             ),
             httpHost: httpHost,

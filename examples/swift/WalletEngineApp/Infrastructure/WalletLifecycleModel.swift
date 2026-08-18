@@ -80,12 +80,6 @@ final class WalletLifecycleModel {
         try lifecycle.tonConnectAccount(descriptor: descriptor)
     }
 
-    func upgradeLegacyDescriptor(
-        _ descriptor: WalletDescriptor
-    ) async throws -> WalletDescriptor {
-        try await lifecycle.upgradeLegacyDescriptor(descriptor: descriptor)
-    }
-
     func signTonConnectProof(
         descriptor: WalletDescriptor,
         domain: String,

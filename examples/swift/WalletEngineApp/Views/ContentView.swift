@@ -601,7 +601,7 @@ private struct WalletDashboard: View {
 
         sessionError = nil
         do {
-            let installedWallet = try await migrateWalletIfNeeded(wallet)
+            let installedWallet = wallet
 
             let replacement = try environment.makeClient(wallet: installedWallet)
             guard !Task.isCancelled,
@@ -657,27 +657,6 @@ private struct WalletDashboard: View {
         }
     }
 
-    private func migrateWalletIfNeeded(
-        _ wallet: StoredWallet
-    ) async throws -> StoredWallet {
-        if wallet.publicKey?.count == 32 {
-            return wallet
-        }
-        guard let legacy = wallet.descriptorForUpgrade else {
-            throw WalletSessionError.missingPublicKey
-        }
-        let upgraded = try await lifecycle.upgradeLegacyDescriptor(legacy)
-        let migrated = StoredWallet(descriptor: upgraded, name: wallet.name)
-        guard let index = wallets.firstIndex(where: { $0.recordId == wallet.recordId }) else {
-            throw WalletSessionError.superseded
-        }
-        var updated = wallets
-        updated[index] = migrated
-        try WalletStore.save(wallets: updated, selectedAddress: migrated.address)
-        wallets = updated
-        selectedWalletAddress = migrated.address
-        return migrated
-    }
 }
 
 private enum WalletSheet: String, Identifiable {

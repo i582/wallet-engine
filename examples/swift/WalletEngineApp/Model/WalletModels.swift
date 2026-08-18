@@ -10,8 +10,8 @@ enum StoredWalletNetwork: String, Codable, Sendable {
 struct StoredWallet: Codable, Identifiable, Sendable {
     let recordId: String
     let address: String
-    /// Public derivation data. Older archives can omit it and require reimport.
-    let publicKey: Data?
+    /// Public derivation data required to reconstruct the wallet account.
+    let publicKey: Data
     var name: String
     let network: StoredWalletNetwork
     let secretRef: String

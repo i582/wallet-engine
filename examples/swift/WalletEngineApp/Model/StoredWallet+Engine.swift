@@ -34,7 +34,6 @@ nonisolated extension StoredWallet {
     var descriptor: WalletDescriptor? {
         guard !recordId.isEmpty,
               !secretRef.isEmpty,
-              let publicKey,
               publicKey.count == 32 else {
             return nil
         }
@@ -48,14 +47,4 @@ nonisolated extension StoredWallet {
         )
     }
 
-    var descriptorForUpgrade: WalletDescriptor? {
-        guard !recordId.isEmpty, !secretRef.isEmpty else { return nil }
-        return WalletDescriptor(
-            recordId: recordId,
-            address: address,
-            publicKey: publicKey ?? Data(),
-            network: network.engineValue,
-            secretRef: ProtectedSecretRef(value: secretRef)
-        )
-    }
 }

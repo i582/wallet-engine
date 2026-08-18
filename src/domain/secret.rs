@@ -18,8 +18,6 @@ pub enum SecretAccessReason {
     SignTransfer,
     /// The engine needs the mnemonic for an off-chain TON Connect ownership proof.
     SignTonConnectProof,
-    /// The engine restores public metadata missing from a legacy descriptor.
-    RestoreWalletMetadata,
     /// The user requested the recovery phrase.
     RevealRecoveryPhrase,
 }

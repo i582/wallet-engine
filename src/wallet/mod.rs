@@ -38,7 +38,6 @@ pub struct WalletDescriptor {
     ///
     /// This is safe to persist. It lets the engine emulate a first deployment
     /// before it asks the host to unlock the recovery phrase.
-    #[serde(default)]
     pub public_key: Vec<u8>,
     /// The network used for derivation and future operations.
     pub network: Network,
@@ -323,37 +322,6 @@ impl WalletLifecycle {
         sign_ton_connect_proof(&secret, &request)
     }
 
-    /// Restores a public key omitted by wallet descriptors from older releases.
-    ///
-    /// Existing complete descriptors are only validated. A legacy descriptor
-    /// causes one protected-secret read; the derived address must equal the
-    /// persisted address before upgraded metadata is returned.
-    pub async fn upgrade_legacy_descriptor(
-        &self,
-        descriptor: WalletDescriptor,
-    ) -> Result<WalletDescriptor, WalletLifecycleError> {
-        if !descriptor.public_key.is_empty() {
-            validate_descriptor(&descriptor)?;
-            return Ok(descriptor);
-        }
-
-        validate_record_id(&descriptor.record_id)?;
-        if descriptor.secret_ref != secret_ref_for(&descriptor.record_id) {
-            return Err(WalletLifecycleError::InvalidRecordId);
-        }
-        let bytes = self
-            .platform_host
-            .read_protected_secret(ProtectedSecretRead {
-                secret_ref: descriptor.secret_ref.clone(),
-                reason: SecretAccessReason::RestoreWalletMetadata,
-                prompt: "Authenticate to upgrade this wallet's public metadata".to_owned(),
-            })
-            .await?;
-        let secret = SensitiveMnemonic::from_bytes(bytes)
-            .map_err(|_| WalletLifecycleError::InvalidRecoveryPhrase)?;
-        upgrade_legacy_descriptor_from_secret(&descriptor, &secret)
-    }
-
     /// Derives the public TON Connect account reply without reading a secret.
     pub fn ton_connect_account(
         &self,
@@ -485,17 +453,6 @@ fn derive_ton_connect_account(
         wallet_state_init,
         public_key: descriptor.public_key,
     })
-}
-
-fn upgrade_legacy_descriptor_from_secret(
-    descriptor: &WalletDescriptor,
-    secret: &SensitiveMnemonic,
-) -> Result<WalletDescriptor, WalletLifecycleError> {
-    let upgraded = derive_descriptor(&descriptor.record_id, descriptor.network, secret)?;
-    if upgraded.address != descriptor.address || upgraded.secret_ref != descriptor.secret_ref {
-        return Err(WalletLifecycleError::SecretWalletMismatch);
-    }
-    Ok(upgraded)
 }
 
 fn secret_ref_for(record_id: &str) -> ProtectedSecretRef {
@@ -652,25 +609,17 @@ mod tests {
         Ok(())
     }
 
+    /// Rejects persisted wallet metadata that cannot reconstruct its account state.
     #[test]
-    fn legacy_descriptor_without_public_key_upgrades_from_its_matching_secret()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let secret = SensitiveMnemonic::from_words(
-            MNEMONIC.split_whitespace().map(str::to_owned).collect(),
-        )?;
-        let expected = derive_descriptor("legacy-wallet", Network::Testnet, &secret)?;
-        let mut json = serde_json::to_value(&expected)?;
+    fn descriptor_without_public_key_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
+        let descriptor = valid_descriptor();
+        let mut json = serde_json::to_value(descriptor)?;
         let object = json
             .as_object_mut()
             .ok_or("wallet descriptor must serialize as an object")?;
         let _ = object.remove("publicKey");
-        let legacy = serde_json::from_value::<WalletDescriptor>(json)?;
 
-        assert!(legacy.public_key.is_empty());
-        assert_eq!(
-            upgrade_legacy_descriptor_from_secret(&legacy, &secret)?,
-            expected
-        );
+        assert!(serde_json::from_value::<WalletDescriptor>(json).is_err());
         Ok(())
     }
 
