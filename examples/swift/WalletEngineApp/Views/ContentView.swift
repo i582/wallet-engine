@@ -237,21 +237,27 @@ private struct WalletDashboard: View {
                         if hasRefreshNotice {
                             WalletDataNotice(
                                 diagnostic: refreshDiagnostic,
-                                onRetry: refreshAccount
+                                onRetry: refreshAccount,
+                                onDismiss: {
+                                    sessionError = nil
+                                    session?.dismissDiagnostic()
+                                }
                             )
                         }
                     }
                     if let persistenceError {
-                        Label(persistenceError, systemImage: "externaldrive.badge.exclamationmark")
-                            .font(.callout)
-                            .foregroundStyle(.red)
-                            .textSelection(.enabled)
+                        DismissibleDiagnostic(
+                            message: persistenceError,
+                            systemImage: "externaldrive.badge.exclamationmark",
+                            onDismiss: { self.persistenceError = nil }
+                        )
                     }
                     if let tonConnectDiagnostic = tonConnect?.diagnostic {
-                        Label(tonConnectDiagnostic, systemImage: "link.badge.plus")
-                            .font(.callout)
-                            .foregroundStyle(.red)
-                            .textSelection(.enabled)
+                        DismissibleDiagnostic(
+                            message: tonConnectDiagnostic,
+                            systemImage: "link.badge.plus",
+                            onDismiss: { tonConnect?.dismissDiagnostic() }
+                        )
                     }
                     RecentActivity(
                         transactions: transactions,
@@ -899,40 +905,117 @@ private struct BalancePanel: View {
 private struct WalletDataNotice: View {
     let diagnostic: String?
     let onRetry: () -> Void
+    let onDismiss: () -> Void
+
+    @State private var isDismissed = false
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 10) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Label("Couldn’t refresh wallet data", systemImage: "exclamationmark.circle")
-                        .font(.callout)
-                    if let diagnostic {
-                        Text(diagnostic)
-                            .font(.caption)
-                            .textSelection(.enabled)
+        if !isDismissed {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) {
+                    message
+                    Spacer()
+                    Button("Try again") {
+                        isDismissed = false
+                        onRetry()
                     }
-                }
-                Spacer()
-                Button("Try again", action: onRetry)
                     .platformLinkButtonStyle()
-            }
+                    dismissButton
+                }
 
-            VStack(alignment: .leading, spacing: 8) {
-                Label("Couldn’t refresh wallet data", systemImage: "exclamationmark.circle")
-                    .font(.callout)
-                if let diagnostic {
-                    Text(diagnostic)
-                        .font(.caption)
-                        .textSelection(.enabled)
-                }
-                Button("Try again", action: onRetry)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .top, spacing: 10) {
+                        message
+                        Spacer()
+                        dismissButton
+                    }
+                    Button("Try again") {
+                        isDismissed = false
+                        onRetry()
+                    }
                     .platformLinkButtonStyle()
+                }
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
+            .onChange(of: diagnostic) { _, _ in
+                isDismissed = false
             }
         }
+    }
+
+    private var message: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Label("Couldn’t refresh wallet data", systemImage: "exclamationmark.circle")
+                .font(.callout)
+            if let diagnostic {
+                Text(diagnostic)
+                    .font(.caption)
+                    .textSelection(.enabled)
+            }
+        }
+    }
+
+    private var dismissButton: some View {
+        Button {
+            isDismissed = true
+            onDismiss()
+        } label: {
+            Image(systemName: "xmark")
+                .font(.caption.weight(.bold))
+                .frame(width: 28, height: 28)
+        }
+        .buttonStyle(.plain)
         .foregroundStyle(.secondary)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityLabel("Dismiss wallet data error")
+    }
+}
+
+/// A compact diagnostic banner for errors that do not have a retry action.
+/// Dismissal changes presentation only; the caller decides whether to clear the
+/// underlying model error as well.
+struct DismissibleDiagnostic: View {
+    let message: String
+    let systemImage: String
+    let onDismiss: () -> Void
+
+    @State private var isDismissed = false
+
+    var body: some View {
+        if !isDismissed {
+            HStack(alignment: .top, spacing: 10) {
+                Label {
+                    Text(message)
+                        .textSelection(.enabled)
+                } icon: {
+                    Image(systemName: systemImage)
+                }
+                .font(.callout)
+                .foregroundStyle(.red)
+
+                Spacer(minLength: 0)
+
+                Button {
+                    isDismissed = true
+                    onDismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption.weight(.bold))
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Dismiss error")
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+            .onChange(of: message) { _, _ in
+                isDismissed = false
+            }
+        }
     }
 }
 

@@ -197,6 +197,11 @@ final class WalletSession {
         }
     }
 
+    /// Clears only the presentation diagnostic and preserves the wallet state.
+    func dismissDiagnostic() {
+        diagnostic = nil
+    }
+
     func replaceClient(_ replacement: WalletClient) async throws {
         guard !isReplacingClient else {
             throw WalletSessionError.superseded
