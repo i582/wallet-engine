@@ -10,6 +10,33 @@ typedef struct WalletEnginePrivateRustCallStatus {
     WalletEnginePrivateRustBuffer error_buf;
 } WalletEnginePrivateRustCallStatus;
 
+#define WALLET_ENGINE_PRIVATE_CALL_SUCCESS ((int8_t)0)
+#define WALLET_ENGINE_PRIVATE_CALL_ERROR ((int8_t)1)
+#define WALLET_ENGINE_PRIVATE_CALL_UNEXPECTED_ERROR ((int8_t)2)
+#define WALLET_ENGINE_PRIVATE_CALL_CANCELLED ((int8_t)3)
+
+typedef uint8_t WalletEnginePrivateRustCallOutcome;
+
+#define WALLET_ENGINE_PRIVATE_RUST_CALL_SUCCESS ((WalletEnginePrivateRustCallOutcome)0u)
+#define WALLET_ENGINE_PRIVATE_RUST_CALL_ERROR ((WalletEnginePrivateRustCallOutcome)1u)
+#define WALLET_ENGINE_PRIVATE_RUST_CALL_CANCELLED ((WalletEnginePrivateRustCallOutcome)2u)
+#define WALLET_ENGINE_PRIVATE_RUST_CALL_PANIC ((WalletEnginePrivateRustCallOutcome)3u)
+
+typedef struct WalletEnginePrivateDiagnosticView {
+    const char *data;
+    size_t len;
+} WalletEnginePrivateDiagnosticView;
+
+/*
+ * `take` moves `RustCallStatus.error_buf` into this result. A declared-error
+ * decoder or panic reporter may borrow it until `rust_call_result_clear`.
+ */
+typedef struct WalletEnginePrivateRustCallResult {
+    WalletEnginePrivateRustCallOutcome outcome;
+    WalletEnginePrivateRustBuffer error_buf;
+    WalletEnginePrivateDiagnosticView diagnostic;
+} WalletEnginePrivateRustCallResult;
+
 extern WalletEnginePrivateRustBuffer {{ALLOC_SYMBOL}}(
     uint64_t size,
     WalletEnginePrivateRustCallStatus *out_status
@@ -29,7 +56,14 @@ WALLET_ENGINE_PRIVATE bool wallet_engine_private_rustbuffer_is_valid(
     if (buffer->data == NULL) {
         return buffer->len == 0u && buffer->capacity == 0u;
     }
-    return (uint64_t)(size_t)buffer->len == buffer->len;
+    return (uint64_t)(size_t)buffer->len == buffer->len
+        && (uint64_t)(size_t)buffer->capacity == buffer->capacity;
+}
+
+WALLET_ENGINE_PRIVATE bool wallet_engine_private_rustbuffer_is_empty(
+    const WalletEnginePrivateRustBuffer *buffer
+) {
+    return buffer != NULL && buffer->len == 0u && buffer->capacity == 0u;
 }
 
 WALLET_ENGINE_PRIVATE void wallet_engine_private_rustbuffer_free(
@@ -46,12 +80,129 @@ WALLET_ENGINE_PRIVATE void wallet_engine_private_rustbuffer_free(
     }
 }
 
+WALLET_ENGINE_PRIVATE void wallet_engine_private_rust_call_result_clear(
+    WalletEnginePrivateRustCallResult *result
+) {
+    WalletEnginePrivateRustBuffer error_buf;
+    if (result == NULL) {
+        return;
+    }
+    error_buf = result->error_buf;
+    *result = (WalletEnginePrivateRustCallResult){
+        .outcome = WALLET_ENGINE_PRIVATE_RUST_CALL_SUCCESS,
+    };
+    wallet_engine_private_rustbuffer_free(error_buf);
+}
+
+WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_take_rust_call_status(
+    WalletEnginePrivateRustCallStatus *status,
+    WalletEnginePrivateRustCallResult *out_result
+) {
+    static const char fallback_panic[] = "Rust panic";
+    static const char malformed_status[] = "Malformed RustCallStatus error buffer";
+    static const char invalid_utf8[] = "Rust panic returned an invalid UTF-8 diagnostic";
+    static const char unexpected_success_buffer[] =
+        "Successful RustCallStatus contained an error buffer";
+    static const char unexpected_cancel_buffer[] =
+        "Cancelled RustCallStatus contained an error buffer";
+    static const char unknown_status[] = "Unknown RustCallStatus code";
+    WalletEnginePrivateRustBuffer error_buf;
+    const int8_t code = status == NULL ? INT8_C(-1) : status->code;
+
+    if (status == NULL || out_result == NULL) {
+        return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
+    }
+    error_buf = status->error_buf;
+    *status = (WalletEnginePrivateRustCallStatus){
+        .code = WALLET_ENGINE_PRIVATE_CALL_SUCCESS,
+    };
+    *out_result = (WalletEnginePrivateRustCallResult){
+        .outcome = WALLET_ENGINE_PRIVATE_RUST_CALL_SUCCESS,
+    };
+
+    if (!wallet_engine_private_rustbuffer_is_valid(&error_buf)) {
+        out_result->outcome = WALLET_ENGINE_PRIVATE_RUST_CALL_PANIC;
+        out_result->diagnostic = (WalletEnginePrivateDiagnosticView){
+            malformed_status,
+            sizeof(malformed_status) - 1u,
+        };
+        return WALLET_ENGINE_ABI_STATUS_PANIC;
+    }
+
+    switch (code) {
+        case WALLET_ENGINE_PRIVATE_CALL_SUCCESS:
+            if (wallet_engine_private_rustbuffer_is_empty(&error_buf)) {
+                return WALLET_ENGINE_ABI_STATUS_OK;
+            }
+            out_result->outcome = WALLET_ENGINE_PRIVATE_RUST_CALL_PANIC;
+            out_result->error_buf = error_buf;
+            out_result->diagnostic = (WalletEnginePrivateDiagnosticView){
+                unexpected_success_buffer,
+                sizeof(unexpected_success_buffer) - 1u,
+            };
+            return WALLET_ENGINE_ABI_STATUS_PANIC;
+
+        case WALLET_ENGINE_PRIVATE_CALL_ERROR:
+            out_result->outcome = WALLET_ENGINE_PRIVATE_RUST_CALL_ERROR;
+            out_result->error_buf = error_buf;
+            return WALLET_ENGINE_ABI_STATUS_OK;
+
+        case WALLET_ENGINE_PRIVATE_CALL_UNEXPECTED_ERROR:
+            out_result->outcome = WALLET_ENGINE_PRIVATE_RUST_CALL_PANIC;
+            out_result->error_buf = error_buf;
+            if (error_buf.len == 0u) {
+                out_result->diagnostic = (WalletEnginePrivateDiagnosticView){
+                    fallback_panic,
+                    sizeof(fallback_panic) - 1u,
+                };
+            } else if (!wallet_engine_private_is_utf8(
+                error_buf.data,
+                (size_t)error_buf.len
+            )) {
+                out_result->diagnostic = (WalletEnginePrivateDiagnosticView){
+                    invalid_utf8,
+                    sizeof(invalid_utf8) - 1u,
+                };
+            } else {
+                out_result->diagnostic = (WalletEnginePrivateDiagnosticView){
+                    (const char *)error_buf.data,
+                    (size_t)error_buf.len,
+                };
+            }
+            return WALLET_ENGINE_ABI_STATUS_PANIC;
+
+        case WALLET_ENGINE_PRIVATE_CALL_CANCELLED:
+            if (wallet_engine_private_rustbuffer_is_empty(&error_buf)) {
+                out_result->outcome = WALLET_ENGINE_PRIVATE_RUST_CALL_CANCELLED;
+                return WALLET_ENGINE_ABI_STATUS_OK;
+            }
+            out_result->outcome = WALLET_ENGINE_PRIVATE_RUST_CALL_PANIC;
+            out_result->error_buf = error_buf;
+            out_result->diagnostic = (WalletEnginePrivateDiagnosticView){
+                unexpected_cancel_buffer,
+                sizeof(unexpected_cancel_buffer) - 1u,
+            };
+            return WALLET_ENGINE_ABI_STATUS_PANIC;
+
+        default:
+            out_result->outcome = WALLET_ENGINE_PRIVATE_RUST_CALL_PANIC;
+            out_result->error_buf = error_buf;
+            out_result->diagnostic = (WalletEnginePrivateDiagnosticView){
+                unknown_status,
+                sizeof(unknown_status) - 1u,
+            };
+            return WALLET_ENGINE_ABI_STATUS_PANIC;
+    }
+}
+
 WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_rustbuffer_alloc(
     size_t size,
     WalletEnginePrivateRustBuffer *out_buffer
 ) {
     WalletEnginePrivateRustCallStatus status = {0};
+    WalletEnginePrivateRustCallResult call_result = {0};
     WalletEnginePrivateRustBuffer buffer = {0};
+    WalletEngineAbiStatus abi_status;
     const uint64_t wire_size = (uint64_t)size;
     if (out_buffer == NULL || (size_t)wire_size != size) {
         return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
@@ -59,8 +210,10 @@ WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_rustbuffer_all
 
     *out_buffer = buffer;
     buffer = {{ALLOC_SYMBOL}}(wire_size, &status);
-    if (status.code != 0) {
-        wallet_engine_private_rustbuffer_free(status.error_buf);
+    abi_status = wallet_engine_private_take_rust_call_status(&status, &call_result);
+    if (abi_status != WALLET_ENGINE_ABI_STATUS_OK
+        || call_result.outcome != WALLET_ENGINE_PRIVATE_RUST_CALL_SUCCESS) {
+        wallet_engine_private_rust_call_result_clear(&call_result);
         wallet_engine_private_rustbuffer_free(buffer);
         return WALLET_ENGINE_ABI_STATUS_PANIC;
     }

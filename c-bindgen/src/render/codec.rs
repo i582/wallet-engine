@@ -23,6 +23,7 @@ const I32_CODEC: &str = include_str!("../../templates/codecs/i32.c.tmpl");
 const U64_CODEC: &str = include_str!("../../templates/codecs/u64.c.tmpl");
 const I64_CODEC: &str = include_str!("../../templates/codecs/i64.c.tmpl");
 const BOOLEAN_CODEC: &str = include_str!("../../templates/codecs/bool.c.tmpl");
+const UTF8_RUNTIME: &str = include_str!("../../templates/codecs/utf8.c.tmpl");
 const RUSTBUFFER_RUNTIME: &str = include_str!("../../templates/codecs/rustbuffer.c.tmpl");
 const STRING_CODEC: &str = include_str!("../../templates/codecs/string.c.tmpl");
 const BYTES_CODEC: &str = include_str!("../../templates/codecs/bytes.c.tmpl");
@@ -115,6 +116,7 @@ pub(super) fn render(model: &BindingsModel) -> String {
         output.push_str(BOOLEAN_CODEC);
     }
     if model.needs_rustbuffer_runtime() {
+        output.push_str(UTF8_RUNTIME);
         output.push_str(&rustbuffer_runtime(
             model.private_ffi().rustbuffer_alloc(),
             model.private_ffi().rustbuffer_free(),
@@ -491,6 +493,9 @@ mod tests {
         assert!(codec.contains("wallet_engine_private_write_u16"));
         assert!(codec.contains("wallet_engine_private_lower_string"));
         assert!(codec.contains("ffi_wallet_engine_rustbuffer_alloc"));
+        assert!(codec.contains("WALLET_ENGINE_PRIVATE_CALL_CANCELLED"));
+        assert!(codec.contains("wallet_engine_private_take_rust_call_status"));
+        assert!(codec.contains("Rust panic returned an invalid UTF-8 diagnostic"));
         assert!(!codec.contains("wallet_engine_private_write_i64"));
         Ok(())
     }

@@ -11,6 +11,8 @@ The generator currently:
   `wallet_engine.c-api.json` artifacts;
 - discovers the builtin types actually used by the component;
 - generates UniFFI-compatible wire codecs for builtin values;
+- consumes UniFFI `RustCallStatus` with owned error-buffer cleanup and borrowed
+  panic diagnostics;
 - generates public C types and codecs for flat non-error enums;
 - generates public C wrappers and codecs for supported optional values;
 - generates borrowed C list views and codecs for supported sequences;
@@ -160,6 +162,26 @@ Lowering rejects malformed views, invalid UTF-8, lengths above `INT32_MAX`
 where UniFFI uses a signed 32-bit length, and arithmetic overflow. Lifting
 checks buffer bounds and rejects trailing data for a complete `Bytes` value.
 
+### Private RustCallStatus handling
+
+Every UniFFI call starts with an empty private `RustCallStatus`. The generated
+runtime consumes it into one of four explicit outcomes:
+
+| UniFFI code | Generated handling |
+|---|---|
+| `0` success | Continue only when `error_buf` is empty. |
+| `1` declared error | Preserve the owned buffer for the method's generated typed error decoder. |
+| `2` unexpected error | Return `WALLET_ENGINE_ABI_STATUS_PANIC` and expose a borrowed UTF-8 diagnostic while the buffer is alive. |
+| `3` cancelled | Preserve a distinct private cancellation outcome for the later async driver. |
+
+Taking a status moves ownership of `error_buf` into a private result and clears
+the original status. The result must be cleared exactly once after a typed
+error callback or panic reporter stops borrowing it. Empty panic buffers use
+the fallback text `Rust panic`; invalid UTF-8, unknown status codes, unexpected
+buffers on success/cancellation, and malformed buffer layouts become guarded
+panic outcomes rather than reaching a typed decoder. Raw UniFFI status and
+buffer structs remain absent from `wallet_engine.h`.
+
 The pure codec behavior is tested in `tests/codec.c`. That C11 executable
 checks exact wire bytes and write/read round trips for every integer width,
 booleans, strings, bytes, a flat enum, optional values, sequences of scalars,
@@ -167,7 +189,8 @@ strings, and flat enums, direct and nested records, nested options and
 sequences of records, a semantic custom string type, a fielded enum, and a rich
 error with both fieldless and payload variants. The malformed cases cover
 truncated and trailing data, invalid UTF-8, impossible lengths, unknown tags,
-and arena rollback.
+arena rollback, every `RustCallStatus` branch, diagnostic lifetime, and owned
+error-buffer cleanup.
 
 ### Flat enums
 

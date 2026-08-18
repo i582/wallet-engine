@@ -1,0 +1,41 @@
+
+WALLET_ENGINE_PRIVATE bool wallet_engine_private_is_utf8(
+    const uint8_t *data,
+    size_t len
+) {
+    size_t index = 0u;
+    if (len != 0u && data == NULL) {
+        return false;
+    }
+    while (index < len) {
+        const uint8_t first = data[index];
+        if (first <= 0x7fu) {
+            index += 1u;
+        } else if (first >= 0xc2u && first <= 0xdfu) {
+            if (len - index < 2u || (data[index + 1u] & 0xc0u) != 0x80u) {
+                return false;
+            }
+            index += 2u;
+        } else if (first >= 0xe0u && first <= 0xefu) {
+            if (len - index < 3u || (data[index + 1u] & 0xc0u) != 0x80u
+                || (data[index + 2u] & 0xc0u) != 0x80u
+                || (first == 0xe0u && data[index + 1u] < 0xa0u)
+                || (first == 0xedu && data[index + 1u] >= 0xa0u)) {
+                return false;
+            }
+            index += 3u;
+        } else if (first >= 0xf0u && first <= 0xf4u) {
+            if (len - index < 4u || (data[index + 1u] & 0xc0u) != 0x80u
+                || (data[index + 2u] & 0xc0u) != 0x80u
+                || (data[index + 3u] & 0xc0u) != 0x80u
+                || (first == 0xf0u && data[index + 1u] < 0x90u)
+                || (first == 0xf4u && data[index + 1u] >= 0x90u)) {
+                return false;
+            }
+            index += 4u;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}

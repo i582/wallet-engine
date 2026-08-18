@@ -7,14 +7,18 @@
 #include "wallet_engine.c"
 
 static size_t live_allocations = 0u;
+static int8_t next_alloc_status_code = WALLET_ENGINE_PRIVATE_CALL_SUCCESS;
 
 WalletEnginePrivateRustBuffer ffi_wallet_engine_rustbuffer_alloc(
     uint64_t size,
     WalletEnginePrivateRustCallStatus *out_status
 ) {
+    static const uint8_t injected_diagnostic[] = {'a', 'l', 'l', 'o', 'c'};
     WalletEnginePrivateRustBuffer buffer = {0};
+    const int8_t injected_status_code = next_alloc_status_code;
     assert(out_status != NULL);
-    out_status->code = 0;
+    next_alloc_status_code = WALLET_ENGINE_PRIVATE_CALL_SUCCESS;
+    out_status->code = WALLET_ENGINE_PRIVATE_CALL_SUCCESS;
     out_status->error_buf = (WalletEnginePrivateRustBuffer){0};
     if (size != 0u) {
         assert(size <= (uint64_t)SIZE_MAX);
@@ -27,6 +31,19 @@ WalletEnginePrivateRustBuffer ffi_wallet_engine_rustbuffer_alloc(
     }
     buffer.capacity = size;
     buffer.len = size;
+    if (injected_status_code != WALLET_ENGINE_PRIVATE_CALL_SUCCESS) {
+        out_status->error_buf.data = malloc(sizeof(injected_diagnostic));
+        assert(out_status->error_buf.data != NULL);
+        memcpy(
+            out_status->error_buf.data,
+            injected_diagnostic,
+            sizeof(injected_diagnostic)
+        );
+        out_status->error_buf.capacity = sizeof(injected_diagnostic);
+        out_status->error_buf.len = sizeof(injected_diagnostic);
+        out_status->code = injected_status_code;
+        live_allocations += 1u;
+    }
     return buffer;
 }
 
@@ -51,6 +68,178 @@ static void assert_bytes(
 ) {
     assert(len == 0u || (actual != NULL && expected != NULL));
     assert(len == 0u || memcmp(actual, expected, len) == 0);
+}
+
+static WalletEnginePrivateRustBuffer test_owned_rustbuffer(
+    const uint8_t *data,
+    size_t len
+) {
+    WalletEnginePrivateRustBuffer buffer = {0};
+    if (len == 0u) {
+        return buffer;
+    }
+    assert(data != NULL);
+    buffer.data = malloc(len);
+    assert(buffer.data != NULL);
+    memcpy(buffer.data, data, len);
+    buffer.capacity = (uint64_t)len;
+    buffer.len = (uint64_t)len;
+    live_allocations += 1u;
+    return buffer;
+}
+
+static void assert_diagnostic(
+    WalletEnginePrivateDiagnosticView actual,
+    const char *expected
+) {
+    const size_t len = strlen(expected);
+    assert(actual.len == len);
+    assert_bytes(
+        (const uint8_t *)actual.data,
+        (const uint8_t *)expected,
+        len
+    );
+}
+
+static void test_rust_call_status_handling(void) {
+    static const uint8_t declared_error[] = {0x00u, 0x00u, 0x00u, 0x01u};
+    static const uint8_t panic_message[] = {'b', 'o', 'o', 'm'};
+    static const uint8_t invalid_utf8[] = {0xc0u, 0x80u};
+    WalletEnginePrivateRustCallStatus status = {0};
+    WalletEnginePrivateRustCallResult result = {0};
+
+    assert(wallet_engine_private_take_rust_call_status(&status, &result)
+        == WALLET_ENGINE_ABI_STATUS_OK);
+    assert(result.outcome == WALLET_ENGINE_PRIVATE_RUST_CALL_SUCCESS);
+    assert(result.error_buf.data == NULL && result.diagnostic.data == NULL);
+
+    status = (WalletEnginePrivateRustCallStatus){
+        .error_buf = {0u, 0u, (uint8_t *)(uintptr_t)1u},
+    };
+    assert(wallet_engine_private_take_rust_call_status(&status, &result)
+        == WALLET_ENGINE_ABI_STATUS_OK);
+    assert(result.outcome == WALLET_ENGINE_PRIVATE_RUST_CALL_SUCCESS);
+    assert(result.error_buf.data == NULL && result.diagnostic.data == NULL);
+
+    status = (WalletEnginePrivateRustCallStatus){
+        .code = WALLET_ENGINE_PRIVATE_CALL_ERROR,
+        .error_buf = test_owned_rustbuffer(declared_error, sizeof(declared_error)),
+    };
+    assert(wallet_engine_private_take_rust_call_status(&status, &result)
+        == WALLET_ENGINE_ABI_STATUS_OK);
+    assert(status.code == WALLET_ENGINE_PRIVATE_CALL_SUCCESS);
+    assert(status.error_buf.data == NULL);
+    assert(result.outcome == WALLET_ENGINE_PRIVATE_RUST_CALL_ERROR);
+    assert(result.error_buf.len == sizeof(declared_error));
+    assert_bytes(result.error_buf.data, declared_error, sizeof(declared_error));
+    assert(result.diagnostic.data == NULL && result.diagnostic.len == 0u);
+    wallet_engine_private_rust_call_result_clear(&result);
+    assert(result.outcome == WALLET_ENGINE_PRIVATE_RUST_CALL_SUCCESS);
+    assert(live_allocations == 0u);
+
+    status = (WalletEnginePrivateRustCallStatus){
+        .code = WALLET_ENGINE_PRIVATE_CALL_UNEXPECTED_ERROR,
+        .error_buf = test_owned_rustbuffer(panic_message, sizeof(panic_message)),
+    };
+    assert(wallet_engine_private_take_rust_call_status(&status, &result)
+        == WALLET_ENGINE_ABI_STATUS_PANIC);
+    assert(result.outcome == WALLET_ENGINE_PRIVATE_RUST_CALL_PANIC);
+    assert_diagnostic(result.diagnostic, "boom");
+    wallet_engine_private_rust_call_result_clear(&result);
+    assert(live_allocations == 0u);
+
+    status = (WalletEnginePrivateRustCallStatus){
+        .code = WALLET_ENGINE_PRIVATE_CALL_UNEXPECTED_ERROR,
+    };
+    assert(wallet_engine_private_take_rust_call_status(&status, &result)
+        == WALLET_ENGINE_ABI_STATUS_PANIC);
+    assert_diagnostic(result.diagnostic, "Rust panic");
+    wallet_engine_private_rust_call_result_clear(&result);
+
+    status = (WalletEnginePrivateRustCallStatus){
+        .code = WALLET_ENGINE_PRIVATE_CALL_UNEXPECTED_ERROR,
+        .error_buf = test_owned_rustbuffer(invalid_utf8, sizeof(invalid_utf8)),
+    };
+    assert(wallet_engine_private_take_rust_call_status(&status, &result)
+        == WALLET_ENGINE_ABI_STATUS_PANIC);
+    assert_diagnostic(result.diagnostic, "Rust panic returned an invalid UTF-8 diagnostic");
+    wallet_engine_private_rust_call_result_clear(&result);
+    assert(live_allocations == 0u);
+
+    status = (WalletEnginePrivateRustCallStatus){
+        .code = WALLET_ENGINE_PRIVATE_CALL_CANCELLED,
+    };
+    assert(wallet_engine_private_take_rust_call_status(&status, &result)
+        == WALLET_ENGINE_ABI_STATUS_OK);
+    assert(result.outcome == WALLET_ENGINE_PRIVATE_RUST_CALL_CANCELLED);
+    wallet_engine_private_rust_call_result_clear(&result);
+
+    status = (WalletEnginePrivateRustCallStatus){
+        .code = WALLET_ENGINE_PRIVATE_CALL_CANCELLED,
+        .error_buf = {0u, 0u, (uint8_t *)(uintptr_t)1u},
+    };
+    assert(wallet_engine_private_take_rust_call_status(&status, &result)
+        == WALLET_ENGINE_ABI_STATUS_OK);
+    assert(result.outcome == WALLET_ENGINE_PRIVATE_RUST_CALL_CANCELLED);
+    wallet_engine_private_rust_call_result_clear(&result);
+
+    status = (WalletEnginePrivateRustCallStatus){
+        .code = WALLET_ENGINE_PRIVATE_CALL_CANCELLED,
+        .error_buf = test_owned_rustbuffer(panic_message, sizeof(panic_message)),
+    };
+    assert(wallet_engine_private_take_rust_call_status(&status, &result)
+        == WALLET_ENGINE_ABI_STATUS_PANIC);
+    assert_diagnostic(result.diagnostic, "Cancelled RustCallStatus contained an error buffer");
+    wallet_engine_private_rust_call_result_clear(&result);
+    assert(live_allocations == 0u);
+
+    status = (WalletEnginePrivateRustCallStatus){
+        .code = INT8_C(127),
+        .error_buf = test_owned_rustbuffer(panic_message, sizeof(panic_message)),
+    };
+    assert(wallet_engine_private_take_rust_call_status(&status, &result)
+        == WALLET_ENGINE_ABI_STATUS_PANIC);
+    assert_diagnostic(result.diagnostic, "Unknown RustCallStatus code");
+    wallet_engine_private_rust_call_result_clear(&result);
+    assert(live_allocations == 0u);
+
+    status = (WalletEnginePrivateRustCallStatus){
+        .code = WALLET_ENGINE_PRIVATE_CALL_ERROR,
+        .error_buf = {1u, 1u, NULL},
+    };
+    assert(wallet_engine_private_take_rust_call_status(&status, &result)
+        == WALLET_ENGINE_ABI_STATUS_PANIC);
+    assert_diagnostic(result.diagnostic, "Malformed RustCallStatus error buffer");
+    assert(result.error_buf.data == NULL);
+    wallet_engine_private_rust_call_result_clear(&result);
+
+    status = (WalletEnginePrivateRustCallStatus){
+        .code = WALLET_ENGINE_PRIVATE_CALL_UNEXPECTED_ERROR,
+        .error_buf = {0u, 1u, (uint8_t *)(uintptr_t)1u},
+    };
+    assert(wallet_engine_private_take_rust_call_status(&status, &result)
+        == WALLET_ENGINE_ABI_STATUS_PANIC);
+    assert_diagnostic(result.diagnostic, "Malformed RustCallStatus error buffer");
+    assert(result.error_buf.data == NULL);
+    wallet_engine_private_rust_call_result_clear(&result);
+
+    assert(wallet_engine_private_take_rust_call_status(NULL, &result)
+        == WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT);
+    status = (WalletEnginePrivateRustCallStatus){
+        .code = WALLET_ENGINE_PRIVATE_CALL_CANCELLED,
+    };
+    assert(wallet_engine_private_take_rust_call_status(&status, NULL)
+        == WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT);
+    assert(status.code == WALLET_ENGINE_PRIVATE_CALL_CANCELLED);
+    assert(live_allocations == 0u);
+
+    next_alloc_status_code = WALLET_ENGINE_PRIVATE_CALL_UNEXPECTED_ERROR;
+    assert(wallet_engine_private_rustbuffer_alloc(
+        4u,
+        &result.error_buf
+    ) == WALLET_ENGINE_ABI_STATUS_PANIC);
+    assert(result.error_buf.data == NULL);
+    assert(live_allocations == 0u);
 }
 
 static void test_u8_round_trip(void) {
@@ -1276,6 +1465,7 @@ static void test_malformed_compound_values(void) {
 }
 
 int main(void) {
+    test_rust_call_status_handling();
     test_u8_round_trip();
     test_i8_round_trip();
     test_u16_round_trip();
