@@ -58,6 +58,18 @@ NODE=/absolute/path/to/node cargo test --test ton_connect_e2e
 The harness starts bridge and dApp processes on available ports, waits for
 readiness, and always terminates child processes when a scenario finishes.
 
+## Coverage
+
+The suite covers these protocol and chain results:
+
+- connect approval with matching, absent, and mismatched network requests.
+- plain sends, payloads, and destination `StateInit`.
+- local-network contract deployment and a later second transaction.
+- transaction rejection without an on-chain deployment.
+- expired requests and requests for another sender or network.
+- message-count and extra-currency capability limits.
+- unknown or revoked dApp sessions.
+
 ## Scenario dApp configuration
 
 Keep the complete dApp configuration in one scenario constant. Use

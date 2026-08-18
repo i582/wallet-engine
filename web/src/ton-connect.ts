@@ -36,6 +36,7 @@ import type {
   TonConnectInteraction,
   TonConnectStorage,
   TonConnectWalletEvent,
+  TonConnectWalletIdentity,
   TonConnectWalletOptions,
 } from "./ton-connect-types"
 import type {SendPreview, SendResult} from "./send-types"
@@ -45,9 +46,16 @@ import type {WalletLifecycle} from "./wallet-lifecycle"
 
 export {isNewerRequestId, parseTonConnectLink} from "./ton-connect-protocol"
 export type {
+  ConnectItem,
+  ConnectRequest,
+  ParsedConnectLink,
+  TonConnectAccountInfo,
   TonConnectInteraction,
+  TonConnectProofSignRequest,
+  TonConnectProofSignature,
   TonConnectStorage,
   TonConnectWalletEvent,
+  TonConnectWalletIdentity,
   TonConnectWalletOptions,
 } from "./ton-connect-types"
 
@@ -56,6 +64,7 @@ export class TonConnectWallet {
   private readonly descriptor: WalletDescriptor
   private readonly walletClient: WalletClient
   private readonly lifecycle: WalletLifecycle
+  private readonly identity: TonConnectWalletIdentity
   private readonly bridgeUrl: string
   private readonly fetch: typeof globalThis.fetch
   private readonly storage: TonConnectStorage
@@ -78,6 +87,7 @@ export class TonConnectWallet {
     this.descriptor = options.descriptor
     this.walletClient = options.walletClient
     this.lifecycle = options.lifecycle
+    this.identity = options.identity
     this.bridgeUrl = normalizeBridgeUrl(options.bridgeUrl ?? DEFAULT_BRIDGE_URL)
     this.fetch = options.fetch ?? globalThis.fetch.bind(globalThis)
     this.storage = options.storage
@@ -170,7 +180,7 @@ export class TonConnectWallet {
           id: this.allocateWalletEventId(),
           payload: {
             items,
-            device: deviceInfo(),
+            device: deviceInfo(this.identity),
           },
         },
         undefined,

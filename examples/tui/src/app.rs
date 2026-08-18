@@ -7,8 +7,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use num_bigint::BigUint;
 use wallet_engine::{
     CreateWalletRequest, CreatedWallet, ImportWalletRequest, Network, NonEmptyString,
-    ProviderConfig, SendAmount, SendExpiration, SendIntent, SendMessage, SendMessageBody, SendPhase,
-    SendPreviewRequest, SendRequest, TonAddressString, WalletClient, WalletClientConfig,
+    ProviderConfig, SendAmount, SendExpiration, SendIntent, SendMessage, SendMessageBody,
+    SendPhase, SendPreviewRequest, SendRequest, TonAddressString, WalletClient, WalletClientConfig,
     WalletDescriptor, WalletLifecycle, WalletSnapshot,
 };
 

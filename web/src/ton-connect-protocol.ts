@@ -7,6 +7,7 @@ import type {
   ConnectRequest,
   ParsedConnectLink,
   PersistedSession,
+  TonConnectWalletIdentity,
 } from "./ton-connect-types"
 
 export const DEFAULT_BRIDGE_URL: string = "https://connect.ton.org/bridge"
@@ -128,11 +129,14 @@ export function accountReply(account: TonConnectAccountInfo): unknown {
   }
 }
 
-export function deviceInfo(): DeviceInfo {
+export function deviceInfo(identity: TonConnectWalletIdentity): DeviceInfo {
+  if (identity.appName.trim().length === 0 || identity.appVersion.trim().length === 0) {
+    throw new Error("TON Connect wallet identity is invalid")
+  }
   return {
     platform: "browser",
-    appName: "tonkeeper",
-    appVersion: "0.1.0",
+    appName: identity.appName,
+    appVersion: identity.appVersion,
     maxProtocolVersion: 2,
     features: [{name: "SendTransaction", maxMessages: 1, extraCurrencySupported: false}],
   }

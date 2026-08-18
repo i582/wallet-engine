@@ -9,6 +9,7 @@
 //!
 //! - [`WalletLifecycle`] creates, imports, reveals, and deletes wallets.
 //! - [`WalletClient`] refreshes a wallet, loads activity, and sends transfers.
+//! - [`TonConnectSession`] manages one encrypted native TON Connect session.
 //!
 //! A minimum integration has these steps:
 //!
@@ -22,7 +23,8 @@
 //!
 //! Rust never holds the wallet-state lock while it awaits a host callback.
 //! Host callbacks can therefore call unrelated application code without a
-//! wallet-state lock cycle. Streaming updates remain outside this crate.
+//! wallet-state lock cycle. Hosts own chain streams and native TON Connect
+//! transport connections.
 
 #![cfg_attr(
     test,

@@ -72,6 +72,7 @@ export class WalletClient {
     return (await this.raw.previewSend(request)) as SendPreview
   }
 
+  /** Previews the exact expiration, payload, and StateInit in a TON Connect request. */
   async previewTonConnect(request: SendRequest): Promise<SendPreview> {
     this.assertOpen()
     return (await this.raw.previewTonConnect(request)) as SendPreview

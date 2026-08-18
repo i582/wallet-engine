@@ -45,6 +45,10 @@ export class WalletSession {
       descriptor,
       walletClient: client,
       lifecycle,
+      identity: {
+        appName: "tonkeeper",
+        appVersion: "0.1.0",
+      },
       storage: store,
     })
   }
@@ -183,8 +187,8 @@ export class WalletSession {
     if (this.closed) {
       return
     }
-    await this.client.close()
     await this.tonConnect.disconnect()
+    await this.client.close()
     await this.lifecycle.deleteWallet(this.descriptor)
     await this.store.clearWallet()
     this.lifecycle.close()
@@ -195,8 +199,8 @@ export class WalletSession {
     if (this.closed) {
       return
     }
-    await this.client.close()
     await this.tonConnect.close()
+    await this.client.close()
     this.lifecycle.close()
     this.closed = true
   }

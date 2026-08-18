@@ -48,11 +48,13 @@ export class WalletLifecycle {
     await this.raw.deleteWallet(descriptor)
   }
 
+  /** Derives the public account fields returned for a TON Connect connection. */
   tonConnectAccount(descriptor: WalletDescriptor): TonConnectAccountInfo {
     this.assertOpen()
     return this.raw.tonConnectAccount(descriptor) as TonConnectAccountInfo
   }
 
+  /** Authorizes the protected wallet key and signs one TON Connect proof. */
   async signTonConnectProof(
     request: TonConnectProofSignRequest,
   ): Promise<TonConnectProofSignature> {

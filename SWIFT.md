@@ -28,6 +28,16 @@ matching `libwallet_engine.a` for its target. The generated `WalletHttpHost`
 and `WalletPlatformHost` protocols use Swift `async` methods. The generator
 adds the annotations required by Swift 6 strict concurrency.
 
+## TON Connect
+
+The generated Swift module includes `TonConnectSession`, manifest parsing,
+account reply data, and `ton_proof` signing. The application owns manifest and
+bridge transport, approval screens, and protected session storage.
+
+Read [TON_CONNECT.md](TON_CONNECT.md) for the required session and bridge POST
+order. The [Swift example](examples/swift/README.md) contains a complete macOS
+and iOS integration.
+
 ## Clear client secret copies
 
 Rust clears the secret buffers that it owns. Swift `String` values are

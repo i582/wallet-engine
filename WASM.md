@@ -166,6 +166,54 @@ saveWalletDescriptor(created.descriptor)
 Discard the recovery phrase after the required user flow. Persist only the
 wallet descriptor.
 
+## Use TON Connect
+
+Create one `TonConnectWallet` for the active wallet descriptor. Supply your
+wallet registry identifier and application version.
+
+```ts
+import {TonConnectWallet, type TonConnectWalletEvent} from "@ton/wallet-engine"
+
+const tonConnect = new TonConnectWallet({
+  descriptor,
+  walletClient: client,
+  lifecycle,
+  identity: {
+    appName: "your-wallet-registry-id",
+    appVersion: "1.0.0",
+  },
+  storage: tonConnectStorage,
+})
+
+const unsubscribe = tonConnect.onEvent((event: TonConnectWalletEvent) => {
+  if (event.kind !== "interaction") {
+    return
+  }
+  showTonConnectApproval(event.interaction, approved => {
+    tonConnect.respond(event.interaction.id, approved)
+  })
+})
+
+await tonConnect.restore()
+
+async function openTonConnectLink(connectionLink: string): Promise<void> {
+  await tonConnect.start(connectionLink)
+}
+```
+
+The `interaction` event contains either connection details or a transaction
+preview. Show the preview before you call `respond` for a transaction.
+
+`TonConnectStorage` stores a secret-bearing session record. Use an
+encrypted browser vault or another protected store. Plain `localStorage` and
+IndexedDB do not protect this record from same-origin JavaScript.
+
+Call `disconnect()` to notify the dApp and remove the session. Call `close()`
+to stop transport while keeping the session available for restoration.
+
+Read [TON_CONNECT.md](TON_CONNECT.md) for protocol limits, transaction mapping,
+storage requirements, and native integration.
+
 ## Clear client secret copies
 
 Rust clears the secret buffers that it owns. JavaScript strings are immutable,
@@ -185,10 +233,11 @@ operation. This journal stores the exact signed BoC before submission.
 Browser storage can be cleared or evicted. Keep a recovery path for the user.
 Do not automatically create a new transfer after `submissionUnknown`.
 
-## Streaming
+## Chain streaming
 
-The WebAssembly API does not contain streaming methods. The TypeScript
-application owns its stream connection and reconnect policy.
+`WalletClient` does not contain chain streaming methods. The TypeScript
+application owns its chain stream and reconnect policy. `TonConnectWallet`
+separately owns its TON Connect bridge stream.
 
 ## Browser lifecycle
 

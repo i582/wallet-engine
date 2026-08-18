@@ -13,6 +13,7 @@ import type {WalletClient} from "../src/wallet-client"
 import type {WalletLifecycle} from "../src/wallet-lifecycle"
 
 const CLIENT_ID: string = "01".repeat(32)
+const WALLET_IDENTITY = {appName: "tonkeeper", appVersion: "0.1.0"} as const
 
 function connectLink(clientId: string = CLIENT_ID): string {
   const parameters = new URLSearchParams({
@@ -92,6 +93,7 @@ describe("TON Connect wallet runtime", () => {
       },
       walletClient: {} as WalletClient,
       lifecycle: {} as WalletLifecycle,
+      identity: WALLET_IDENTITY,
       bridgeUrl: "https://bridge.example/bridge",
       fetch,
       storage,
@@ -156,6 +158,7 @@ describe("TON Connect wallet runtime", () => {
       },
       walletClient: {} as WalletClient,
       lifecycle: {} as WalletLifecycle,
+      identity: WALLET_IDENTITY,
       bridgeUrl: "https://bridge.example/bridge",
       fetch,
       storage,
@@ -270,6 +273,7 @@ describe("TON Connect wallet runtime", () => {
       },
       walletClient,
       lifecycle,
+      identity: WALLET_IDENTITY,
       bridgeUrl: "https://bridge.example/bridge",
       fetch,
       storage: new MemoryTonConnectStorage(undefined),
@@ -315,13 +319,22 @@ describe("TON Connect wallet runtime", () => {
 
 describe("TON Connect transaction mapping", () => {
   test("uses the canonical browser DeviceInfo names", () => {
-    expect(deviceInfo()).toEqual({
+    expect(deviceInfo(WALLET_IDENTITY)).toEqual({
       platform: "browser",
       appName: "tonkeeper",
       appVersion: "0.1.0",
       maxProtocolVersion: 2,
       features: [{name: "SendTransaction", maxMessages: 1, extraCurrencySupported: false}],
     })
+  })
+
+  test("rejects an empty wallet identity", () => {
+    expect(() => deviceInfo({appName: "", appVersion: "0.1.0"})).toThrow(
+      "wallet identity is invalid",
+    )
+    expect(() => deviceInfo({appName: "tonkeeper", appVersion: " "})).toThrow(
+      "wallet identity is invalid",
+    )
   })
 
   test("binds the wallet, validity, payload, and deterministic operation id", () => {

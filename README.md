@@ -10,6 +10,7 @@ Use Wallet Engine to:
 - read balances and transaction history.
 - load additional history pages.
 - sign and submit transfers.
+- connect dApps, sign `ton_proof`, and approve TON Connect transactions.
 - observe immutable wallet snapshots.
 - cancel active wallet operations.
 
@@ -66,9 +67,12 @@ just bindings-wasm
 
 The repository also contains the source of the high-level
 `@ton/wallet-engine` TypeScript package. It provides a browser HTTP host,
-IndexedDB journal storage, wallet lifecycle methods, and wallet client methods.
+IndexedDB journal storage, wallet lifecycle methods, wallet client methods, and
+a wallet-side TON Connect runtime.
 
 Read [WASM.md](WASM.md) for browser setup and security requirements.
+Read [TON_CONNECT.md](TON_CONNECT.md) for the TON Connect API and persistence
+contract.
 
 For a small React integration, see the
 [web wallet example](examples/web/README.md). It creates a testnet wallet,
@@ -108,7 +112,8 @@ Install a current Acton CLI that supports `acton localnet`.
 `cargo nextest run` executes unit and scenario tests in parallel. Localnet
 scenarios start temporary Acton nodes on free loopback ports. The scenarios
 cover wallet deployment, transfers, refresh, pagination, cancellation, and
-concurrent chain changes.
+concurrent chain changes. The TON Connect suite also starts the official Go
+bridge and a local TypeScript dApp actor.
 
 If Acton is not in `PATH`, set the path explicitly:
 
@@ -118,6 +123,9 @@ WALLET_ENGINE_ACTON_BIN=/path/to/acton cargo nextest run --locked
 
 Use `just test` to also build the generated C++ example and run Rust
 documentation tests.
+
+Read [the TON Connect test guide](tests/ton-connect/README.md) for its Go and
+Node.js setup.
 
 ## Integration model
 
@@ -131,6 +139,10 @@ asynchronous host interfaces.
 
 The host callbacks let the same Rust engine run on Apple, Android, and browser
 platforms. The engine does not own platform networking or protected storage.
+
+TON Connect uses the same wallet hosts. Native applications also own manifest
+HTTP, bridge HTTP and SSE, protected session storage, and approval screens.
+Read [TON_CONNECT.md](TON_CONNECT.md) for the required delivery order.
 
 ## Basic wallet flow
 
@@ -151,8 +163,9 @@ needs these values after a restart. The public key is not a secret.
 
 ## Wallet flow diagrams
 
-The diagrams below cover every public wallet flow. Terminal nodes use both a
-text prefix and a color, so their meaning does not depend on color alone:
+The diagrams below cover the wallet lifecycle and transfer flows. Terminal
+nodes use both a text prefix and a color, so their meaning does not depend on
+color alone:
 
 - `CALL ERROR` means a thrown Swift/Kotlin error or a rejected TypeScript
   promise.
@@ -647,11 +660,20 @@ user confirms a transfer. This call does not read the recovery phrase.
 The preview is information, not permission to send. A preview failure does not
 block `send`.
 
-Chain state can change after the preview. Therefore, `send` never reuses the
-preview message, sequence number, or expiration time.
+Chain state can change after the preview. Therefore, `send` always rebuilds the
+wallet message from fresh account state. `engineDefault` also resolves a new
+expiration from provider time. `exact` preserves the timestamp in the intent.
 
-Call `send` after user confirmation. Give it a unique operation ID,
-destination, nanogram amount, and wallet secret reference.
+Call `send` after user confirmation. Give it a unique operation ID and the
+same immutable `SendIntent` that the user approved.
+
+`SendIntent` contains one `SendMessage` and one expiration policy. A message
+contains its destination, amount, body, and optional destination `StateInit`.
+The body is empty, a plaintext comment, or one caller-built payload cell.
+
+Use `engineDefault` expiration for a normal wallet transfer. Use `exact` only
+when a trusted caller supplies a Unix expiration timestamp. TON Connect uses
+`exact` to preserve the dApp `valid_until` value.
 
 Set `sendValiditySeconds` in `WalletClientConfig` according to your product's
 submission policy. The engine adds this duration to the synchronization time
@@ -666,16 +688,23 @@ signed message valid for longer.
 3. emulates it with a placeholder signature and `ignore_chksig`.
 4. returns fees, actions, trace status, and the preview expiration time.
 
+`previewTonConnect` accepts the complete TON Connect `SendRequest`. It preserves
+the dApp expiration, payload, and destination `StateInit` in the preview.
+
 `send` starts a new workflow after confirmation:
 
 1. loads the durable send journal.
 2. loads a new account state and sequence number.
-3. calculates a new expiration time from the provider synchronization time.
+3. resolves the intent expiration policy.
 4. requests the protected recovery phrase from the host.
 5. makes sure that the phrase belongs to the selected wallet.
 6. builds and signs a new wallet message in Rust.
 7. stores the exact signed BoC in the host journal.
 8. submits that BoC to the provider.
+
+`SendResult.signedBoc` contains the exact signed external-message BoC. TON
+Connect returns this value to the dApp after an accepted or uncertain
+submission. Do not log it.
 
 The emulation request does not contain the mnemonic or private key. Child
 transaction failures remain in `SendEmulation.traceSucceeded`; they do not
@@ -708,10 +737,30 @@ network.
 The journal uses compare-and-swap writes. The host implementation must make
 these writes durable before it reports success.
 
+## TON Connect
+
+Wallet Engine implements wallet-side TON Connect v2 sessions for native and
+browser applications. It handles link parsing, authenticated encryption,
+replay protection, transaction mapping, proof signing, and restart-safe
+responses.
+
+The host shows every approval and owns protected session storage. Native hosts
+also own manifest and bridge transport. The browser package provides this
+transport through `TonConnectWallet`.
+
+Read [TON_CONNECT.md](TON_CONNECT.md) for supported requests, send mapping,
+session recovery, and the durable bridge-response sequence. See the
+[Swift](examples/swift/README.md), [web](examples/web/README.md), and
+[terminal](examples/tui/README.md) examples for complete integrations.
+
 ## Streaming
 
-Wallet Engine does not contain a streaming API. The host application owns its
-stream connection, reconnect policy, and application lifecycle.
+`WalletClient` does not contain a chain streaming API. The host application
+owns its chain stream, reconnect policy, and application lifecycle.
+
+Native TON Connect sessions parse SSE chunks but do not open the connection.
+The native host owns the bridge stream and its reconnect policy. The browser
+`TonConnectWallet` includes this transport.
 
 The engine also does not reconcile stream events. A host can start a normal
 refresh when its product behavior requires new wallet data.
@@ -726,6 +775,8 @@ refresh when its product behavior requires new wallet data.
 - Enforce the request and response limits from each `HttpRequest`.
 - Honor `cancelHttp` for requests that have not completed.
 - Store wallet descriptors separately from protected recovery phrases.
+- Store serialized TON Connect sessions as protected authentication material.
+- Persist a pending TON Connect response before its bridge POST starts.
 
 The engine clears the secret buffers that it owns. The FFI boundary and the
 host language can create additional copies.

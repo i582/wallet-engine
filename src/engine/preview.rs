@@ -229,8 +229,8 @@ impl WalletClient {
 
     /// Emulates the exact transfer fields supplied by a TON Connect request.
     ///
-    /// This reuses the regular preview pipeline while preserving the dApp's
-    /// validity boundary, payload, and destination `StateInit` byte-for-byte.
+    /// The preview preserves the dApp validity boundary, payload, and
+    /// destination `StateInit`. It does not consume the operation identifier.
     pub async fn preview_ton_connect(
         &self,
         request: SendRequest,

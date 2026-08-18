@@ -344,7 +344,10 @@ impl TonConnectSession {
         Ok(state.client.begin_events_subscription().to_string())
     }
 
-    /// Approves the connect request and durably stages its encrypted response.
+    /// Approves the connect request and keeps its encrypted response pending delivery.
+    ///
+    /// Persist the session before posting the returned response. After the
+    /// bridge accepts it, call [`Self::complete_pending_post`].
     pub fn approve_connect(
         &self,
         account: TonConnectAccountInfo,
@@ -404,7 +407,10 @@ impl TonConnectSession {
         Ok(stage_post(&mut state, &post))
     }
 
-    /// Rejects the initial connection and stages a terminal encrypted event.
+    /// Rejects the initial connection and keeps its terminal event pending delivery.
+    ///
+    /// Persist the session before posting the returned response. After the
+    /// bridge accepts it, call [`Self::complete_pending_post`].
     pub fn reject_connect(
         &self,
         message: String,
@@ -457,7 +463,9 @@ impl TonConnectSession {
             .collect()
     }
 
-    /// Stages a successful `sendTransaction` response containing the signed BOC.
+    /// Keeps a successful `sendTransaction` response pending bridge delivery.
+    ///
+    /// The response contains the exact signed BOC returned to the dApp.
     pub fn prepare_send_success(
         &self,
         request_id: String,
@@ -470,7 +478,7 @@ impl TonConnectSession {
         self.prepare_response(&request_id, &response)
     }
 
-    /// Stages a successful dApp-initiated disconnect response.
+    /// Keeps a successful dApp-initiated disconnect response pending delivery.
     pub fn prepare_disconnect_success(
         &self,
         request_id: String,
@@ -482,7 +490,7 @@ impl TonConnectSession {
         self.prepare_response(&request_id, &response)
     }
 
-    /// Stages a protocol RPC error for a pending request.
+    /// Keeps a protocol RPC error pending delivery for the selected request.
     pub fn prepare_error(
         &self,
         request_id: String,
@@ -500,7 +508,7 @@ impl TonConnectSession {
         self.prepare_response(&request_id, &response)
     }
 
-    /// Stages a wallet-initiated disconnect event.
+    /// Keeps a wallet-initiated disconnect event pending bridge delivery.
     pub fn disconnect(&self) -> Result<TonConnectPreparedPost, TonConnectSessionError> {
         let mut state = self.lock()?;
         ensure_no_pending_post(&state)?;
@@ -513,13 +521,13 @@ impl TonConnectSession {
         Ok(self.lock()?.pending_post.clone())
     }
 
-    /// Marks the staged bridge response as delivered.
+    /// Removes the pending response after the bridge accepts it.
     pub fn complete_pending_post(&self) -> Result<(), TonConnectSessionError> {
         self.lock()?.pending_post = None;
         Ok(())
     }
 
-    /// Serializes complete secret-bearing session and response state.
+    /// Serializes the secret-bearing session, requests, and pending response.
     pub fn persisted(&self) -> Result<String, TonConnectSessionError> {
         let state = self.lock()?;
         let persisted = PersistedTonConnectSession {

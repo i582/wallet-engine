@@ -529,18 +529,20 @@ fn engine_send_request(
         ))
         .map_err(|_| RpcErrorCode::BadRequest)?,
         intent: SendIntent {
-            expiration: payload.valid_until.map_or(SendExpiration::EngineDefault, |value| {
-                SendExpiration::Exact {
-                    unix_timestamp: value,
-                }
-            }),
+            expiration: payload
+                .valid_until
+                .map_or(SendExpiration::EngineDefault, |value| {
+                    SendExpiration::Exact {
+                        unix_timestamp: value,
+                    }
+                }),
             message: SendMessage {
                 destination: TonAddressString::try_from(message.address.as_str())
                     .map_err(|_| RpcErrorCode::BadRequest)?,
                 amount: SendAmount::exact(message.amount.as_str())
                     .map_err(|_| RpcErrorCode::BadRequest)?,
-                body: body.map_or(SendMessageBody::Empty, |boc| {
-                    SendMessageBody::RawPayload { boc }
+                body: body.map_or(SendMessageBody::Empty, |boc| SendMessageBody::RawPayload {
+                    boc,
                 }),
                 state_init,
             },
