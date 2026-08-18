@@ -163,6 +163,7 @@ pub(crate) fn send() -> SendAction {
         amount: SendAmount::exact(NANOGRAMS_PER_GRAM.to_string())
             .expect("fixture amount must be canonical"),
         comment: None,
+        force: false,
     }
 }
 
@@ -528,6 +529,7 @@ pub(crate) const fn snapshot() -> SnapshotExpectation {
         activity_error: None,
         send_error_message: None,
         pending_reason: None,
+        can_force_retry: None,
     }
 }
 
@@ -844,6 +846,7 @@ pub(crate) struct SendAction {
     destination: Destination,
     amount: SendAmount,
     comment: Option<String>,
+    force: bool,
 }
 
 pub(crate) enum Destination {
@@ -881,6 +884,13 @@ impl SendAction {
     #[must_use]
     pub(crate) fn comment(mut self, comment: impl Into<String>) -> Self {
         self.comment = Some(comment.into());
+        self
+    }
+
+    /// Allows this scenario send to replace an unresolved signed send.
+    #[must_use]
+    pub(crate) const fn force(mut self) -> Self {
+        self.force = true;
         self
     }
 }
@@ -1247,6 +1257,7 @@ pub(crate) struct SnapshotExpectation {
     activity_error: Option<DomainError>,
     send_error_message: Option<String>,
     pending_reason: Option<PendingReason>,
+    can_force_retry: Option<bool>,
 }
 
 impl SnapshotExpectation {
@@ -1302,6 +1313,11 @@ impl SnapshotExpectation {
 
     pub(crate) const fn pending_reason(mut self, reason: PendingReason) -> Expectation {
         self.pending_reason = Some(reason);
+        Expectation::Snapshot(self)
+    }
+
+    pub(crate) const fn can_force_retry(mut self, can_force_retry: bool) -> Expectation {
+        self.can_force_retry = Some(can_force_retry);
         Expectation::Snapshot(self)
     }
 }
@@ -1714,6 +1730,7 @@ impl ScenarioRunner {
                                 .map_err(|error| {
                                     format!("invalid scenario operation identifier: {error}")
                                 })?,
+                            force: action.force,
                             intent: SendIntent {
                                 expiration: SendExpiration::EngineDefault,
                                 message: SendMessage {
@@ -2127,6 +2144,19 @@ impl ScenarioRunner {
                 {
                     return Err(format!(
                         "expected pending reason {expected:?}\nactual: {:?}",
+                        snapshot.send.resolution
+                    ));
+                }
+                if let Some(expected) = expectation.can_force_retry
+                    && snapshot
+                        .send
+                        .resolution
+                        .as_ref()
+                        .map(|resolution| resolution.can_force_retry)
+                        != Some(expected)
+                {
+                    return Err(format!(
+                        "expected can_force_retry={expected}\nactual: {:?}",
                         snapshot.send.resolution
                     ));
                 }

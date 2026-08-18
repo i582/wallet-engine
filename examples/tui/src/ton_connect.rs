@@ -57,15 +57,26 @@ pub(crate) struct TransactionPrompt {
     pub(crate) amount_nanograms: String,
     pub(crate) deploys_contract: bool,
     pub(crate) has_payload: bool,
-    response: Option<oneshot::Sender<bool>>,
+    pub(crate) can_force_retry: bool,
+    pub(crate) force: bool,
+    response: Option<oneshot::Sender<TransactionDecision>>,
 }
 
 impl TransactionPrompt {
+    /// Returns the user's transaction decision to the bridge task.
     pub(crate) fn respond(mut self, approved: bool) {
         if let Some(response) = self.response.take() {
-            let _ = response.send(approved);
+            let _ = response.send(TransactionDecision {
+                approved,
+                force: approved && self.force,
+            });
         }
     }
+}
+
+struct TransactionDecision {
+    approved: bool,
+    force: bool,
 }
 
 pub(crate) enum TonConnectEvent {
@@ -431,11 +442,16 @@ async fn handle_send_transaction(
     cancellation: &CancellationToken,
 ) -> WalletResponse {
     let request_id = request.id.clone();
-    let engine_request = match engine_send_request(session_id, request, descriptor) {
+    let mut engine_request = match engine_send_request(session_id, request, descriptor) {
         Ok(request) => request,
         Err(code) => return rpc_error(request_id, code, "Unsupported transaction shape"),
     };
     let (approval_tx, approval_rx) = oneshot::channel();
+    let can_force_retry = wallet_client
+        .snapshot()
+        .ok()
+        .and_then(|snapshot| snapshot.send.resolution)
+        .is_some_and(|resolution| resolution.can_force_retry);
     let SendAmount::Exact { nanograms } = &engine_request.intent.message.amount else {
         return rpc_error(request_id, RpcErrorCode::BadRequest, "Invalid amount");
     };
@@ -449,23 +465,26 @@ async fn handle_send_transaction(
                 engine_request.intent.message.body,
                 SendMessageBody::RawPayload { .. }
             ),
+            can_force_retry,
+            force: false,
             response: Some(approval_tx),
         }))
         .is_err()
     {
         return rpc_error(request_id, RpcErrorCode::Unknown, "TUI closed");
     }
-    let approved = tokio::select! {
-        result = approval_rx => result.unwrap_or(false),
-        () = cancellation.cancelled() => false,
+    let decision = tokio::select! {
+        result = approval_rx => result.unwrap_or(TransactionDecision { approved: false, force: false }),
+        () = cancellation.cancelled() => TransactionDecision { approved: false, force: false },
     };
-    if !approved {
+    if !decision.approved {
         return rpc_error(
             request_id,
             RpcErrorCode::UserDeclined,
             "User declined the transaction",
         );
     }
+    engine_request.force = decision.force;
     match wallet_client.send(engine_request).await {
         Ok(result)
             if matches!(
@@ -528,6 +547,7 @@ fn engine_send_request(
             session_id, request.id
         ))
         .map_err(|_| RpcErrorCode::BadRequest)?,
+        force: false,
         intent: SendIntent {
             expiration: payload
                 .valid_until

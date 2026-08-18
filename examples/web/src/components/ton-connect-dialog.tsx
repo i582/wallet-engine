@@ -1,21 +1,25 @@
 import type {TonConnectInteraction} from "@ton/wallet-engine"
-import {type ReactElement, useId, useState} from "react"
+import {Warning} from "@phosphor-icons/react"
+import {type ChangeEvent, type ReactElement, useId, useState} from "react"
 
+import {Alert, AlertDescription, AlertTitle} from "@/components/ui/alert"
 import {Button} from "@/components/ui/button"
 import {Input} from "@/components/ui/input"
 import {TransferPreview} from "@/components/transfer-preview"
 import {compactAddress, formatNanogramBalance} from "@/lib/format"
 
 export interface TonConnectDialogProps {
+  readonly canForceRetry: boolean
   readonly connectedDappName?: string
   readonly interaction?: TonConnectInteraction
   readonly onClose: () => void
   readonly onDisconnect: () => Promise<void>
-  readonly onRespond: (interactionId: string, approved: boolean) => void
+  readonly onRespond: (interactionId: string, approved: boolean, force: boolean) => void
   readonly onStart: (link: string) => Promise<void>
 }
 
 export function TonConnectDialog({
+  canForceRetry,
   connectedDappName,
   interaction,
   onClose,
@@ -26,7 +30,9 @@ export function TonConnectDialog({
   const [link, setLink] = useState<string>("")
   const [busy, setBusy] = useState<boolean>(false)
   const [error, setError] = useState<string>()
+  const [force, setForce] = useState<boolean>(false)
   const titleId: string = useId()
+  const forceId: string = useId()
 
   async function connect(): Promise<void> {
     const value: string = link.trim()
@@ -49,7 +55,7 @@ export function TonConnectDialog({
     if (!interaction) {
       return
     }
-    onRespond(interaction.id, approved)
+    onRespond(interaction.id, approved, approved && force)
   }
 
   async function disconnect(): Promise<void> {
@@ -74,6 +80,29 @@ export function TonConnectDialog({
         role="dialog"
       >
         {interaction ? <ApprovalContent interaction={interaction} titleId={titleId} /> : null}
+        {interaction?.kind === "transaction" && canForceRetry ? (
+          <Alert className="mt-4">
+            <Warning aria-hidden="true" className="mt-0.5 text-amber-500" size={19} />
+            <AlertTitle>Previous transfer is unresolved</AlertTitle>
+            <AlertDescription>
+              Its signed message may still execute. If you approve this request, both transfers can
+              affect the balance.
+              <label className="mt-3 flex cursor-pointer items-start gap-2" htmlFor={forceId}>
+                <input
+                  checked={force}
+                  className="mt-0.5 size-4 accent-current"
+                  disabled={busy}
+                  id={forceId}
+                  type="checkbox"
+                  onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                    setForce(event.target.checked)
+                  }
+                />
+                <span>I understand. Approve this transaction anyway.</span>
+              </label>
+            </AlertDescription>
+          </Alert>
+        ) : null}
         {!interaction && connectedDappName ? (
           <>
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
@@ -116,7 +145,10 @@ export function TonConnectDialog({
               <Button disabled={busy} variant="secondary" onClick={() => respond(false)}>
                 Cancel
               </Button>
-              <Button disabled={busy} onClick={() => respond(true)}>
+              <Button
+                disabled={busy || (interaction.kind === "transaction" && canForceRetry && !force)}
+                onClick={() => respond(true)}
+              >
                 {interaction.kind === "connect" ? "Connect" : "Confirm"}
               </Button>
             </>

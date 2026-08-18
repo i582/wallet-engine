@@ -10,15 +10,21 @@ import {Input} from "@/components/ui/input"
 import {gramsToNanograms} from "@/lib/format"
 
 export interface SendFormProps {
+  readonly canForceRetry: boolean
   readonly onClose: () => void
   readonly onPreview: (destination: string, amountNanograms: string) => Promise<SendPreview>
   readonly onCancelPreview: () => Promise<void>
-  readonly onSend: (destination: string, amountNanograms: string) => Promise<SendResult>
+  readonly onSend: (
+    destination: string,
+    amountNanograms: string,
+    force: boolean,
+  ) => Promise<SendResult>
 }
 
 type SendProgress = "idle" | "previewing" | "sending"
 
 export function SendForm({
+  canForceRetry,
   onClose,
   onPreview,
   onCancelPreview,
@@ -26,11 +32,13 @@ export function SendForm({
 }: SendFormProps): ReactElement {
   const destinationId: string = useId()
   const amountId: string = useId()
+  const forceId: string = useId()
   const [destination, setDestination] = useState<string>("")
   const [amount, setAmount] = useState<string>("")
   const [progress, setProgress] = useState<SendProgress>("idle")
   const [preview, setPreview] = useState<SendPreview>()
   const [previewUnavailable, setPreviewUnavailable] = useState<boolean>(false)
+  const [force, setForce] = useState<boolean>(false)
   const [error, setError] = useState<string>()
 
   const reviewing: boolean = preview !== undefined || previewUnavailable
@@ -71,13 +79,13 @@ export function SendForm({
   ): Promise<void> {
     setProgress("sending")
     try {
-      const result: SendResult = await onSend(normalizedDestination, amountNanograms)
+      const result: SendResult = await onSend(normalizedDestination, amountNanograms, force)
       if (result.phase === "submitted") {
         onClose()
         return
       }
       if (result.phase === "submissionUnknown") {
-        setError("The result is unknown. Do not submit the transfer again.")
+        setError("The transfer may have been submitted. Review the warning before sending again.")
         return
       }
       setError(`The transfer ended with status: ${result.phase}`)
@@ -92,6 +100,7 @@ export function SendForm({
     await onCancelPreview()
     setPreview(undefined)
     setPreviewUnavailable(false)
+    setForce(false)
     setError(undefined)
   }
 
@@ -131,9 +140,10 @@ export function SendForm({
                     id={destinationId}
                     placeholder="EQ… or 0:…"
                     value={destination}
-                    onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                    onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                      setForce(false)
                       setDestination(event.target.value)
-                    }
+                    }}
                   />
                 </label>
                 <label className="block text-sm font-medium" htmlFor={amountId}>
@@ -146,9 +156,10 @@ export function SendForm({
                       inputMode="decimal"
                       placeholder="0.00"
                       value={amount}
-                      onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                      onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                        setForce(false)
                         setAmount(event.target.value)
-                      }
+                      }}
                     />
                     <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs font-medium text-muted-foreground">
                       GRAM
@@ -160,13 +171,37 @@ export function SendForm({
 
             <TransferAlert error={error} previewUnavailable={previewUnavailable} />
 
+            {canForceRetry ? (
+              <Alert>
+                <Warning aria-hidden="true" className="mt-0.5 text-amber-500" size={19} />
+                <AlertTitle>Previous transfer is unresolved</AlertTitle>
+                <AlertDescription>
+                  Its signed message may still execute. If you send another transfer, both can
+                  affect the balance.
+                  <label className="mt-3 flex cursor-pointer items-start gap-2" htmlFor={forceId}>
+                    <input
+                      checked={force}
+                      className="mt-0.5 size-4 accent-current"
+                      disabled={busy}
+                      id={forceId}
+                      type="checkbox"
+                      onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                        setForce(event.target.checked)
+                      }
+                    />
+                    <span>I understand. Submit this transfer anyway.</span>
+                  </label>
+                </AlertDescription>
+              </Alert>
+            ) : null}
+
             {reviewing ? (
               <div className="grid grid-cols-[auto_1fr] gap-2">
                 <Button disabled={busy} type="button" variant="outline" onClick={backToEdit}>
                   <ArrowLeft aria-hidden="true" size={18} />
                   Back
                 </Button>
-                <Button disabled={busy} type="submit">
+                <Button disabled={busy || (canForceRetry && !force)} type="submit">
                   <PaperPlaneTilt aria-hidden="true" size={18} />
                   {sendButtonLabel(progress, previewUnavailable)}
                 </Button>

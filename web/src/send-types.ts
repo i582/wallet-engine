@@ -59,6 +59,8 @@ export interface SendIntent {
 /** Requests one signed wallet transfer. */
 export interface SendRequest {
   readonly operationId: string
+  /** Allows this send to replace an unresolved signed send after explicit user confirmation. */
+  readonly force?: boolean
   readonly intent: SendIntent
 }
 

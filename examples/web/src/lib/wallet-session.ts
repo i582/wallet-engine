@@ -135,11 +135,16 @@ export class WalletSession {
     await this.client.cancelSendPreview()
   }
 
-  async send(destination: string, amountNanograms: string): Promise<SendResult> {
+  async send(
+    destination: string,
+    amountNanograms: string,
+    force: boolean = false,
+  ): Promise<SendResult> {
     this.assertOpen()
     try {
       return await this.client.send({
         operationId: crypto.randomUUID(),
+        force,
         intent: {
           expiration: {kind: "engineDefault"},
           message: {
@@ -173,9 +178,9 @@ export class WalletSession {
     return await this.tonConnect.restore()
   }
 
-  respondTonConnect(interactionId: string, approved: boolean): void {
+  respondTonConnect(interactionId: string, approved: boolean, force: boolean = false): void {
     this.assertOpen()
-    this.tonConnect.respond(interactionId, approved)
+    this.tonConnect.respond(interactionId, approved, force)
   }
 
   async disconnectTonConnect(): Promise<void> {

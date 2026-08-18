@@ -1505,6 +1505,7 @@ impl ScenarioRunner {
             });
         let expected = SendRequest {
             operation_id: actual.operation_id.clone(),
+            force: false,
             intent: SendIntent {
                 expiration: payload
                     .valid_until

@@ -772,7 +772,7 @@ QString describe_client_error(const WalletClientError &error) {
         )
     ) {
         return QStringLiteral(
-            "A previous transfer is still unresolved. Refresh before sending again."
+            "A previous transfer is still unresolved. Refresh, or use the explicit override in the send form."
         );
     }
     if (
@@ -911,7 +911,19 @@ struct TransferDraft {
     std::string destination;
     std::string amount_nanograms;
     std::optional<std::string> comment;
+    bool force;
 };
+
+/** Reports whether a new send can explicitly replace an unresolved signed send. */
+bool can_force_retry(const std::shared_ptr<WalletClient> &client) {
+    try {
+        const auto snapshot = client->snapshot();
+        return snapshot.send.resolution.has_value() &&
+            snapshot.send.resolution->can_force_retry;
+    } catch (...) {
+        return false;
+    }
+}
 
 struct PreviewResult {
     std::optional<SendPreview> preview;
@@ -966,6 +978,7 @@ SubmitResult submit_transfer(
         return {
             client->send({
                 operation_id,
+                draft.force,
                 transfer_intent(draft),
             }),
             {},
@@ -3047,6 +3060,31 @@ private:
         comment->setMaxLength(120);
         layout->addWidget(comment);
 
+        QCheckBox *force_retry = nullptr;
+        if (can_force_retry(client_)) {
+            auto *warning = new QFrame(&dialog);
+            warning->setObjectName(QStringLiteral("warningCard"));
+            auto *warning_layout = new QVBoxLayout(warning);
+            warning_layout->setContentsMargins(14, 12, 14, 12);
+            warning_layout->setSpacing(8);
+            auto *warning_text = new QLabel(
+                QStringLiteral(
+                    "A previous signed transfer is unresolved and may still execute. "
+                    "If you send another transfer, both can affect the balance."
+                ),
+                warning
+            );
+            warning_text->setObjectName(QStringLiteral("dialogWarning"));
+            warning_text->setWordWrap(true);
+            warning_layout->addWidget(warning_text);
+            force_retry = new QCheckBox(
+                QStringLiteral("I understand. Submit this transfer anyway."),
+                warning
+            );
+            warning_layout->addWidget(force_retry);
+            layout->addWidget(warning);
+        }
+
         auto *actions = new QHBoxLayout;
         auto *cancel = new QPushButton(QStringLiteral("Cancel"), &dialog);
         cancel->setObjectName(QStringLiteral("secondaryButton"));
@@ -3055,6 +3093,10 @@ private:
         cancel->setAutoDefault(false);
         preview->setAutoDefault(true);
         preview->setDefault(true);
+        preview->setEnabled(force_retry == nullptr);
+        if (force_retry != nullptr) {
+            connect(force_retry, &QCheckBox::toggled, preview, &QPushButton::setEnabled);
+        }
         actions->addStretch();
         actions->addWidget(cancel);
         actions->addWidget(preview);
@@ -3070,6 +3112,7 @@ private:
                 destination,
                 amount,
                 comment,
+                force_retry,
                 &reviewed_transfer
             ] {
                 const auto destination_value = destination->text().trimmed();
@@ -3102,9 +3145,10 @@ private:
                     destination_value.toStdString(),
                     nanograms.value(),
                     comment_value.isEmpty() ? std::nullopt :
-                                              std::optional<std::string>(
-                                                  comment_value.toStdString()
-                                              ),
+                                                  std::optional<std::string>(
+                                                      comment_value.toStdString()
+                                                  ),
+                    force_retry != nullptr && force_retry->isChecked(),
                 };
                 app_log(
                     AppLogLevel::Info,
@@ -3214,6 +3258,12 @@ private:
         if (preview.emulation.is_incomplete) {
             details += QStringLiteral(
                 "\n\nThe provider reports unresolved messages in this preview."
+            );
+        }
+        if (pending_transfer_->force) {
+            details += QStringLiteral(
+                "\n\nWarning: the previous signed transfer may still execute. "
+                "Both transfers can affect the balance."
             );
         }
         const auto choice = QMessageBox::question(

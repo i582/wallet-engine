@@ -172,10 +172,11 @@ describe("TON Connect wallet runtime", () => {
     await wallet.close()
   })
 
-  test("emulates the exact TON Connect request before asking for approval", async () => {
+  test("emulates the exact request and forwards an approved force override", async () => {
     const dappCrypto = new SessionCrypto()
     const order: string[] = []
     const previewRequests: unknown[] = []
+    const sendRequests: unknown[] = []
     let walletClientId: string | undefined
     let requestSent: boolean = false
     const fetch = Object.assign(
@@ -254,6 +255,16 @@ describe("TON Connect wallet runtime", () => {
           },
         }
       },
+      send: async (request: unknown) => {
+        order.push("send")
+        sendRequests.push(request)
+        return {
+          operationId: "ton-connect-operation",
+          messageHash: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          signedBoc: "te6ccgEBAQEAAgAAAA==",
+          phase: "submitted",
+        }
+      },
     } as unknown as WalletClient
     const lifecycle = {
       tonConnectAccount: () => ({
@@ -288,14 +299,14 @@ describe("TON Connect wallet runtime", () => {
       } else {
         order.push("interaction")
         transactionPreview = event.interaction.preview
-        wallet.respond(event.interaction.id, false)
+        wallet.respond(event.interaction.id, true, true)
       }
     })
 
     await wallet.start(connectLink(dappCrypto.sessionId))
     await Bun.sleep(20)
 
-    expect(order).toEqual(["preview", "interaction"])
+    expect(order).toEqual(["preview", "interaction", "send"])
     expect(previewRequests).toEqual([
       expect.objectContaining({
         intent: {
@@ -313,6 +324,14 @@ describe("TON Connect wallet runtime", () => {
         emulation: expect.objectContaining({transactionCount: 2}),
       }),
     )
+    expect(sendRequests).toEqual([
+      expect.objectContaining({
+        force: true,
+        intent: expect.objectContaining({
+          expiration: {kind: "exact", unixTimestamp: 1_900_000_000},
+        }),
+      }),
+    ])
     await wallet.close()
   })
 })

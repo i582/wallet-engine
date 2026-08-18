@@ -104,7 +104,15 @@ export interface PersistedSession {
 }
 
 export interface PendingApproval {
-  readonly resolve: (approved: boolean) => void
+  readonly resolve: (decision: TonConnectApprovalDecision) => void
+}
+
+/** Explicit wallet-user decision for one connection or transaction prompt. */
+export interface TonConnectApprovalDecision {
+  /** Whether the user approved the prompt. */
+  readonly approved: boolean
+  /** Whether an approved transaction may replace an unresolved signed send. */
+  readonly force: boolean
 }
 
 export interface SseEvent {

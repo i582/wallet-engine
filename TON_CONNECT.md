@@ -70,7 +70,9 @@ and deployment state before approval.
 After approval, pass the same `SendRequest` to `send`. Return the signed BoC to
 the dApp only for `submitted`, `submissionUnknown`, or `confirmed`. A
 `submissionUnknown` result can already be in the network, so do not sign a
-replacement automatically.
+replacement automatically. TON Connect requests decode with `force = false`.
+If the user explicitly approves a replacement, the wallet can set `force =
+true` on the decoded `SendRequest`; the original transfer can still execute.
 
 ## Native session flow
 

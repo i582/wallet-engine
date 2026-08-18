@@ -220,12 +220,16 @@ export function App(): ReactElement {
     await session?.cancelSendPreview()
   }
 
-  async function sendTransfer(destination: string, amountNanograms: string): Promise<SendResult> {
+  async function sendTransfer(
+    destination: string,
+    amountNanograms: string,
+    force: boolean,
+  ): Promise<SendResult> {
     if (!session) {
       throw new Error("The wallet is not open")
     }
     try {
-      return await session.send(destination, amountNanograms)
+      return await session.send(destination, amountNanograms, force)
     } finally {
       setSnapshot(session.snapshot())
     }
@@ -239,8 +243,8 @@ export function App(): ReactElement {
     session.startTonConnect(link).catch((cause: unknown) => setError(errorMessage(cause)))
   }
 
-  function respondTonConnect(interactionId: string, approved: boolean): void {
-    session?.respondTonConnect(interactionId, approved)
+  function respondTonConnect(interactionId: string, approved: boolean, force: boolean): void {
+    session?.respondTonConnect(interactionId, approved, force)
     setTonConnectInteraction(undefined)
   }
 

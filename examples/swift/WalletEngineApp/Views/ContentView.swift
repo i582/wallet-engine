@@ -427,6 +427,7 @@ private struct WalletDashboard: View {
                     SendWalletView(
                         wallet: activeWallet,
                         account: account,
+                        canForceRetry: walletSnapshot?.send.resolution?.canForceRetry == true,
                         session: session
                     ) {
                         refreshAccount()
@@ -1526,6 +1527,7 @@ private struct SendWalletView: View {
 
     let wallet: StoredWallet
     let account: WalletAccountSnapshot?
+    let canForceRetry: Bool
     let session: WalletSession
     let onSubmitted: () -> Void
 
@@ -1533,6 +1535,8 @@ private struct SendWalletView: View {
     @State private var amount = ""
     @State private var isSubmitting = false
     @State private var isConfirming = false
+    @State private var forceRetryAvailable = false
+    @State private var force = false
     @State private var errorMessage: String?
     @FocusState private var focusedField: Field?
 
@@ -1577,6 +1581,16 @@ private struct SendWalletView: View {
                     Text("Amount")
                 } footer: {
                     Text("Available: \(account?.balanceGrams ?? "—") GRAM. Network fees are charged separately.")
+                }
+
+                if forceRetryAvailable {
+                    Section {
+                        Toggle("I understand. Submit this transfer anyway.", isOn: $force)
+                    } header: {
+                        Text("Previous transfer is unresolved")
+                    } footer: {
+                        Text("Its signed message may still execute. If you send another transfer, both can affect the balance.")
+                    }
                 }
 
                 if let errorMessage {
@@ -1635,6 +1649,19 @@ private struct SendWalletView: View {
                     .foregroundStyle(.secondary)
             }
 
+            if forceRetryAvailable {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("Previous transfer is unresolved", systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout.weight(.semibold))
+                    Text("Its signed message may still execute. If you send another transfer, both can affect the balance.")
+                        .font(.caption)
+                    Toggle("I understand. Submit this transfer anyway.", isOn: $force)
+                }
+                .foregroundStyle(.orange)
+                .padding(14)
+                .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+            }
+
             if let errorMessage {
                 Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
                     .font(.callout)
@@ -1659,6 +1686,7 @@ private struct SendWalletView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(
                     isSubmitting || normalizedDestination.isEmpty || normalizedAmount.isEmpty
+                        || (forceRetryAvailable && !force)
                 )
                 .keyboardShortcut(.defaultAction)
             }
@@ -1669,11 +1697,24 @@ private struct SendWalletView: View {
         .interactiveDismissDisabled(isSubmitting)
 #endif
         }
+        .onAppear {
+            forceRetryAvailable = canForceRetry
+        }
+        .onChange(of: canForceRetry) { _, available in
+            forceRetryAvailable = available
+            if !available { force = false }
+        }
+        .onChange(of: destination) { _, _ in force = false }
+        .onChange(of: amount) { _, _ in force = false }
         .alert("Confirm transfer", isPresented: $isConfirming) {
             Button("Cancel", role: .cancel) {}
             Button("Send") { submit() }
         } message: {
-            Text("Send \(normalizedAmount) GRAM to \(normalizedDestination)?")
+            Text(
+                force
+                    ? "Send \(normalizedAmount) GRAM to \(normalizedDestination)? The previous signed transfer may still execute, so both transfers can affect the balance."
+                    : "Send \(normalizedAmount) GRAM to \(normalizedDestination)?"
+            )
         }
     }
 
@@ -1690,7 +1731,10 @@ private struct SendWalletView: View {
                 Text("Send")
             }
         }
-        .disabled(isSubmitting || normalizedDestination.isEmpty || normalizedAmount.isEmpty)
+        .disabled(
+            isSubmitting || normalizedDestination.isEmpty || normalizedAmount.isEmpty
+                || (forceRetryAvailable && !force)
+        )
     }
 
     private func submit() {
@@ -1704,6 +1748,7 @@ private struct SendWalletView: View {
                 let result = try await session.send(
                     SendRequest(
                         operationId: UUID().uuidString.lowercased(),
+                        force: force,
                         intent: SendIntent(
                             expiration: .engineDefault,
                             message: SendMessage(
@@ -1720,7 +1765,9 @@ private struct SendWalletView: View {
                     onSubmitted()
                     dismiss()
                 case .submissionUnknown:
-                    errorMessage = "The transfer may have been submitted. Do not send it again. Message hash: \(result.messageHash)"
+                    forceRetryAvailable = session.snapshot.send.resolution?.canForceRetry == true
+                    force = false
+                    errorMessage = "The transfer may have been submitted. Review the warning before sending again. Message hash: \(result.messageHash)"
                 case .failed, .replaced, .expired, .superseded:
                     errorMessage = session.snapshot.send.errorMessage
                         ?? "The transfer was rejected and was not submitted."
@@ -1731,6 +1778,8 @@ private struct SendWalletView: View {
                     errorMessage = "The transfer did not reach a final state."
                 }
             } catch {
+                forceRetryAvailable = session.snapshot.send.resolution?.canForceRetry == true
+                force = false
                 errorMessage = error.localizedDescription
             }
             isSubmitting = false

@@ -42,6 +42,7 @@ pub(crate) struct App {
     pub(crate) import_words: String,
     pub(crate) send_destination: String,
     pub(crate) send_amount: String,
+    pub(crate) force_send: bool,
     pub(crate) ton_connect_link: String,
     pub(crate) input_field: InputField,
     store: Arc<DiskStore>,
@@ -66,6 +67,7 @@ impl App {
             import_words: String::new(),
             send_destination: String::new(),
             send_amount: String::new(),
+            force_send: false,
             ton_connect_link: String::new(),
             input_field: InputField::Destination,
             store,
@@ -168,6 +170,7 @@ impl App {
             KeyCode::Char('s') => {
                 self.send_destination.clear();
                 self.send_amount.clear();
+                self.force_send = false;
                 self.input_field = InputField::Destination;
                 self.status = None;
                 self.screen = Screen::Send;
@@ -219,21 +222,35 @@ impl App {
             KeyCode::Enter if self.input_field == InputField::Destination => {
                 self.input_field = InputField::Amount;
             }
+            KeyCode::Enter if self.can_force_retry() && !self.force_send => {
+                self.status = Some(
+                    "A previous signed transfer is unresolved; press Space to acknowledge the risk"
+                        .to_owned(),
+                );
+            }
             KeyCode::Enter => self.send().await,
+            KeyCode::Char(' ') if self.can_force_retry() => {
+                self.force_send = !self.force_send;
+                self.status = None;
+            }
             KeyCode::Backspace => match self.input_field {
                 InputField::Destination => {
                     self.send_destination.pop();
+                    self.force_send = false;
                 }
                 InputField::Amount => {
                     self.send_amount.pop();
+                    self.force_send = false;
                 }
             },
             KeyCode::Char(character) => match self.input_field {
                 InputField::Destination if !character.is_whitespace() => {
                     self.send_destination.push(character);
+                    self.force_send = false;
                 }
                 InputField::Amount if character.is_ascii_digit() || character == '.' => {
                     self.send_amount.push(character);
+                    self.force_send = false;
                 }
                 _ => {}
             },
@@ -284,6 +301,28 @@ impl App {
     }
 
     fn handle_ton_connect_transaction(&mut self, key: KeyEvent) {
+        if key.code == KeyCode::Char(' ') {
+            if let Screen::TonConnectTransaction(prompt) = &mut self.screen
+                && prompt.can_force_retry
+            {
+                prompt.force = !prompt.force;
+                self.status = None;
+            }
+            return;
+        }
+        if key.code == KeyCode::Char('y')
+            && matches!(
+                &self.screen,
+                Screen::TonConnectTransaction(prompt)
+                    if prompt.can_force_retry && !prompt.force
+            )
+        {
+            self.status = Some(
+                "A previous signed transfer may still execute; acknowledge the warning first"
+                    .to_owned(),
+            );
+            return;
+        }
         let approved = match key.code {
             KeyCode::Char('y') => Some(true),
             KeyCode::Char('n') | KeyCode::Esc => Some(false),
@@ -530,6 +569,13 @@ impl App {
             self.status = Some("Wallet client is unavailable".to_owned());
             return;
         };
+        if self.can_force_retry() && !self.force_send {
+            self.status = Some(
+                "A previous signed transfer may still execute; acknowledge the warning first"
+                    .to_owned(),
+            );
+            return;
+        }
         let amount_nanograms = match parse_gram_amount(&self.send_amount) {
             Ok(amount) => amount,
             Err(message) => {
@@ -587,6 +633,7 @@ impl App {
         };
         let request = SendRequest {
             operation_id,
+            force: self.force_send,
             intent,
         };
         match client.send(request).await {
@@ -609,6 +656,14 @@ impl App {
                 self.status = Some(error.to_string());
             }
         }
+    }
+
+    /// Reports whether the engine can replace an unresolved signed send after confirmation.
+    pub(crate) fn can_force_retry(&self) -> bool {
+        self.snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.send.resolution.as_ref())
+            .is_some_and(|resolution| resolution.can_force_retry)
     }
 
     async fn delete_wallet(&mut self) {

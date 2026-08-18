@@ -37,6 +37,11 @@ final class TonConnectCoordinator {
     private(set) var diagnostic: String?
     private(set) var isWorking = false
 
+    /// Reports whether a new transaction can replace an unresolved signed send after confirmation.
+    var canForceRetry: Bool {
+        walletSession.snapshot.send.resolution?.canForceRetry == true
+    }
+
     @ObservationIgnored private let wallet: StoredWallet
     @ObservationIgnored private let descriptor: WalletDescriptor
     @ObservationIgnored private let walletSession: WalletSession
@@ -199,7 +204,7 @@ final class TonConnectCoordinator {
         isWorking = false
     }
 
-    func approveTransaction() async {
+    func approveTransaction(force: Bool = false) async {
         guard case .transaction(_, let request, _) = approval,
               let sendRequest = request.sendRequest,
               let session = rustSession else { return }
@@ -207,7 +212,13 @@ final class TonConnectCoordinator {
         diagnostic = nil
         let result: SendResult
         do {
-            result = try await walletSession.send(sendRequest)
+            result = try await walletSession.send(
+                SendRequest(
+                    operationId: sendRequest.operationId,
+                    force: force,
+                    intent: sendRequest.intent
+                )
+            )
             guard result.phase == .submitted
                     || result.phase == .submissionUnknown
                     || result.phase == .confirmed else {

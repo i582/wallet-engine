@@ -66,6 +66,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -1145,12 +1146,16 @@ private fun SecureScreenEffect() {
 private fun SendSheet(
     state: WalletUiState,
     onDismiss: () -> Unit,
-    onSend: (String, String) -> Unit,
+    onSend: (String, String, Boolean) -> Unit,
     onInputChanged: () -> Unit,
 ) {
     var destination by rememberSaveable { mutableStateOf("") }
     var amount by rememberSaveable { mutableStateOf("") }
+    var force by rememberSaveable { mutableStateOf(false) }
     var isConfirming by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(state.canForceRetry) {
+        if (!state.canForceRetry) force = false
+    }
     WalletFormSheet(
         title = "Send GRAM",
         onDismiss = { if (!state.isSending) onDismiss() },
@@ -1159,6 +1164,7 @@ private fun SendSheet(
             value = destination,
             onValueChange = {
                 destination = it
+                force = false
                 onInputChanged()
             },
             label = { Text("Recipient address") },
@@ -1170,6 +1176,7 @@ private fun SendSheet(
             onValueChange = { value ->
                 if (value.matches(Regex("[0-9]*([.][0-9]{0,9})?"))) {
                     amount = value
+                    force = false
                     onInputChanged()
                 }
             },
@@ -1193,9 +1200,48 @@ private fun SendSheet(
                 )
             }
         }
+        if (state.canForceRetry) {
+            Surface(
+                color = MaterialTheme.colorScheme.errorContainer,
+                contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                shape = MaterialTheme.shapes.medium,
+            ) {
+                Column(Modifier.fillMaxWidth().padding(LocalAppSpacing.current.md)) {
+                    Text(
+                        "Previous transfer is unresolved",
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    Text(
+                        "Its signed message may still execute. If you send another transfer, both can affect the balance.",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = LocalAppSpacing.current.xs),
+                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(enabled = !state.isSending) { force = !force }
+                            .padding(top = LocalAppSpacing.current.sm),
+                    ) {
+                        Checkbox(
+                            checked = force,
+                            enabled = !state.isSending,
+                            onCheckedChange = { force = it },
+                        )
+                        Text(
+                            "I understand. Submit this transfer anyway.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            }
+        }
         Button(
             onClick = { isConfirming = true },
-            enabled = !state.isSending && destination.isNotBlank() && (amount.toDoubleOrNull() ?: 0.0) > 0,
+            enabled = !state.isSending &&
+                destination.isNotBlank() &&
+                (amount.toDoubleOrNull() ?: 0.0) > 0 &&
+                (!state.canForceRetry || force),
             modifier = Modifier.fillMaxWidth().height(54.dp),
         ) {
             if (state.isSending) {
@@ -1214,13 +1260,20 @@ private fun SendSheet(
             onDismissRequest = { if (!state.isSending) isConfirming = false },
             title = { Text("Confirm transfer") },
             text = {
-                Text("Send ${amount.trim()} GRAM to ${destination.trim()}?")
+                Text(
+                    buildString {
+                        append("Send ${amount.trim()} GRAM to ${destination.trim()}?")
+                        if (force) {
+                            append("\n\nThe previous signed transfer may still execute, so both transfers can affect the balance.")
+                        }
+                    },
+                )
             },
             confirmButton = {
                 TextButton(
                     onClick = {
                         isConfirming = false
-                        onSend(destination.trim(), amount.trim())
+                        onSend(destination.trim(), amount.trim(), force)
                     },
                 ) { Text("Send") }
             },

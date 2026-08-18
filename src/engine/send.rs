@@ -26,10 +26,11 @@ impl WalletClient {
     /// calculates a new validity window, and builds the real message only after
     /// protected-secret authorization.
     ///
-    /// A transport error after submission produces `SubmissionUnknown`. Do not
-    /// create a replacement transfer for the same funds while it is unresolved.
-    /// A later [`Self::resolve_pending`] call, refresh, or send attempt can
-    /// reconcile the persisted message against provider evidence.
+    /// A transport error after submission produces `SubmissionUnknown`. A later
+    /// [`Self::resolve_pending`] call, refresh, or send attempt can reconcile the
+    /// persisted message against provider evidence. By default, the unresolved
+    /// send blocks a new signature. `SendRequest::force` overrides that block
+    /// after the application obtains explicit user confirmation.
     ///
     /// Workflow failures return a typed send error. The same bounded diagnostic
     /// is published in `snapshot().send.error_message`.
@@ -139,27 +140,32 @@ impl WalletClient {
         let provider_time = account.sync_utime;
 
         let journal_record = if let Some(pending) = pending {
-            // Resolve the old signed message before authorizing a new one. Only
-            // durable terminal evidence unlocks the wallet-wide send slot;
-            // absence or a temporary provider failure must never become an
-            // implicit permission to sign a potentially duplicate payment.
-            let requests = ResolutionRequests::new(&config, &pending, resolution_request_ids)
-                .map_err(|error| self.send_failed_error(generation, error.to_string()))?;
-            let resolved = self
-                .resolve_pending_for_send(
-                    generation,
-                    &config,
-                    pending.clone(),
-                    provider_time,
-                    &requests,
-                )
-                .await?;
-            let snapshot = pending.snapshot(&resolved.resolution);
-            self.publish_prior_send_resolution(generation, snapshot.clone())?;
-            if matches!(resolved.resolution, SendResolution::StillPending(_)) {
-                return Err(self.block_send_for_pending(generation, snapshot)?);
+            if request.force && pending.can_force_retry() {
+                journal_record
+            } else {
+                // Resolve the old signed message before authorizing a new one. Only
+                // durable terminal evidence unlocks the wallet-wide send slot;
+                // absence or a temporary provider failure must never become an
+                // implicit permission to sign a potentially duplicate payment.
+                let requests =
+                    ResolutionRequests::new(&config, &pending, resolution_request_ids)
+                        .map_err(|error| self.send_failed_error(generation, error.to_string()))?;
+                let resolved = self
+                    .resolve_pending_for_send(
+                        generation,
+                        &config,
+                        pending.clone(),
+                        provider_time,
+                        &requests,
+                    )
+                    .await?;
+                let snapshot = pending.snapshot(&resolved.resolution);
+                self.publish_prior_send_resolution(generation, snapshot.clone())?;
+                if matches!(resolved.resolution, SendResolution::StillPending(_)) {
+                    return Err(self.block_send_for_pending(generation, snapshot)?);
+                }
+                Some(resolved.journal)
             }
-            Some(resolved.journal)
         } else {
             journal_record
         };

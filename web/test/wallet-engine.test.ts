@@ -162,6 +162,41 @@ describe("high-level WASM API", () => {
     expect(update.snapshot.accountResource.error?.hostKind).toBe("connectionLost")
   })
 
+  test("accepts the camel-case exact expiration field at the WASM boundary", async () => {
+    const lifecycle = await WalletLifecycle.create(platform)
+    lifecycles.push(lifecycle)
+    const created = await lifecycle.createWallet({
+      recordId: "exact-expiration-wallet",
+      network: "testnet",
+    })
+    const client = await WalletClient.create(walletConfig(created.descriptor), {
+      platformHost: platform,
+      fetch: mockFetch(async () => {
+        throw new TypeError("offline in test")
+      }),
+    })
+    clients.push(client)
+
+    let diagnostic: string = ""
+    try {
+      await client.previewTonConnect({
+        operationId: "exact-expiration-preview",
+        intent: {
+          expiration: {kind: "exact", unixTimestamp: 1_900_000_000},
+          message: {
+            destination: created.descriptor.address,
+            amount: {kind: "exact", nanograms: "1"},
+            body: {kind: "empty"},
+          },
+        },
+      })
+    } catch (cause) {
+      diagnostic = cause instanceof Error ? cause.message : String(cause)
+    }
+
+    expect(diagnostic).not.toContain("missing field `unix_timestamp`")
+  })
+
   test("creates, reveals, and deletes a wallet through the platform host", async () => {
     const lifecycle = await WalletLifecycle.create(platform)
     lifecycles.push(lifecycle)

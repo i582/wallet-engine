@@ -74,6 +74,7 @@ pub enum SendExpiration {
     /// Preserve a caller-selected Unix expiration timestamp.
     Exact {
         /// The Unix expiration timestamp in seconds.
+        #[serde(rename = "unixTimestamp", alias = "unix_timestamp")]
         unix_timestamp: u64,
     },
 }
@@ -97,6 +98,12 @@ pub struct SendIntent {
 pub struct SendRequest {
     /// A unique idempotency identifier chosen by the application.
     pub operation_id: NonEmptyString,
+    /// Allows this send to replace an earlier signed send whose on-chain outcome is unresolved.
+    ///
+    /// The earlier send can still execute. Require explicit user confirmation
+    /// before setting this flag because both transfers can affect the balance.
+    #[serde(default)]
+    pub force: bool,
     /// The immutable message and expiration choices for this operation.
     pub intent: SendIntent,
 }
@@ -186,7 +193,7 @@ pub struct ResolutionInfo {
     pub transaction_lt: Option<UnsignedDecimalString>,
     /// Why the message remains unresolved, when no terminal evidence exists.
     pub pending_reason: Option<PendingReason>,
-    /// Whether this engine version can build an explicit same-seqno replacement.
+    /// Whether a new send with `force` can replace this unresolved signed send.
     pub can_force_retry: bool,
     /// A UI polling hint. This is not a correctness deadline.
     pub retry_after_hint_ms: Option<u64>,
@@ -314,10 +321,43 @@ mod tests {
         }
     }
 
+    /// Keeps the Web request field aligned with the camel-case TypeScript API.
+    #[test]
+    fn exact_expiration_serializes_with_unix_timestamp_in_camel_case() {
+        let json = serde_json::to_value(SendExpiration::Exact {
+            unix_timestamp: 1_900_000_000,
+        })
+        .expect("expiration serializes");
+
+        assert_eq!(
+            json,
+            serde_json::json!({"kind": "exact", "unixTimestamp": 1_900_000_000_u64})
+        );
+    }
+
+    /// Keeps older JSON callers on the safe non-forced send policy.
+    #[test]
+    fn send_request_defaults_force_to_false_when_the_field_is_absent() {
+        let mut json = serde_json::to_value(send_request(
+            SendExpiration::EngineDefault,
+            SendMessageBody::Empty,
+        ))
+        .expect("send request serializes");
+        json.as_object_mut()
+            .expect("send request is an object")
+            .remove("force");
+
+        let decoded: SendRequest =
+            serde_json::from_value(json).expect("legacy send request deserializes");
+
+        assert!(!decoded.force);
+    }
+
     /// Builds one public send request for serialization tests.
     fn send_request(expiration: SendExpiration, body: SendMessageBody) -> SendRequest {
         SendRequest {
             operation_id: NonEmptyString::try_from("operation").expect("valid operation id"),
+            force: false,
             intent: SendIntent {
                 expiration,
                 message: SendMessage {

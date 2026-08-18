@@ -108,7 +108,7 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
 }
 
 fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
-    let help = match app.screen {
+    let help = match &app.screen {
         Screen::Welcome => "[c] create  [i] import  [q] quit",
         Screen::Recovery(_) => "[enter] save wallet  [esc] discard",
         Screen::Import => "[enter] import  [esc] cancel",
@@ -118,9 +118,11 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
         Screen::Send => "[tab] next field  [enter] continue/send  [esc] close",
         Screen::TonConnectLink => "[enter] connect  [esc] close · paste a complete tc:// link",
         Screen::TonConnectConnecting => "[esc] cancel TON Connect",
-        Screen::TonConnectConfirm(_) | Screen::TonConnectTransaction(_) => {
-            "[y] approve  [n/esc] decline"
+        Screen::TonConnectConfirm(_) => "[y] approve  [n/esc] decline",
+        Screen::TonConnectTransaction(prompt) if prompt.can_force_retry => {
+            "[space] acknowledge risk  [y] approve  [n/esc] decline"
         }
+        Screen::TonConnectTransaction(_) => "[y] approve  [n/esc] decline",
         Screen::ConfirmDelete => "[y] delete  [n/esc] cancel",
     };
 
@@ -482,7 +484,8 @@ fn render_activity_pane(frame: &mut Frame<'_>, area: Rect, snapshot: Option<&Wal
 }
 
 fn render_send_dialog(frame: &mut Frame<'_>, app: &App) {
-    let area = centered_rect(72, 13, frame.area());
+    let can_force_retry = app.can_force_retry();
+    let area = centered_rect(72, if can_force_retry { 17 } else { 13 }, frame.area());
     frame.render_widget(Clear, area);
     frame.render_widget(
         Block::default()
@@ -496,9 +499,10 @@ fn render_send_dialog(frame: &mut Frame<'_>, app: &App) {
         horizontal: 2,
         vertical: 1,
     });
-    let [destination, amount, hint] = Layout::vertical([
+    let [destination, amount, force, hint] = Layout::vertical([
         Constraint::Length(3),
         Constraint::Length(3),
+        Constraint::Length(if can_force_retry { 4 } else { 0 }),
         Constraint::Min(2),
     ])
     .areas(inner);
@@ -517,6 +521,20 @@ fn render_send_dialog(frame: &mut Frame<'_>, app: &App) {
         &app.send_amount,
         app.input_field == InputField::Amount,
     );
+    if can_force_retry {
+        let marker = if app.force_send { "[x]" } else { "[ ]" };
+        frame.render_widget(
+            Paragraph::new(Text::from(vec![
+                Line::from(Span::styled(
+                    format!("{marker} Submit anyway  [Space] toggle"),
+                    Style::default().fg(WARNING).add_modifier(Modifier::BOLD),
+                )),
+                Line::from("The previous signed transfer may still execute."),
+                Line::from("Both transfers can affect the balance."),
+            ])),
+            force,
+        );
+    }
     frame.render_widget(
         Paragraph::new("Enter submits from the amount field.").style(Style::default().fg(MUTED)),
         hint,
@@ -672,44 +690,58 @@ fn render_ton_connect_transaction(
     frame: &mut Frame<'_>,
     prompt: &crate::ton_connect::TransactionPrompt,
 ) {
-    let area = centered_rect(70, 14, frame.area());
+    let area = centered_rect(
+        70,
+        if prompt.can_force_retry { 18 } else { 14 },
+        frame.area(),
+    );
     frame.render_widget(Clear, area);
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!("{} requests a transaction", prompt.dapp_name),
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::default(),
+        Line::from(format!("destination  {}", compact(&prompt.destination, 48))),
+        Line::from(format!(
+            "amount       {} nanograms",
+            prompt.amount_nanograms
+        )),
+        Line::from(format!(
+            "payload      {}",
+            if prompt.has_payload {
+                "contract call"
+            } else {
+                "empty"
+            }
+        )),
+        Line::from(format!(
+            "StateInit    {}",
+            if prompt.deploys_contract {
+                "deploy contract"
+            } else {
+                "none"
+            }
+        )),
+        Line::default(),
+        Line::from(Span::styled(
+            "This submits an on-chain transaction and spends network fees.",
+            Style::default().fg(WARNING),
+        )),
+    ];
+    if prompt.can_force_retry {
+        lines.push(Line::from(if prompt.force {
+            "[x] Submit anyway  [Space] toggle"
+        } else {
+            "[ ] Submit anyway  [Space] toggle"
+        }));
+        lines.push(Line::from(
+            "Previous signed transfer may still execute; both can affect balance.",
+        ));
+    }
+    lines.push(Line::from("[y] approve and submit    [n] decline"));
     frame.render_widget(
-        Paragraph::new(Text::from(vec![
-            Line::from(Span::styled(
-                format!("{} requests a transaction", prompt.dapp_name),
-                Style::default().add_modifier(Modifier::BOLD),
-            )),
-            Line::default(),
-            Line::from(format!("destination  {}", compact(&prompt.destination, 48))),
-            Line::from(format!(
-                "amount       {} nanograms",
-                prompt.amount_nanograms
-            )),
-            Line::from(format!(
-                "payload      {}",
-                if prompt.has_payload {
-                    "contract call"
-                } else {
-                    "empty"
-                }
-            )),
-            Line::from(format!(
-                "StateInit    {}",
-                if prompt.deploys_contract {
-                    "deploy contract"
-                } else {
-                    "none"
-                }
-            )),
-            Line::default(),
-            Line::from(Span::styled(
-                "This submits an on-chain transaction and spends network fees.",
-                Style::default().fg(WARNING),
-            )),
-            Line::from("[y] approve and submit    [n] decline"),
-        ]))
-        .block(
+        Paragraph::new(Text::from(lines)).block(
             Block::default()
                 .title(" Confirm transaction ")
                 .title_style(Style::default().fg(WARNING).add_modifier(Modifier::BOLD))

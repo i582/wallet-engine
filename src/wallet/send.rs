@@ -239,6 +239,18 @@ impl SendStage {
         )
     }
 
+    /// Reports whether an explicit caller override may replace this durable send.
+    ///
+    /// These stages all contain a complete signed BOC that can still execute.
+    /// Earlier workflow stages indicate an invalid journal record and cannot be
+    /// bypassed by a caller policy flag.
+    const fn permits_forced_replacement(self) -> bool {
+        matches!(
+            self,
+            Self::ReadyToSubmit | Self::Submitting | Self::SubmissionUnknown | Self::Submitted
+        )
+    }
+
     /// Returns the stage produced by a cancellation request.
     ///
     /// A terminal result is immutable. Every nonterminal stage can still move
@@ -394,10 +406,16 @@ impl PendingSendRecord {
                 transaction_hash,
                 transaction_lt,
                 pending_reason,
-                can_force_retry: false,
+                can_force_retry: pending_reason.is_some()
+                    && self.stage.permits_forced_replacement(),
                 retry_after_hint_ms: pending_reason.map(|_| 4_000),
             }),
         }
+    }
+
+    /// Reports whether a new send can explicitly replace this unresolved record.
+    pub(crate) const fn can_force_retry(&self) -> bool {
+        self.stage.permits_forced_replacement()
     }
 
     /// Builds a forward-only CAS mutation for terminal evidence.
@@ -557,15 +575,21 @@ pub(crate) fn send_snapshot_from_journal(
         | SendStage::FetchingFreshAccount
         | SendStage::Authorizing
         | SendStage::Preparing
-        | SendStage::PersistingPrepared
-        | SendStage::ReadyToSubmit
+        | SendStage::PersistingPrepared => Some(ResolutionInfo {
+            transaction_hash: None,
+            transaction_lt: None,
+            pending_reason: Some(PendingReason::AwaitingWindow),
+            can_force_retry: false,
+            retry_after_hint_ms: Some(4_000),
+        }),
+        SendStage::ReadyToSubmit
         | SendStage::Submitting
         | SendStage::SubmissionUnknown
         | SendStage::Submitted => Some(ResolutionInfo {
             transaction_hash: None,
             transaction_lt: None,
             pending_reason: Some(PendingReason::AwaitingWindow),
-            can_force_retry: false,
+            can_force_retry: true,
             retry_after_hint_ms: Some(4_000),
         }),
         SendStage::Failed | SendStage::Cancelled => None,
@@ -658,9 +682,8 @@ impl SendWorkflow {
 
     /// Seeds the compare-and-swap version of the wallet-level send slot.
     ///
-    /// Only an absent slot or a safely terminal prior operation can be
-    /// replaced. In particular, `SubmissionUnknown` blocks a new signature:
-    /// the persisted BOC can already be on the network.
+    /// Only an absent slot, a safely terminal prior operation, or an explicit
+    /// override for a complete signed BOC can seed the next journal version.
     pub(crate) fn journal_loaded(
         &mut self,
         record: Option<JournalRecord>,
@@ -677,25 +700,12 @@ impl SendWorkflow {
                     ));
                 }
 
-                match durable.stage {
-                    SendStage::Confirmed
-                    | SendStage::Replaced
-                    | SendStage::Expired
-                    | SendStage::Superseded
-                    | SendStage::Failed
-                    | SendStage::Cancelled => Some(record.version),
-                    SendStage::Validating
-                    | SendStage::LoadingJournal
-                    | SendStage::FetchingFreshAccount
-                    | SendStage::Authorizing
-                    | SendStage::Preparing
-                    | SendStage::PersistingPrepared
-                    | SendStage::ReadyToSubmit
-                    | SendStage::Submitting
-                    | SendStage::SubmissionUnknown
-                    | SendStage::Submitted => {
-                        return Err(SendWorkflowError::PreviousSubmissionUnresolved);
-                    }
+                if durable.stage.permits_replacement()
+                    || (self.request.force && durable.stage.permits_forced_replacement())
+                {
+                    Some(record.version)
+                } else {
+                    return Err(SendWorkflowError::PreviousSubmissionUnresolved);
                 }
             }
         };
@@ -1377,6 +1387,7 @@ mod tests {
             SendStage::ReadyToSubmit,
             SendStage::Submitting,
             SendStage::SubmissionUnknown,
+            SendStage::Submitted,
         ] {
             let mut workflow = workflow();
             assert!(workflow.begin().is_ok());
@@ -1388,6 +1399,68 @@ mod tests {
                 workflow.journal_loaded(Some(record)),
                 Err(SendWorkflowError::PreviousSubmissionUnresolved),
                 "stage {stage:?} must keep the shared send slot blocked"
+            );
+        }
+    }
+
+    /// Allows force only for journal stages backed by a complete signed BOC.
+    #[test]
+    fn force_replaces_only_a_complete_unresolved_signed_send() {
+        for stage in [
+            SendStage::ReadyToSubmit,
+            SendStage::Submitting,
+            SendStage::SubmissionUnknown,
+            SendStage::Submitted,
+        ] {
+            let mut workflow = SendWorkflow::new(
+                non_empty("record"),
+                source(),
+                SendRequest {
+                    force: true,
+                    ..request()
+                },
+                local_secret_ref(),
+            );
+            assert!(workflow.begin().is_ok());
+            let record = JournalRecord {
+                version: 7,
+                payload: durable_payload(stage),
+            };
+
+            assert_eq!(
+                workflow.journal_loaded(Some(record)),
+                Ok(SendDirective::FetchFreshAccount),
+                "stage {stage:?} contains the signed send being replaced"
+            );
+            assert_eq!(workflow.journal_version, Some(7));
+        }
+
+        for stage in [
+            SendStage::LoadingJournal,
+            SendStage::FetchingFreshAccount,
+            SendStage::Authorizing,
+            SendStage::Preparing,
+            SendStage::PersistingPrepared,
+        ] {
+            let mut workflow = SendWorkflow::new(
+                non_empty("record"),
+                source(),
+                SendRequest {
+                    force: true,
+                    ..request()
+                },
+                local_secret_ref(),
+            );
+            assert!(workflow.begin().is_ok());
+            let record = JournalRecord {
+                version: 7,
+                payload: durable_payload(stage),
+            };
+
+            assert_eq!(
+                workflow.journal_loaded(Some(record)),
+                Err(SendWorkflowError::PreviousSubmissionUnresolved),
+                "stage {stage:?} cannot be bypassed"
             );
         }
     }
@@ -1566,6 +1639,7 @@ mod tests {
     fn request() -> SendRequest {
         SendRequest {
             operation_id: NonEmptyString::try_from("operation").expect("valid operation"),
+            force: false,
             intent: SendIntent {
                 expiration: SendExpiration::EngineDefault,
                 message: SendMessage {

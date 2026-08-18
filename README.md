@@ -463,7 +463,9 @@ flowchart TD
     Account --> AccountOk{"Fresh account response valid?"}
     AccountOk -- no --> PreError
     AccountOk -- yes --> Prior{"Unresolved signed BOC exists?"}
-    Prior -- yes --> Resolve["Run pending-resolution flow"]
+    Prior -- yes --> Force{"request.force?"}
+    Force -- no --> Resolve["Run pending-resolution flow"]
+    Force -- yes --> Checks
     Blocked["CALL ERROR<br/>PreviousSubmissionUnresolved<br/>do not replace"]
     Resolve -- still pending --> Blocked
     Resolve -- provider / journal failure --> PreError
@@ -521,7 +523,13 @@ flowchart TD
 An explicit provider rejection becomes a definite `SendResult` with phase
 `failed` only after the terminal journal CAS succeeds. A transport failure
 after submission is not definite: it produces `submissionUnknown`, and the
-application must resolve it before signing another payment.
+application must resolve it before signing another payment by default.
+
+Set `SendRequest.force` only after the user explicitly confirms a replacement.
+It allows a new signature while the previous signed BoC remains unresolved.
+The previous transfer can still execute, so both transfers can affect the
+wallet balance. `SendSnapshot.resolution.canForceRetry` reports whether the
+current durable send can be overridden this way.
 
 ### Resolve a durable pending send
 
@@ -701,6 +709,11 @@ the dApp expiration, payload, and destination `StateInit` in the preview.
 6. builds and signs a new wallet message in Rust.
 7. stores the exact signed BoC in the host journal.
 8. submits that BoC to the provider.
+
+`SendRequest.force` defaults to `false` at JSON boundaries. When it is `true`,
+`send` can replace an unresolved durable signed BoC without first obtaining
+terminal provider evidence. Use it only after showing the unresolved transfer
+and receiving explicit user confirmation.
 
 `SendResult.signedBoc` contains the exact signed external-message BoC. TON
 Connect returns this value to the dApp after an accepted or uncertain

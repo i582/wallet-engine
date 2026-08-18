@@ -33,6 +33,7 @@ import type {
   PersistedSession,
   SseEvent,
   TonConnectAccountInfo,
+  TonConnectApprovalDecision,
   TonConnectInteraction,
   TonConnectStorage,
   TonConnectWalletEvent,
@@ -117,7 +118,7 @@ export class TonConnectWallet {
         this.abortController.signal,
       )
       const domain: string = new URL(manifest.url).hostname
-      const approved: boolean = await this.requestApproval({
+      const {approved}: TonConnectApprovalDecision = await this.requestApproval({
         kind: "connect",
         id: crypto.randomUUID(),
         dappName: manifest.name,
@@ -228,14 +229,17 @@ export class TonConnectWallet {
     return true
   }
 
-  /** Resolves a pending connect or transaction interaction. */
-  respond(interactionId: string, approved: boolean): void {
+  /**
+   * Resolves an interaction. `force` applies only to an approved transaction.
+   * The prior signed transfer can still execute, so require explicit user confirmation.
+   */
+  respond(interactionId: string, approved: boolean, force: boolean = false): void {
     const pending: PendingApproval | undefined = this.approvals.get(interactionId)
     if (!pending) {
       return
     }
     this.approvals.delete(interactionId)
-    pending.resolve(approved)
+    pending.resolve({approved, force: approved && force})
   }
 
   /** Sends a wallet-initiated disconnect and removes persisted session keys. */
@@ -255,7 +259,7 @@ export class TonConnectWallet {
   async close(): Promise<void> {
     this.abortController.abort()
     for (const pending of this.approvals.values()) {
-      pending.resolve(false)
+      pending.resolve({approved: false, force: false})
     }
     this.approvals.clear()
     await this.listenTask?.catch(() => undefined)
@@ -367,8 +371,11 @@ export class TonConnectWallet {
       })
       return
     }
-    const approved: boolean = await this.requestApproval({...prepared.interaction, preview})
-    if (!approved) {
+    const decision: TonConnectApprovalDecision = await this.requestApproval({
+      ...prepared.interaction,
+      preview,
+    })
+    if (!decision.approved) {
       await this.postRpcError({
         id: request.id,
         code: 300,
@@ -380,7 +387,7 @@ export class TonConnectWallet {
     }
     let result: SendResult
     try {
-      result = await this.walletClient.send(prepared.sendRequest)
+      result = await this.walletClient.send({...prepared.sendRequest, force: decision.force})
       if (!(["submitted", "submissionUnknown", "confirmed"] as string[]).includes(result.phase)) {
         throw new Error(`Transaction finished with ${result.phase}`)
       }
@@ -442,7 +449,7 @@ export class TonConnectWallet {
     await this.persistSession()
   }
 
-  private requestApproval(interaction: TonConnectInteraction): Promise<boolean> {
+  private requestApproval(interaction: TonConnectInteraction): Promise<TonConnectApprovalDecision> {
     return new Promise(resolve => {
       this.approvals.set(interaction.id, {resolve})
       this.emit({kind: "interaction", interaction})

@@ -91,11 +91,15 @@ class WalletRepository(private val store: SecureWalletStore) {
         return update.snapshot.toUiSnapshot()
     }
 
-    suspend fun send(wallet: StoredWallet, destination: String, amount: String) {
+    /** Returns the current in-memory engine state without contacting a provider. */
+    suspend fun snapshot(wallet: StoredWallet): WalletSnapshot = client(wallet).snapshot().toUiSnapshot()
+
+    suspend fun send(wallet: StoredWallet, destination: String, amount: String, force: Boolean) {
         val amountNanograms = gramToNanograms(amount)
         val result = client(wallet).send(
             SendRequest(
                 operationId = UUID.randomUUID().toString().lowercase(),
+                force = force,
                 intent = SendIntent(
                     expiration = SendExpiration.EngineDefault,
                     message = SendMessage(
@@ -190,6 +194,7 @@ class WalletRepository(private val store: SecureWalletStore) {
         },
         nextCursor = activityCursor?.let { TransactionCursor(it.logicalTime, it.hash) },
         canLoadMore = activityHasMore,
+        canForceRetry = send.resolution?.canForceRetry == true,
         accountError = accountResource.takeIf { it.phase == ResourcePhase.FAILED }
             ?.error?.developerMessage,
         activityError = activityResource.takeIf { it.phase == ResourcePhase.FAILED }

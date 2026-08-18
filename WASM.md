@@ -232,6 +232,13 @@ operation. This journal stores the exact signed BoC before submission.
 
 Browser storage can be cleared or evicted. Keep a recovery path for the user.
 Do not automatically create a new transfer after `submissionUnknown`.
+After showing the unresolved transfer, an application can request explicit user
+confirmation and resend with `SendRequest.force = true`. The original transfer
+can still execute, so both transfers can affect the wallet balance.
+
+Use `{ kind: "exact", unixTimestamp: value }` for an exact expiration in the
+Web API. TON Connect uses `valid_until` on the protocol wire and `validUntil` in
+the dApp SDK; those names are not `SendExpiration` fields.
 
 ## Chain streaming
 

@@ -8,6 +8,7 @@ struct TonConnectView: View {
 
     @State private var link = ""
     @State private var localError: String?
+    @State private var force = false
     @FocusState private var isLinkFocused: Bool
 
     var body: some View {
@@ -35,7 +36,10 @@ struct TonConnectView: View {
                             }
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(coordinator.isWorking)
+                        .disabled(
+                            coordinator.isWorking
+                                || (isTransactionApproval && coordinator.canForceRetry && !force)
+                        )
                     }
                 } else if coordinator.connection == nil {
                     ToolbarItem(placement: .confirmationAction) {
@@ -52,6 +56,9 @@ struct TonConnectView: View {
         .platformModalPresentation()
         .interactiveDismissDisabled(coordinator.isWorking)
         .defaultFocus($isLinkFocused, true)
+        .onChange(of: coordinator.approval?.id) { _, _ in
+            force = false
+        }
         .onDisappear {
             guard coordinator.approval != nil, !coordinator.isWorking else { return }
             Task {
@@ -72,7 +79,9 @@ struct TonConnectView: View {
             case .transaction(let manifest, _, let preview):
                 TonConnectTransactionView(
                     manifest: manifest,
-                    preview: preview
+                    preview: preview,
+                    canForceRetry: coordinator.canForceRetry,
+                    force: $force
                 )
             }
         } else if let connection = coordinator.connection {
@@ -154,6 +163,11 @@ struct TonConnectView: View {
         }
     }
 
+    private var isTransactionApproval: Bool {
+        if case .transaction = coordinator.approval { return true }
+        return false
+    }
+
     private func connect() {
         let normalized = link.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { return }
@@ -185,7 +199,7 @@ struct TonConnectView: View {
 
     private func approveTransaction() {
         Task {
-            await coordinator.approveTransaction()
+            await coordinator.approveTransaction(force: force)
             if coordinator.approval == nil {
                 dismiss()
             }
@@ -406,6 +420,8 @@ private struct TonConnectCapabilityRow: View {
 private struct TonConnectTransactionView: View {
     let manifest: TonConnectManifest
     let preview: SendPreview
+    let canForceRetry: Bool
+    @Binding var force: Bool
 
     private var amount: String {
         guard case .exact(let nanograms) = preview.message.amount else { return "All balance" }
@@ -454,6 +470,19 @@ private struct TonConnectTransactionView: View {
                 )
                 .font(.callout)
                 .foregroundStyle(.orange)
+            }
+
+            if canForceRetry {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("Previous transfer is unresolved", systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout.weight(.semibold))
+                    Text("Its signed message may still execute. If you approve this request, both transfers can affect the balance.")
+                        .font(.caption)
+                    Toggle("I understand. Approve this transaction anyway.", isOn: $force)
+                }
+                .foregroundStyle(.orange)
+                .padding(14)
+                .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
             }
         }
     }

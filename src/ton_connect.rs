@@ -756,6 +756,7 @@ fn decode_send_request(
     .map_err(session_error)?;
     let send_request = SendRequest {
         operation_id,
+        force: false,
         intent: SendIntent {
             expiration: payload
                 .valid_until

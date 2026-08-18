@@ -50,9 +50,13 @@ export interface WalletDashboardProps {
   readonly onForget: () => Promise<void>
   readonly onPreviewSend: (destination: string, amountNanograms: string) => Promise<SendPreview>
   readonly onCancelSendPreview: () => Promise<void>
-  readonly onSend: (destination: string, amountNanograms: string) => Promise<SendResult>
+  readonly onSend: (
+    destination: string,
+    amountNanograms: string,
+    force: boolean,
+  ) => Promise<SendResult>
   readonly onStartTonConnect: (link: string) => Promise<void>
-  readonly onRespondTonConnect: (interactionId: string, approved: boolean) => void
+  readonly onRespondTonConnect: (interactionId: string, approved: boolean, force: boolean) => void
   readonly onDisconnectTonConnect: () => Promise<void>
 }
 
@@ -171,6 +175,7 @@ export function WalletDashboard({
 
       {sendOpen ? (
         <SendForm
+          canForceRetry={snapshot.send.resolution?.canForceRetry === true}
           onCancelPreview={onCancelSendPreview}
           onClose={() => setSendOpen(false)}
           onPreview={onPreviewSend}
@@ -189,6 +194,7 @@ export function WalletDashboard({
       ) : null}
       {tonConnectOpen || tonConnectInteraction ? (
         <TonConnectDialog
+          canForceRetry={snapshot.send.resolution?.canForceRetry === true}
           connectedDappName={connectedDappName}
           interaction={tonConnectInteraction}
           onClose={() => setTonConnectOpen(false)}

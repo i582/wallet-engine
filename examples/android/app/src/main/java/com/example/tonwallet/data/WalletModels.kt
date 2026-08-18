@@ -52,6 +52,7 @@ data class WalletSnapshot(
     val transactions: List<WalletTransaction>,
     val nextCursor: TransactionCursor?,
     val canLoadMore: Boolean,
+    val canForceRetry: Boolean,
     val accountError: String?,
     val activityError: String?,
 )

@@ -29,6 +29,7 @@ data class WalletUiState(
     val isRefreshing: Boolean = false,
     val isLoadingMore: Boolean = false,
     val isSending: Boolean = false,
+    val canForceRetry: Boolean = false,
     val sendError: String? = null,
     val isLiveConnected: Boolean = false,
     val error: String? = null,
@@ -155,11 +156,11 @@ class WalletViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun send(destination: String, amount: String) {
+    fun send(destination: String, amount: String, force: Boolean) {
         val wallet = mutableState.value.activeWallet ?: return
         mutableState.value = mutableState.value.copy(isSending = true, sendError = null, error = null)
         viewModelScope.launch {
-            runCatching { repository.send(wallet, destination, amount) }
+            runCatching { repository.send(wallet, destination, amount, force) }
                 .onSuccess {
                     mutableState.value = mutableState.value.copy(
                         isSending = false,
@@ -168,6 +169,9 @@ class WalletViewModel(application: Application) : AndroidViewModel(application) 
                     refresh()
                 }
                 .onFailure { error ->
+                    runCatching { repository.snapshot(wallet) }
+                        .getOrNull()
+                        ?.let { publish(it) }
                     mutableState.value = mutableState.value.copy(
                         isSending = false,
                         sendError = friendlyError(error.message),
@@ -198,6 +202,7 @@ class WalletViewModel(application: Application) : AndroidViewModel(application) 
             transactions = snapshot.transactions,
             nextCursor = snapshot.nextCursor,
             canLoadMore = snapshot.canLoadMore,
+            canForceRetry = snapshot.canForceRetry,
             isRefreshing = isRefreshing,
             isLoadingMore = isLoadingMore,
             error = snapshot.accountError ?: snapshot.activityError,

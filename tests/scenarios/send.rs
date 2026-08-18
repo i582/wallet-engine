@@ -779,6 +779,26 @@ fn unknown_submission_blocks_a_replacement_send() {
             WalletClientError::PreviousSubmissionUnresolved,
         ))
         .then(snapshot().pending_reason(PendingReason::AwaitingWindow))
+        .then(snapshot().can_force_retry(true))
+        .run();
+}
+
+/// Verifies that an explicit force policy can replace a still-unresolved signed send.
+#[test]
+fn force_send_replaces_an_unresolved_submission() {
+    scenario("force send replaces an unresolved signed submission")
+        .given(wallet().active().balance(grams(10)).seqno(7))
+        .given(submission().paused("first-submit"))
+        .when(start("first", send().to(own_address()).grams(1)))
+        .then(send_phase("first", SendPhase::Submitting))
+        .when(resume("first-submit", submission_timeout()))
+        .then(result("first").submission_unknown())
+        .given(submission().paused("forced-submit"))
+        .when(start("forced", send().to(own_address()).grams(2).force()))
+        .then(send_phase("forced", SendPhase::Submitting))
+        .when(resume("forced-submit", submission_accepted()))
+        .then(result("forced").submitted())
+        .then(message_was_submitted())
         .run();
 }
 
