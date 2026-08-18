@@ -144,6 +144,9 @@ bindings-c-check:
 bindings-c-experimental:
     cargo xtask bindings c-experimental
 
+bindings-cpp:
+    cargo xtask bindings cpp
+
 build-c:
     cargo build --release --locked --manifest-path c-bindings/Cargo.toml
 

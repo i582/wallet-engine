@@ -1,4 +1,19 @@
 {% macro rust_call(func) -%}
+{%- if func.is_async() %}
+    uniffi::rust_call_async(
+        [&]() { return {{ func.ffi_func().name() }}(
+        {%- call arg_list_lowered(func) -%}); },
+        {{ func.ffi_rust_future_poll(ci) }},
+        {{ func.ffi_rust_future_complete(ci) }},
+        {{ func.ffi_rust_future_free(ci) }},
+{%- match func.throws_type() %}
+{% when Some with (e) %}
+        uniffi::{{ e|ffi_error_converter_name }}::lift
+{%- else %}
+        nullptr
+{%- endmatch %}
+    )
+{%- else %}
     uniffi::rust_call(
         {{ func.ffi_func().name() }},
 {%- match func.throws_type() %}
@@ -9,9 +24,27 @@
 {%- endmatch %}
 {%- if !func.arguments().is_empty() %}, {% else %}{% endif %}
         {%- call arg_list_lowered(func) -%})
+{%- endif %}
 {%- endmacro %}
 
 {% macro rust_call_with_prefix(prefix, func) -%}
+{%- if func.is_async() %}
+    uniffi::rust_call_async(
+        [&]() { return {{ func.ffi_func().name() }}(
+        {{ prefix }}
+{%- if !func.arguments().is_empty() %}, {% else %}{% endif %}
+        {%- call arg_list_lowered(func) -%}); },
+        {{ func.ffi_rust_future_poll(ci) }},
+        {{ func.ffi_rust_future_complete(ci) }},
+        {{ func.ffi_rust_future_free(ci) }},
+{%- match func.throws_type() %}
+{% when Some with (e) %}
+        uniffi::{{ e|ffi_error_converter_name }}::lift
+{%- else %}
+        nullptr
+{%- endmatch %}
+    )
+{%- else %}
     uniffi::rust_call(
         {{ func.ffi_func().name() }},
 {%- match func.throws_type() %}
@@ -23,6 +56,7 @@
         {{ prefix }}
 {%- if !func.arguments().is_empty() %}, {% else %}{% endif %}
         {%- call arg_list_lowered(func) -%})
+{%- endif %}
 {%- endmacro %}
 
 {% macro param_list(func) %}

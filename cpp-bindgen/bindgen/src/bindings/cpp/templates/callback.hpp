@@ -21,13 +21,15 @@ namespace uniffi {
         {%- endfor %}
 
         static void uniffi_free(uint64_t uniffi_handle);
+        static uint64_t uniffi_clone(uint64_t uniffi_handle);
         static void init();
     private:
         static inline {{ vtable|ffi_type_name }} vtable = {{ vtable|ffi_type_name}} {
+            .uniffi_free = reinterpret_cast<void *>(&uniffi_free),
+            .uniffi_clone = reinterpret_cast<void *>(&uniffi_clone),
             {%- for (ffi_callback, meth) in vtable_methods.iter() %}
-            .{{ meth.name()|var_name }} = reinterpret_cast<void *>(&{{ meth.name()|var_name }}),
+            .{{ meth.name()|var_name }} = reinterpret_cast<void *>(&{{ meth.name()|var_name }}){% if !loop.last %},{% endif %}
             {%- endfor %}
-            .uniffi_free = reinterpret_cast<void *>(&uniffi_free)
         };
     };
 }

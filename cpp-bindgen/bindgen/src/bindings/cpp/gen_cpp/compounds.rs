@@ -1,5 +1,8 @@
 use crate::bindings::cpp::CodeType;
-use uniffi_bindgen::{backend::Type, interface::Literal, ComponentInterface};
+use uniffi_bindgen::{
+    ComponentInterface,
+    interface::{DefaultValue, Literal, Type},
+};
 
 use crate::bindings::cpp::gen_cpp::filters::CppCodeOracle;
 
@@ -51,6 +54,22 @@ impl CodeType for OptionalCodeType {
                 }
             }
             _ => CppCodeOracle.find(&self.inner).literal(literal, ci),
+        }
+    }
+
+    fn default_value(&self, default: &DefaultValue, ci: &ComponentInterface) -> String {
+        match default {
+            DefaultValue::Default | DefaultValue::Literal(Literal::None) => {
+                if Self::can_dereference(&self.inner, ci) {
+                    "nullptr".into()
+                } else {
+                    "std::nullopt".into()
+                }
+            }
+            DefaultValue::Literal(Literal::Some { inner }) => {
+                CppCodeOracle.find(&self.inner).default_value(inner, ci)
+            }
+            DefaultValue::Literal(literal) => CppCodeOracle.find(&self.inner).literal(literal, ci),
         }
     }
 }

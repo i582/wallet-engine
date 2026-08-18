@@ -20,7 +20,7 @@ use askama::Template;
 use filters::CppCodeOracle;
 use serde::{Deserialize, Serialize};
 use topological_sort::{DependencyLink, TopologicalSort};
-use uniffi_bindgen::{interface::*, ComponentInterface};
+use uniffi_bindgen::{ComponentInterface, interface::*};
 
 use crate::bindings::cpp::gen_cpp::filters::callback_interface_name;
 
@@ -107,22 +107,7 @@ impl<'a> ScaffoldingHeader<'a> {
     }
 
     pub fn scaffolding_definitions(&self) -> impl Iterator<Item = FfiDefinition> + '_ {
-        self.ci
-            .callback_interface_definitions()
-            .into_iter()
-            .map(|cb| cb.vtable_definition())
-            .chain(
-                self.ci
-                    .object_definitions()
-                    .iter()
-                    .flat_map(|o| o.vtable_definition()),
-            )
-            .map(Into::into)
-            .chain(
-                self.ci
-                    .iter_ffi_function_definitions_non_async()
-                    .map(Into::into),
-            )
+        self.ci.ffi_definitions()
     }
 }
 
@@ -213,8 +198,9 @@ impl<'a> CppWrapperHeader<'a> {
             panic!("Cyclic dependency detected");
         }
 
+        let sorted_names = sorted.iter().filter_map(type_name).collect::<BTreeSet<_>>();
         let rest = types
-            .filter(|&t| !sorted.contains(t))
+            .filter(|t| type_name(t).map_or(true, |name| !sorted_names.contains(name)))
             .cloned()
             .collect::<BTreeSet<_>>();
 

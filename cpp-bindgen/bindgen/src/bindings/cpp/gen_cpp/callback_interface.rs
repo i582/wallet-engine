@@ -1,8 +1,8 @@
-use uniffi_bindgen::{interface::Literal, ComponentInterface};
+use uniffi_bindgen::{ComponentInterface, interface::Literal};
 
 use crate::bindings::cpp::{
-    gen_cpp::filters::{callback_interface_name, external_namespace_prefix, CppCodeOracle},
     CodeType,
+    gen_cpp::filters::{CppCodeOracle, callback_interface_name, external_namespace_prefix},
 };
 
 #[derive(Debug)]
