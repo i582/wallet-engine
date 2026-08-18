@@ -4,8 +4,8 @@ use crate::domain::bounded_diagnostic;
 use crate::wallet::send::FreshSendAccount;
 use crate::wallet::transfer::prepare_transfer_emulation;
 use crate::{
-    AccountStatus, DomainError, HttpRequest, HttpRequestId, SendAmount, SendPreview,
-    SendPreviewRequest, SendRequest, WalletClientError,
+    AccountStatus, DomainError, HttpRequest, HttpRequestId, SendPreview, SendPreviewRequest,
+    SendRequest, SignMessagePreview, WalletClientError,
 };
 
 use super::WalletClient;
@@ -88,8 +88,12 @@ impl WalletClient {
             })?;
 
         let available = account.balance_nanograms.clone();
+        let requested = request
+            .intent
+            .exact_value_total()
+            .map_err(|_| self.preview_error(generation, WalletClientError::InvalidSendRequest))?;
 
-        if let SendAmount::Exact { nanograms } = &request.intent.message.amount
+        if let Some(nanograms) = &requested
             && nanograms > &available
         {
             return Err(self.preview_error(
@@ -196,7 +200,7 @@ impl WalletClient {
             ));
         }
 
-        if let SendAmount::Exact { nanograms } = &request.intent.message.amount {
+        if let Some(nanograms) = &requested {
             // Exact sends must leave a positive remainder after the emulated
             // wallet fee. Use `SendAmount::All` when the intent is to drain
             // the wallet with carry-all-balance mode instead.
@@ -218,7 +222,7 @@ impl WalletClient {
         }
 
         let preview = SendPreview {
-            message: request.intent.message,
+            messages: request.intent.messages,
             valid_until,
             message_boc_base64: boc,
             emulation: evaluated.summary,
@@ -239,6 +243,90 @@ impl WalletClient {
             intent: request.intent,
         })
         .await
+    }
+
+    /// Validates an internal-message signing request from fresh public state.
+    ///
+    /// No wallet-paid fee estimate is returned because a relayer supplies the
+    /// TON attached to the internal request. Signing repeats these checks and
+    /// reads the protected secret only after host approval.
+    pub async fn preview_sign_message(
+        &self,
+        request: SendPreviewRequest,
+    ) -> Result<SignMessagePreview, WalletClientError> {
+        let (generation, config, account_request) = {
+            let mut state = self.lock()?;
+            ensure_running(&state)?;
+            if state.active_send.is_some() {
+                return Err(WalletClientError::SendAlreadyInProgress);
+            }
+            if state.active_preview.is_some() {
+                return Err(WalletClientError::SendPreviewAlreadyInProgress);
+            }
+
+            state.preview_generation = state
+                .preview_generation
+                .checked_add(1)
+                .ok_or(WalletClientError::IdentifierExhausted)?;
+            let generation = state.preview_generation;
+            let config = state.config.clone();
+            let account_request = build_toncenter_v2_request(
+                &config,
+                state.allocate_request_id()?,
+                "getAddressInformation",
+                &[("address", config.address.as_str())],
+            )?;
+            state.active_preview = Some((generation, Vec::new()));
+            (generation, config, account_request)
+        };
+
+        let _ = request
+            .intent
+            .exact_value_total()
+            .map_err(|_| self.preview_error(generation, WalletClientError::InvalidSendRequest))?;
+        let account = self
+            .execute_tracked_preview_request(generation, &account_request)
+            .await?
+            .and_then(|body| parse_account(&body))
+            .map_err(|error| {
+                self.preview_error(
+                    generation,
+                    WalletClientError::SendPreviewFailed {
+                        diagnostic: bounded_diagnostic(error.developer_message),
+                    },
+                )
+            })?;
+        if matches!(
+            account.status,
+            AccountStatus::Frozen | AccountStatus::Unknown
+        ) {
+            return Err(self.preview_error(
+                generation,
+                WalletClientError::SendAccountUnavailable {
+                    status: account.status,
+                },
+            ));
+        }
+        let valid_until = resolve_send_expiration(
+            &request.intent.expiration,
+            account.sync_utime,
+            config.send_validity_seconds,
+        )
+        .map_err(|error| {
+            self.preview_error(
+                generation,
+                WalletClientError::SendPreviewFailed {
+                    diagnostic: error.to_string(),
+                },
+            )
+        })?;
+        let preview = SignMessagePreview {
+            messages: request.intent.messages,
+            valid_until,
+            needs_state_init: !matches!(account.status, AccountStatus::Active),
+        };
+        self.finish_preview(generation)?;
+        Ok(preview)
     }
 
     /// Cancels the current send preview and its active HTTP request.

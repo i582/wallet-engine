@@ -3,7 +3,15 @@ import {WalletClient as RawWalletClient} from "../../bindings/wasm/wallet_engine
 import {BrowserHttpHost, type BrowserHttpHostOptions} from "./http-host"
 import {initializeWalletEngine} from "./initialize"
 import type {BrowserPlatformHost} from "./platform-host"
-import type {SendPreview, SendPreviewRequest, SendRequest, SendResult} from "./send-types"
+import type {
+  SendPreview,
+  SendPreviewRequest,
+  SendRequest,
+  SendResult,
+  SignMessageRequest,
+  SignMessagePreview,
+  SignMessageResult,
+} from "./send-types"
 import type {WalletClientConfig, WalletSnapshot, WalletUpdate} from "./types"
 
 export interface CreateClientOptions extends BrowserHttpHostOptions {
@@ -67,6 +75,12 @@ export class WalletClient {
     return (await this.raw.send(request)) as SendResult
   }
 
+  /** Signs a complete internal Wallet V5 message and leaves submission to the caller. */
+  async signMessage(request: SignMessageRequest): Promise<SignMessageResult> {
+    this.assertOpen()
+    return (await this.raw.signMessage(request)) as SignMessageResult
+  }
+
   async previewSend(request: SendPreviewRequest): Promise<SendPreview> {
     this.assertOpen()
     return (await this.raw.previewSend(request)) as SendPreview
@@ -76,6 +90,12 @@ export class WalletClient {
   async previewTonConnect(request: SendRequest): Promise<SendPreview> {
     this.assertOpen()
     return (await this.raw.previewTonConnect(request)) as SendPreview
+  }
+
+  /** Validates a sign-only request without reporting a wallet-paid network fee. */
+  async previewSignMessage(request: SendPreviewRequest): Promise<SignMessagePreview> {
+    this.assertOpen()
+    return (await this.raw.previewSignMessage(request)) as SignMessagePreview
   }
 
   async cancelSendPreview(): Promise<void> {

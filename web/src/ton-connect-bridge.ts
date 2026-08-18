@@ -1,4 +1,4 @@
-import {Base64, SessionCrypto, hexToByteArray} from "@tonconnect/protocol"
+import {Base64, type SessionCrypto, hexToByteArray} from "@tonconnect/protocol"
 
 import {
   BRIDGE_TTL_SECONDS,

@@ -94,6 +94,56 @@ impl TLB for WalletV5ExtMsgBody {
 }
 
 impl WalletV5ExtMsgBody {
+    /// Decodes the external request fields and its trailing Ed25519 signature.
+    pub fn read_signed(parser: &mut CellParser) -> Result<(Self, Vec<u8>), TonCoreError> {
+        let body = Self::read(parser)?;
+        let signature = parser.read_bits(512)?;
+        Ok((body, signature))
+    }
+}
+
+/// Owner-authorized Wallet V5 request delivered by an internal message.
+///
+/// The serialized cell excludes the trailing signature. Callers sign this
+/// cell hash and append the 512-bit Ed25519 signature to the same cell.
+#[derive(Debug, PartialEq, Clone)]
+pub struct WalletV5InternalSignedBody {
+    pub wallet_id: i32,
+    pub valid_until: u32,
+    pub msg_seqno: u32,
+    pub msgs_modes: Vec<u8>,
+    pub msgs: Vec<TonCell>,
+}
+
+impl TLB for WalletV5InternalSignedBody {
+    const PREFIX: TLBPrefix = TLBPrefix::new(0x73696e74, 32);
+
+    fn read_definition(parser: &mut CellParser) -> Result<Self, TonCoreError> {
+        let wallet_id = TLB::read(parser)?;
+        let valid_until = TLB::read(parser)?;
+        let msg_seqno = TLB::read(parser)?;
+        let inner_request = InnerRequest::read(parser)?;
+        let (msgs, msgs_modes) = parse_inner_request(inner_request)?;
+        Ok(Self {
+            wallet_id,
+            valid_until,
+            msg_seqno,
+            msgs_modes,
+            msgs,
+        })
+    }
+
+    fn write_definition(&self, dst: &mut CellBuilder) -> Result<(), TonCoreError> {
+        self.wallet_id.write(dst)?;
+        self.valid_until.write(dst)?;
+        self.msg_seqno.write(dst)?;
+        build_inner_request(&self.msgs, &self.msgs_modes)?.write(dst)?;
+        Ok(())
+    }
+}
+
+impl WalletV5InternalSignedBody {
+    /// Decodes the internal request fields and its trailing Ed25519 signature.
     pub fn read_signed(parser: &mut CellParser) -> Result<(Self, Vec<u8>), TonCoreError> {
         let body = Self::read(parser)?;
         let signature = parser.read_bits(512)?;
@@ -226,6 +276,25 @@ mod test {
         assert_eq!(body_signed, signed_serial);
         let parsed_back = WalletV5ExtMsgBody::from_cell(&signed_serial)?;
         assert_eq!(body, parsed_back);
+        Ok(())
+    }
+
+    #[test]
+    fn internal_signed_body_uses_the_internal_opcode_and_preserves_actions() -> anyhow::Result<()> {
+        let action = TonCell::builder().build()?;
+        let body = WalletV5InternalSignedBody {
+            wallet_id: WALLET_V5R1_ID_DEFAULT_TESTNET,
+            valid_until: 1_900_000_000,
+            msg_seqno: 17,
+            msgs_modes: vec![3],
+            msgs: vec![action.clone()],
+        };
+
+        let cell = body.to_cell()?;
+        let mut parser = cell.parser();
+        assert_eq!(parser.read_num::<u32>(32)?, 0x7369_6e74);
+        assert_eq!(WalletV5InternalSignedBody::from_cell(&cell)?, body);
+        assert_eq!(body.msgs, vec![action]);
         Ok(())
     }
 }

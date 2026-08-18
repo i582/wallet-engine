@@ -2,7 +2,7 @@
 
 use crate::domain::bounded_diagnostic;
 use crate::wallet::send::{
-    PendingSendRecord, SendResolution, SendWorkflowError, pending_send_record,
+    PendingSendRecord, SendResolution, SendWorkflowError, SignedMessageKind, pending_send_record,
     terminal_send_resolution,
 };
 use crate::{
@@ -151,6 +151,35 @@ impl WalletClient {
         provider_time: u64,
         requests: &ResolutionRequests,
     ) -> Result<ResolvedPending, WalletClientError> {
+        if pending.kind == SignedMessageKind::Internal {
+            let indexed_seqno = self
+                .execute_resolution_request(owner, &requests.wallet_state)
+                .await?
+                .and_then(|body| parse_wallet_seqno(&body))
+                .map_err(|error| self.resolution_failed_error(owner, error.developer_message))?;
+
+            if indexed_seqno > pending.seqno {
+                return self
+                    .persist_send_resolution(owner, pending, SendResolution::SequenceNumberConsumed)
+                    .await;
+            }
+
+            if resolution_window_expired(
+                provider_time,
+                pending.valid_until,
+                config.resolution_margin_seconds,
+            ) {
+                return self
+                    .persist_send_resolution(owner, pending, SendResolution::Expired)
+                    .await;
+            }
+
+            return Ok(ResolvedPending {
+                resolution: SendResolution::StillPending(PendingReason::AwaitingWindow),
+                journal: pending.current_journal(),
+            });
+        }
+
         // Evidence is deliberately checked from strongest to weakest. In
         // particular, our own successful message also increments wallet seqno,
         // so looking at seqno before the message hash would mislabel a confirmed

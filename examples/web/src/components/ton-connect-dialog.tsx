@@ -76,17 +76,17 @@ export function TonConnectDialog({
       <div
         aria-labelledby={titleId}
         aria-modal="true"
-        className="w-full max-w-md rounded-2xl border border-border bg-background p-5"
+        className="max-h-[calc(100vh-1.5rem)] w-full max-w-md overflow-y-auto rounded-2xl border border-border bg-background p-5"
         role="dialog"
       >
         {interaction ? <ApprovalContent interaction={interaction} titleId={titleId} /> : null}
         {interaction?.kind === "transaction" && canForceRetry ? (
           <Alert className="mt-4">
             <Warning aria-hidden="true" className="mt-0.5 text-amber-500" size={19} />
-            <AlertTitle>Previous transfer is unresolved</AlertTitle>
+            <AlertTitle>Previous signed request is unresolved</AlertTitle>
             <AlertDescription>
-              Its signed message may still execute. If you approve this request, both transfers can
-              affect the balance.
+              Its signed message may still execute. A replacement creates a sequence-number race,
+              and either request can affect the balance.
               <label className="mt-3 flex cursor-pointer items-start gap-2" htmlFor={forceId}>
                 <input
                   checked={force}
@@ -98,7 +98,7 @@ export function TonConnectDialog({
                     setForce(event.target.checked)
                   }
                 />
-                <span>I understand. Approve this transaction anyway.</span>
+                <span>I understand. Approve this request anyway.</span>
               </label>
             </AlertDescription>
           </Alert>
@@ -229,10 +229,10 @@ function ApprovalContent({
   return (
     <>
       <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-        Review transaction
+        {interaction.method === "signMessage" ? "Review signature" : "Review transaction"}
       </p>
       <h2 className="mt-2 text-xl font-semibold tracking-[-0.03em]" id={titleId}>
-        {interaction.dappName} wants to send
+        {interaction.dappName} wants to {interaction.method === "signMessage" ? "sign" : "send"}
       </h2>
       <div className="mt-5">
         <TransferPreview
@@ -241,6 +241,15 @@ function ApprovalContent({
           preview={interaction.preview}
         />
       </div>
+      {interaction.method === "signMessage" ? (
+        <Alert className="mt-4">
+          <Warning aria-hidden="true" className="mt-0.5 text-amber-500" size={19} />
+          <AlertTitle>This wallet will not broadcast the message</AlertTitle>
+          <AlertDescription>
+            The dApp or its relayer can submit every shown action until the signed request expires.
+          </AlertDescription>
+        </Alert>
+      ) : null}
       {interaction.hasPayload || interaction.deploysContract ? (
         <details className="mt-4 text-xs text-muted-foreground">
           <summary className="cursor-pointer select-none font-medium text-foreground">

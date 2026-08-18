@@ -120,9 +120,9 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
         Screen::TonConnectConnecting => "[esc] cancel TON Connect",
         Screen::TonConnectConfirm(_) => "[y] approve  [n/esc] decline",
         Screen::TonConnectTransaction(prompt) if prompt.can_force_retry => {
-            "[space] acknowledge risk  [y] approve  [n/esc] decline"
+            "[up/down] messages  [space] acknowledge risk  [y] approve  [n/esc] decline"
         }
-        Screen::TonConnectTransaction(_) => "[y] approve  [n/esc] decline",
+        Screen::TonConnectTransaction(_) => "[up/down] messages  [y] approve  [n/esc] decline",
         Screen::ConfirmDelete => "[y] delete  [n/esc] cancel",
     };
 
@@ -690,45 +690,91 @@ fn render_ton_connect_transaction(
     frame: &mut Frame<'_>,
     prompt: &crate::ton_connect::TransactionPrompt,
 ) {
-    let area = centered_rect(
-        70,
-        if prompt.can_force_retry { 18 } else { 14 },
-        frame.area(),
-    );
+    let area = centered_rect(94, frame.area().height.saturating_sub(2), frame.area());
     frame.render_widget(Clear, area);
     let mut lines = vec![
         Line::from(Span::styled(
-            format!("{} requests a transaction", prompt.dapp_name),
+            format!(
+                "{} requests {}",
+                prompt.dapp_name,
+                if prompt.sign_only {
+                    "a relayed message signature"
+                } else {
+                    "a transaction"
+                }
+            ),
             Style::default().add_modifier(Modifier::BOLD),
         )),
         Line::default(),
-        Line::from(format!("destination  {}", compact(&prompt.destination, 48))),
+        Line::from(format!("messages  {}", prompt.messages.len())),
+        Line::from(format!("valid until  {}", prompt.valid_until)),
         Line::from(format!(
-            "amount       {} nanograms",
-            prompt.amount_nanograms
-        )),
-        Line::from(format!(
-            "payload      {}",
-            if prompt.has_payload {
-                "contract call"
-            } else {
-                "empty"
-            }
-        )),
-        Line::from(format!(
-            "StateInit    {}",
-            if prompt.deploys_contract {
-                "deploy contract"
-            } else {
-                "none"
-            }
-        )),
-        Line::default(),
-        Line::from(Span::styled(
-            "This submits an on-chain transaction and spends network fees.",
-            Style::default().fg(WARNING),
+            "network fee  {}",
+            prompt.wallet_fee_nanograms.as_deref().map_or_else(
+                || "paid by relayer".to_owned(),
+                |value| format!("{value} nanograms")
+            )
         )),
     ];
+    if let Some(needs_state_init) = prompt.wallet_needs_state_init {
+        lines.push(Line::from(format!(
+            "wallet StateInit  {}",
+            if needs_state_init {
+                "included"
+            } else {
+                "not needed"
+            }
+        )));
+    }
+    lines.push(Line::default());
+    let state_init_line = usize::from(prompt.wallet_needs_state_init.is_some());
+    let reserved_lines = if prompt.can_force_retry {
+        12 + state_init_line
+    } else {
+        10 + state_init_line
+    };
+    let visible_messages = usize::from(area.height)
+        .saturating_sub(reserved_lines)
+        .max(1);
+    let max_start = prompt.messages.len().saturating_sub(visible_messages);
+    let start = prompt.scroll.min(max_start);
+    let end = start
+        .saturating_add(visible_messages)
+        .min(prompt.messages.len());
+    for (index, message) in prompt.messages[start..end].iter().enumerate() {
+        let tags = match (message.has_payload, message.deploys_contract) {
+            (true, true) => "payload, StateInit",
+            (true, false) => "payload",
+            (false, true) => "StateInit",
+            (false, false) => "empty body",
+        };
+        lines.push(Line::from(format!(
+            "#{:<3} {:>12} ng  -> {}  [{}]",
+            start + index + 1,
+            message.amount_nanograms,
+            compact(&message.destination, 34),
+            tags,
+        )));
+    }
+    if prompt.messages.len() > visible_messages {
+        lines.push(Line::from(format!(
+            "showing {}-{} of {}  [Up/Down/PageUp/PageDown]",
+            start + 1,
+            end,
+            prompt.messages.len()
+        )));
+    }
+    lines.extend([
+        Line::default(),
+        Line::from(Span::styled(
+            if prompt.sign_only {
+                "This does not broadcast. The dApp gives the signed message to a fee-paying relayer."
+            } else {
+                "This submits an on-chain transaction and spends network fees."
+            },
+            Style::default().fg(WARNING),
+        )),
+    ]);
     if prompt.can_force_retry {
         lines.push(Line::from(if prompt.force {
             "[x] Submit anyway  [Space] toggle"
@@ -736,10 +782,14 @@ fn render_ton_connect_transaction(
             "[ ] Submit anyway  [Space] toggle"
         }));
         lines.push(Line::from(
-            "Previous signed transfer may still execute; both can affect balance.",
+            "A previous signed request may still execute; only one can consume this seqno.",
         ));
     }
-    lines.push(Line::from("[y] approve and submit    [n] decline"));
+    lines.push(Line::from(if prompt.sign_only {
+        "[y] approve and return signature    [n] decline"
+    } else {
+        "[y] approve and submit    [n] decline"
+    }));
     frame.render_widget(
         Paragraph::new(Text::from(lines)).block(
             Block::default()

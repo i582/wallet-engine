@@ -183,11 +183,13 @@ describe("high-level WASM API", () => {
         operationId: "exact-expiration-preview",
         intent: {
           expiration: {kind: "exact", unixTimestamp: 1_900_000_000},
-          message: {
-            destination: created.descriptor.address,
-            amount: {kind: "exact", nanograms: "1"},
-            body: {kind: "empty"},
-          },
+          messages: [
+            {
+              destination: created.descriptor.address,
+              amount: {kind: "exact", nanograms: "1"},
+              body: {kind: "empty"},
+            },
+          ],
         },
       })
     } catch (cause) {

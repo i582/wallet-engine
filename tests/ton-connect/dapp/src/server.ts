@@ -6,6 +6,7 @@ import {
   TonConnect,
   type IStorage,
   type SendTransactionRequest,
+  type SignMessageRequest,
   type Wallet
 } from "@tonconnect/sdk";
 
@@ -28,6 +29,7 @@ interface ActorState {
   config: DappActorConfig;
   error: ActorError | null;
   transaction: TransactionState;
+  signMessage: SignMessageState;
   journal: ActorEvent[];
 }
 
@@ -44,10 +46,18 @@ interface TransactionState {
   error: ActorError | null;
 }
 
+interface SignMessageState {
+  status: "idle" | "pending" | "success" | "error";
+  request: SignMessageRequest | null;
+  result: unknown | null;
+  error: ActorError | null;
+}
+
 type ActorCommand =
   | { readonly type: "connect"; readonly proofPayload?: string }
   | { readonly type: "restore" | "disconnect" | "clear_storage" }
-  | { readonly type: "send_transaction"; readonly transaction: SendTransactionRequest };
+  | { readonly type: "send_transaction"; readonly transaction: SendTransactionRequest }
+  | { readonly type: "sign_message"; readonly transaction: SignMessageRequest };
 
 interface DappActorConfig {
   readonly bridgeUrl: string;
@@ -98,6 +108,12 @@ const state: ActorState = {
   config,
   error: null,
   transaction: {
+    status: "idle",
+    request: null,
+    result: null,
+    error: null
+  },
+  signMessage: {
     status: "idle",
     request: null,
     result: null,
@@ -251,6 +267,31 @@ async function executeCommand(command: ActorCommand, response: ServerResponse): 
       sendJson(response, 202, { status: state.transaction.status });
       return;
     }
+    case "sign_message": {
+      state.signMessage = {
+        status: "pending",
+        request: command.transaction,
+        result: null,
+        error: null
+      };
+      record("sign_message_requested", command.transaction);
+      void connector.signMessage(command.transaction, {
+        onRequestSent: () => record("sign_message_sent")
+      }).then(
+        result => {
+          state.signMessage.status = "success";
+          state.signMessage.result = result;
+          record("sign_message_succeeded", result);
+        },
+        error => {
+          state.signMessage.status = "error";
+          state.signMessage.error = actorError(error);
+          record("sign_message_failed", state.signMessage.error);
+        }
+      );
+      sendJson(response, 202, { status: state.signMessage.status });
+      return;
+    }
     case "clear_storage": {
       storage.clear();
       record("storage_cleared");
@@ -314,7 +355,7 @@ function isActorCommand(value: unknown): value is ActorCommand {
     return false;
   }
   const type = value.type;
-  if (type === "send_transaction") {
+  if (type === "send_transaction" || type === "sign_message") {
     return "transaction" in value
       && typeof value.transaction === "object"
       && value.transaction !== null;

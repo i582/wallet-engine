@@ -100,6 +100,18 @@ impl WalletClient {
         to_value(&result)
     }
 
+    /// Signs an internal Wallet V5 message and returns it without submission.
+    #[wasm_bindgen(js_name = signMessage)]
+    pub async fn sign_message(&self, request: JsValue) -> Result<JsValue, JsValue> {
+        let request = from_value(request)?;
+        let result = self
+            .inner
+            .sign_message(request)
+            .await
+            .map_err(|error| engine_error(&error))?;
+        to_value(&result)
+    }
+
     #[wasm_bindgen(js_name = previewSend)]
     pub async fn preview_send(&self, request: JsValue) -> Result<JsValue, JsValue> {
         let request = from_value(request)?;
@@ -117,6 +129,18 @@ impl WalletClient {
         let preview = self
             .inner
             .preview_ton_connect(request)
+            .await
+            .map_err(|error| engine_error(&error))?;
+        to_value(&preview)
+    }
+
+    /// Validates a sign-only request without claiming a wallet-paid network fee.
+    #[wasm_bindgen(js_name = previewSignMessage)]
+    pub async fn preview_sign_message(&self, request: JsValue) -> Result<JsValue, JsValue> {
+        let request = from_value(request)?;
+        let preview = self
+            .inner
+            .preview_sign_message(request)
             .await
             .map_err(|error| engine_error(&error))?;
         to_value(&preview)

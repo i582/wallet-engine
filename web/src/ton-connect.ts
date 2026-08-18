@@ -40,7 +40,14 @@ import type {
   TonConnectWalletIdentity,
   TonConnectWalletOptions,
 } from "./ton-connect-types"
-import type {SendPreview, SendResult} from "./send-types"
+import type {
+  SendPreview,
+  SendRequest,
+  SendResult,
+  SignMessagePreview,
+  SignMessageRequest,
+  SignMessageResult,
+} from "./send-types"
 import type {WalletDescriptor} from "./types"
 import type {WalletClient} from "./wallet-client"
 import type {WalletLifecycle} from "./wallet-lifecycle"
@@ -328,7 +335,7 @@ export class TonConnectWallet {
       this.emit({kind: "disconnected"})
       return
     }
-    if (request.method !== "sendTransaction") {
+    if (request.method !== "sendTransaction" && request.method !== "signMessage") {
       await this.postRpcError({
         id: request.id,
         code: 400,
@@ -356,16 +363,20 @@ export class TonConnectWallet {
       })
       return
     }
-    let preview: SendPreview
+    let preview: SendPreview | SignMessagePreview
     try {
-      preview = await this.walletClient.previewTonConnect(prepared.sendRequest)
+      preview =
+        prepared.method === "sendTransaction"
+          ? await this.walletClient.previewTonConnect(prepared.walletRequest as SendRequest)
+          : await this.walletClient.previewSignMessage({intent: prepared.walletRequest.intent})
     } catch (cause) {
       const diagnostic: string = errorMessage(cause)
-      this.emit({kind: "error", message: `Transaction preview failed: ${diagnostic}`})
+      const label: string = prepared.method === "signMessage" ? "Message" : "Transaction"
+      this.emit({kind: "error", message: `${label} preview failed: ${diagnostic}`})
       await this.postRpcError({
         id: request.id,
         code: 0,
-        message: `Transaction preview failed: ${diagnostic}`,
+        message: `${label} preview failed: ${diagnostic}`,
         topic: request.method,
         traceId,
       })
@@ -379,36 +390,59 @@ export class TonConnectWallet {
       await this.postRpcError({
         id: request.id,
         code: 300,
-        message: "User declined the transaction",
+        message: "User declined the request",
         topic: request.method,
         traceId,
       })
       return
     }
-    let result: SendResult
+    let responseResult: string | {readonly internalBoc: string}
+    let phase: string
     try {
-      result = await this.walletClient.send({...prepared.sendRequest, force: decision.force})
-      if (!(["submitted", "submissionUnknown", "confirmed"] as string[]).includes(result.phase)) {
-        throw new Error(`Transaction finished with ${result.phase}`)
+      if (prepared.method === "sendTransaction") {
+        const result: SendResult = await this.walletClient.send({
+          ...(prepared.walletRequest as SendRequest),
+          force: decision.force,
+        })
+        if (!(["submitted", "submissionUnknown", "confirmed"] as string[]).includes(result.phase)) {
+          throw new Error(`Transaction finished with ${result.phase}`)
+        }
+        responseResult = result.signedBoc
+        phase = result.phase
+      } else {
+        const result: SignMessageResult = await this.walletClient.signMessage({
+          ...(prepared.walletRequest as SignMessageRequest),
+          force: decision.force,
+        })
+        if (result.phase !== "handedOff") {
+          throw new Error(`Message signing finished with ${result.phase}`)
+        }
+        responseResult = {internalBoc: result.internalBoc}
+        phase = result.phase
       }
     } catch (cause) {
       const diagnostic: string = errorMessage(cause)
-      this.emit({kind: "error", message: `Transaction failed: ${diagnostic}`})
+      const label: string = prepared.method === "signMessage" ? "Message signing" : "Transaction"
+      this.emit({kind: "error", message: `${label} failed: ${diagnostic}`})
       await this.postRpcError({
         id: request.id,
         code: 0,
-        message: "Transaction submission failed",
+        message:
+          prepared.method === "signMessage"
+            ? "Message signing failed"
+            : "Transaction submission failed",
         topic: request.method,
         traceId,
       })
       return
     }
 
-    // Do not include the bridge POST in the submission catch above. At this point the wallet
-    // may already have submitted the message; replacing its durable success response with an
-    // RPC error would lie to the dApp and could encourage a duplicate payment.
-    await this.postEncrypted({result: result.signedBoc, id: request.id}, request.method, traceId)
-    this.emit({kind: "transactionFinished", message: `Transaction: ${result.phase}`})
+    // Bridge delivery failures leave this durable success response pending for retry.
+    await this.postEncrypted({result: responseResult, id: request.id}, request.method, traceId)
+    this.emit({
+      kind: "transactionFinished",
+      message: `${prepared.method === "signMessage" ? "Message" : "Transaction"}: ${phase}`,
+    })
   }
 
   private async postRpcError(options: {

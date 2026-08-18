@@ -13,17 +13,18 @@ use ton_connect_client::{
     IncomingRequest, PersistedTonConnectClient, TonConnectClient, TonConnectClientConfig,
 };
 use ton_connect_core::{
-    AppManifest, ConnectEventErrorCode, ConnectEventPayload, ConnectItem, ConnectItemReply,
-    DeviceInfo, DevicePlatform, Ed25519PublicKey, Ed25519Signature, EmbeddedResponse,
-    EmbeddedResponseError, Feature, HeartbeatMode, HttpBridgeUrl, KnownAppRequest, NetworkId,
-    RawAccountAddress, RpcErrorCode, SendTransactionFeature, TonAddressItemReply, TonProof,
-    TonProofDomain, TonProofItemReply, TransactionPayload, Uint64String, WalletResponse,
+    AppManifest, CellBoc, ConnectEventErrorCode, ConnectEventPayload, ConnectItem,
+    ConnectItemReply, DeviceInfo, DevicePlatform, Ed25519PublicKey, Ed25519Signature,
+    EmbeddedResponse, EmbeddedResponseError, Feature, HeartbeatMode, HttpBridgeUrl,
+    KnownAppRequest, NetworkId, RawAccountAddress, RpcErrorCode, SendTransactionFeature,
+    SignMessageFeature, SignMessageResult as ProtocolSignMessageResult, TonAddressItemReply,
+    TonProof, TonProofDomain, TonProofItemReply, TransactionPayload, Uint64String, WalletResponse,
     WalletResponseError, WalletResponseSuccess, WalletResult, WalletSessionPhase, WalletStateInit,
 };
 
 use crate::{
     Boc, NonEmptyString, SendAmount, SendExpiration, SendIntent, SendMessage, SendMessageBody,
-    SendRequest, TonConnectAccountInfo, WalletClientError, bounded_diagnostic,
+    SendRequest, SignMessageRequest, TonConnectAccountInfo, WalletClientError, bounded_diagnostic,
 };
 
 /// Limits and bridge identity for one wallet-side TON Connect session.
@@ -134,17 +135,6 @@ pub enum TonConnectSessionPhase {
     Disconnected,
 }
 
-/// Kind of authenticated dApp request delivered to the wallet host.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
-pub enum TonConnectIncomingRequestKind {
-    /// A supported single-message raw `sendTransaction` request.
-    SendTransaction,
-    /// A dApp-initiated disconnect request.
-    Disconnect,
-    /// A malformed or unsupported RPC request.
-    Unsupported,
-}
-
 /// TON Connect RPC error code returned for an unsupported request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum TonConnectRpcErrorCode {
@@ -161,20 +151,44 @@ pub enum TonConnectRpcErrorCode {
 }
 
 /// One replay-safe authenticated request awaiting a wallet response.
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
-pub struct TonConnectIncomingRequest {
-    /// Exact dApp request identifier.
-    pub id: String,
-    /// Exact RPC method name.
-    pub method: String,
-    /// Parsed request kind.
-    pub kind: TonConnectIncomingRequestKind,
-    /// Exact send intent when `kind` is `SendTransaction`.
-    pub send_request: Option<SendRequest>,
-    /// Recommended protocol error for unsupported input.
-    pub error_code: Option<TonConnectRpcErrorCode>,
-    /// Sanitized protocol diagnostic for unsupported input.
-    pub error_message: Option<String>,
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum TonConnectIncomingRequest {
+    /// A raw `sendTransaction` request that the wallet signs and submits.
+    SendTransaction {
+        /// Exact dApp request identifier.
+        id: String,
+        /// Exact RPC method name.
+        method: String,
+        /// Validated wallet send operation.
+        request: SendRequest,
+    },
+    /// A raw `signMessage` request that the wallet signs without submitting.
+    SignMessage {
+        /// Exact dApp request identifier.
+        id: String,
+        /// Exact RPC method name.
+        method: String,
+        /// Validated internal-message signing operation.
+        request: SignMessageRequest,
+    },
+    /// A dApp-initiated disconnect request.
+    Disconnect {
+        /// Exact dApp request identifier.
+        id: String,
+        /// Exact RPC method name.
+        method: String,
+    },
+    /// A malformed or unsupported RPC request with its protocol response.
+    Unsupported {
+        /// Exact dApp request identifier.
+        id: String,
+        /// Exact RPC method name.
+        method: String,
+        /// Recommended TON Connect RPC error.
+        error_code: TonConnectRpcErrorCode,
+        /// Sanitized protocol diagnostic.
+        error_message: String,
+    },
 }
 
 /// Failure at the FFI-safe TON Connect session boundary.
@@ -203,6 +217,9 @@ struct TonConnectSessionState {
     pending_post: Option<TonConnectPreparedPost>,
     connected_network: Option<NetworkId>,
 }
+
+/// Maximum raw-message batch represented by the Wallet V5 action list.
+const TON_CONNECT_MAX_MESSAGES: u32 = 255;
 
 /// Thread-safe TON Connect session exposed to Swift, Kotlin, and other hosts.
 #[derive(uniffi::Object)]
@@ -381,13 +398,19 @@ impl TonConnectSession {
             };
             items.push(reply);
         }
-        let feature = SendTransactionFeature::new(1, Some(false), None).map_err(session_error)?;
+        let send_feature = SendTransactionFeature::new(TON_CONNECT_MAX_MESSAGES, Some(false), None)
+            .map_err(session_error)?;
+        let sign_feature = SignMessageFeature::new(TON_CONNECT_MAX_MESSAGES, Some(false), None)
+            .map_err(session_error)?;
         let device = DeviceInfo::new(
             device_platform(device.platform),
             device.app_name,
             device.app_version,
             u32::from(ton_connect_core::PROTOCOL_VERSION),
-            vec![Feature::SendTransaction(feature)],
+            vec![
+                Feature::SendTransaction(send_feature),
+                Feature::SignMessage(sign_feature),
+            ],
         )
         .map_err(session_error)?;
         let embedded_response = state.client.embedded_request().map(|_| {
@@ -473,6 +496,30 @@ impl TonConnectSession {
     ) -> Result<TonConnectPreparedPost, TonConnectSessionError> {
         let response = WalletResponse::Success(WalletResponseSuccess {
             result: WalletResult::String(signed_boc),
+            id: request_id.clone(),
+        });
+        self.prepare_response(&request_id, &response)
+    }
+
+    /// Keeps a successful `signMessage` response pending bridge delivery.
+    ///
+    /// `internal_boc` must contain the complete signed internal message
+    /// returned by [`crate::WalletClient::sign_message`].
+    pub fn prepare_sign_message_success(
+        &self,
+        request_id: String,
+        internal_boc: String,
+    ) -> Result<TonConnectPreparedPost, TonConnectSessionError> {
+        let result = ProtocolSignMessageResult {
+            internal_boc: CellBoc::try_from(internal_boc).map_err(session_error)?,
+        };
+        let serde_json::Value::Object(result) =
+            serde_json::to_value(result).map_err(session_error)?
+        else {
+            return Err(failed("signMessage result must serialize as an object"));
+        };
+        let response = WalletResponse::Success(WalletResponseSuccess {
+            result: WalletResult::Object(result),
             id: request_id.clone(),
         });
         self.prepare_response(&request_id, &response)
@@ -658,18 +705,24 @@ fn decode_incoming(
     let id = incoming.request().id.clone();
     let method = incoming.request().method.clone();
     let decoded = match incoming.decode() {
-        Ok(KnownAppRequest::SendTransaction(request)) => {
-            decode_send_request(state, &id, method, request.payload, now)?
-        }
-        Ok(KnownAppRequest::Disconnect(_)) => TonConnectIncomingRequest {
-            id,
+        Ok(KnownAppRequest::SendTransaction(request)) => decode_transaction_request(
+            state,
+            &id,
             method,
-            kind: TonConnectIncomingRequestKind::Disconnect,
-            send_request: None,
-            error_code: None,
-            error_message: None,
-        },
-        Ok(KnownAppRequest::SignMessage(_) | KnownAppRequest::SignData(_)) => unsupported_request(
+            request.payload,
+            now,
+            TransactionRequestKind::Send,
+        )?,
+        Ok(KnownAppRequest::SignMessage(request)) => decode_transaction_request(
+            state,
+            &id,
+            method,
+            request.payload,
+            now,
+            TransactionRequestKind::Sign,
+        )?,
+        Ok(KnownAppRequest::Disconnect(_)) => TonConnectIncomingRequest::Disconnect { id, method },
+        Ok(KnownAppRequest::SignData(_)) => unsupported_request(
             id,
             method,
             TonConnectRpcErrorCode::MethodNotSupported,
@@ -685,12 +738,21 @@ fn decode_incoming(
     Ok(decoded)
 }
 
-fn decode_send_request(
+/// Selects the public operation produced from a transaction-shaped RPC payload.
+#[derive(Clone, Copy)]
+enum TransactionRequestKind {
+    Send,
+    Sign,
+}
+
+/// Validates one raw transaction-shaped request against the connected account.
+fn decode_transaction_request(
     state: &TonConnectSessionState,
     request_id: &str,
     method: String,
     payload: TransactionPayload,
     now: u64,
+    kind: TransactionRequestKind,
 ) -> Result<TonConnectIncomingRequest, TonConnectSessionError> {
     let network = state
         .connected_network
@@ -716,74 +778,85 @@ fn decode_send_request(
             "Structured transactions are not supported",
         ));
     };
-    if payload.messages.as_slice().len() != 1 {
-        return Ok(unsupported_request(
-            request_id.to_owned(),
-            method,
-            TonConnectRpcErrorCode::MethodNotSupported,
-            "Only one outgoing message is supported",
-        ));
-    }
-    let Some(message) = payload.messages.into_vec().into_iter().next() else {
-        return Err(failed("validated transaction has no outgoing message"));
-    };
-    if message
-        .extra_currency
-        .as_ref()
-        .is_some_and(|value| !value.is_empty())
+    if u32::try_from(payload.messages.as_slice().len())
+        .ok()
+        .is_none_or(|count| count > TON_CONNECT_MAX_MESSAGES)
     {
         return Ok(unsupported_request(
             request_id.to_owned(),
             method,
             TonConnectRpcErrorCode::MethodNotSupported,
-            "Extra currencies are not supported",
+            "Outgoing message batch exceeds wallet capability",
         ));
     }
-    let payload_boc = message
-        .payload
-        .map(|value| Boc::try_from(value.as_bytes().to_vec()))
-        .transpose()
-        .map_err(session_error)?;
-    let state_init = message
-        .state_init
-        .map(|value| Boc::try_from(value.as_bytes().to_vec()))
-        .transpose()
-        .map_err(session_error)?;
+    let mut messages = Vec::with_capacity(payload.messages.as_slice().len());
+    for message in payload.messages.into_vec() {
+        if message
+            .extra_currency
+            .as_ref()
+            .is_some_and(|value| !value.is_empty())
+        {
+            return Ok(unsupported_request(
+                request_id.to_owned(),
+                method,
+                TonConnectRpcErrorCode::MethodNotSupported,
+                "Extra currencies are not supported",
+            ));
+        }
+        let payload_boc = message
+            .payload
+            .map(|value| Boc::try_from(value.as_bytes().to_vec()))
+            .transpose()
+            .map_err(session_error)?;
+        let state_init = message
+            .state_init
+            .map(|value| Boc::try_from(value.as_bytes().to_vec()))
+            .transpose()
+            .map_err(session_error)?;
+        messages.push(SendMessage {
+            destination: crate::TonAddressString::try_from(message.address.to_string())
+                .map_err(session_error)?,
+            amount: SendAmount::exact(message.amount.as_str().to_owned()).map_err(session_error)?,
+            body: payload_boc.map_or(SendMessageBody::Empty, |boc| SendMessageBody::RawPayload {
+                boc,
+            }),
+            state_init,
+        });
+    }
     let operation_id = NonEmptyString::try_from(format!(
         "ton-connect:{}:{request_id}",
         state.client.client_id()
     ))
     .map_err(session_error)?;
-    let send_request = SendRequest {
-        operation_id,
-        force: false,
-        intent: SendIntent {
-            expiration: payload
-                .valid_until
-                .map_or(SendExpiration::EngineDefault, |value| {
-                    SendExpiration::Exact {
-                        unix_timestamp: value,
-                    }
-                }),
-            message: SendMessage {
-                destination: crate::TonAddressString::try_from(message.address.to_string())
-                    .map_err(session_error)?,
-                amount: SendAmount::exact(message.amount.as_str().to_owned())
-                    .map_err(session_error)?,
-                body: payload_boc.map_or(SendMessageBody::Empty, |boc| {
-                    SendMessageBody::RawPayload { boc }
-                }),
-                state_init,
+    let intent = SendIntent {
+        expiration: payload
+            .valid_until
+            .map_or(SendExpiration::EngineDefault, |value| {
+                SendExpiration::Exact {
+                    unix_timestamp: value,
+                }
+            }),
+        messages,
+    };
+    Ok(match kind {
+        TransactionRequestKind::Send => TonConnectIncomingRequest::SendTransaction {
+            id: request_id.to_owned(),
+            method,
+            request: SendRequest {
+                operation_id,
+                force: false,
+                intent,
             },
         },
-    };
-    Ok(TonConnectIncomingRequest {
-        id: request_id.to_owned(),
-        method,
-        kind: TonConnectIncomingRequestKind::SendTransaction,
-        send_request: Some(send_request),
-        error_code: None,
-        error_message: None,
+        TransactionRequestKind::Sign => TonConnectIncomingRequest::SignMessage {
+            id: request_id.to_owned(),
+            method,
+            request: SignMessageRequest {
+                operation_id,
+                force: false,
+                intent,
+            },
+        },
     })
 }
 
@@ -793,13 +866,11 @@ fn unsupported_request(
     code: TonConnectRpcErrorCode,
     message: &str,
 ) -> TonConnectIncomingRequest {
-    TonConnectIncomingRequest {
+    TonConnectIncomingRequest::Unsupported {
         id,
         method,
-        kind: TonConnectIncomingRequestKind::Unsupported,
-        send_request: None,
-        error_code: Some(code),
-        error_message: Some(bounded_diagnostic(message)),
+        error_code: code,
+        error_message: bounded_diagnostic(message),
     }
 }
 
@@ -894,7 +965,7 @@ mod tests {
     }
 
     #[test]
-    fn ffi_session_preserves_authenticated_request_and_response_across_restart() -> TestResult {
+    fn ffi_session_preserves_authenticated_requests_and_responses_across_restart() -> TestResult {
         let dapp = SessionCrypto::generate()?;
         let link = ConnectLink::connect(
             dapp.client_id(),
@@ -980,31 +1051,25 @@ mod tests {
         let Some(first_incoming) = incoming.first() else {
             return Err("authenticated request was not delivered".into());
         };
+        let TonConnectIncomingRequest::SendTransaction { request, .. } = first_incoming else {
+            return Err("authenticated request was not decoded as sendTransaction".into());
+        };
         assert_eq!(
-            first_incoming.kind,
-            TonConnectIncomingRequestKind::SendTransaction
-        );
-        assert_eq!(
-            first_incoming
-                .send_request
-                .as_ref()
-                .map(|request| &request.intent.expiration),
-            Some(&SendExpiration::Exact {
+            request.intent.expiration,
+            SendExpiration::Exact {
                 unix_timestamp: 1_900_000_000,
-            })
+            }
         );
         assert!(matches!(
-            first_incoming
-                .send_request
-                .as_ref()
-                .map(|request| &request.intent.message.body),
+            request.intent.messages.first().map(|message| &message.body),
             Some(SendMessageBody::RawPayload { .. })
         ));
         assert!(
-            first_incoming
-                .send_request
-                .as_ref()
-                .is_some_and(|request| request.intent.message.state_init.is_none())
+            request
+                .intent
+                .messages
+                .first()
+                .is_some_and(|message| message.state_init.is_none())
         );
 
         let persisted = session.persisted()?;
@@ -1013,6 +1078,64 @@ mod tests {
         let response =
             restored.prepare_send_success("7".to_owned(), "te6ccgEBAQEAAgAAAA==".to_owned())?;
         assert_eq!(restored.pending_post()?, Some(response));
+        restored.complete_pending_post()?;
+        assert!(restored.pending_requests(1_800_000_000)?.is_empty());
+
+        let sign_request = AppRequest {
+            method: "signMessage".to_owned(),
+            params: vec![
+                serde_json::json!({
+                    "valid_until": 1_900_000_000_u64,
+                    "network": "-3",
+                    "from": account.address,
+                    "messages": [
+                        {
+                            "address": "Ef8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAU",
+                            "amount": "1"
+                        },
+                        {
+                            "address": "Ef8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAU",
+                            "amount": "2",
+                            "payload": "te6ccgEBAQEAAgAAAA=="
+                        }
+                    ]
+                })
+                .to_string(),
+            ],
+            id: "8".to_owned(),
+        };
+        let encrypted = dapp.encrypt(wallet_client_id, &serde_json::to_vec(&sign_request)?)?;
+        let envelope = serde_json::json!({
+            "from": dapp.client_id().to_string(),
+            "message": STANDARD.encode(encrypted)
+        });
+        let sse = format!("id: 2\nevent: message\ndata: {envelope}\n\n");
+        let incoming = restored.ingest_sse_chunk(sse.into_bytes(), 1_800_000_000)?;
+        let Some(TonConnectIncomingRequest::SignMessage { request, .. }) = incoming.first() else {
+            return Err("authenticated request was not decoded as signMessage".into());
+        };
+        assert_eq!(request.intent.messages.len(), 2);
+        assert_eq!(request.intent.messages[1].amount, SendAmount::exact("2")?);
+        assert!(matches!(
+            request.intent.messages[1].body,
+            SendMessageBody::RawPayload { .. }
+        ));
+
+        let response = restored
+            .prepare_sign_message_success("8".to_owned(), "te6ccgEBAQEAAgAAAA==".to_owned())?;
+        let plaintext = dapp.decrypt(wallet_client_id, &STANDARD.decode(&response.body)?)?;
+        let response_json: serde_json::Value = serde_json::from_slice(&plaintext)?;
+        assert_eq!(response_json["id"], "8");
+        assert_eq!(
+            response_json["result"]["internalBoc"],
+            "te6ccgEBAQEAAgAAAA=="
+        );
+        assert_eq!(
+            url::Url::parse(&response.url)?
+                .query_pairs()
+                .find_map(|(key, value)| (key == "topic").then(|| value.into_owned())),
+            Some("signMessage".to_owned())
+        );
         restored.complete_pending_post()?;
         assert!(restored.pending_requests(1_800_000_000)?.is_empty());
         Ok(())

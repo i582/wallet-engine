@@ -1,5 +1,7 @@
 //! Public transfer requests, phases, snapshots, and results.
 
+use std::ops::Add;
+
 use crate::{
     Base64Hash, Boc, NonEmptyString, TonAddressString, UnsignedDecimalString,
     UnsignedDecimalStringError,
@@ -88,8 +90,53 @@ pub enum SendExpiration {
 pub struct SendIntent {
     /// The expiration policy for the wallet message.
     pub expiration: SendExpiration,
-    /// The outgoing internal message.
-    pub message: SendMessage,
+    /// The non-empty ordered outgoing internal-message batch.
+    ///
+    /// Wallet V5 accepts at most 255 actions. The engine validates that limit
+    /// before emulation or secret authorization.
+    pub messages: Vec<SendMessage>,
+}
+
+impl SendIntent {
+    /// Validates wallet-level constraints and returns the sum of exact message values.
+    ///
+    /// `None` identifies the single whole-balance form, whose final value can
+    /// only be determined by the wallet contract after fees are charged.
+    pub(crate) fn exact_value_total(
+        &self,
+    ) -> Result<Option<UnsignedDecimalString>, SendIntentError> {
+        if self.messages.is_empty() || self.messages.len() > 255 {
+            return Err(SendIntentError::InvalidMessageCount);
+        }
+        if self.messages.len() > 1
+            && self
+                .messages
+                .iter()
+                .any(|message| matches!(message.amount, SendAmount::All))
+        {
+            return Err(SendIntentError::WholeBalanceInBatch);
+        }
+
+        let mut total = UnsignedDecimalString::from(0_u64);
+        for message in &self.messages {
+            let SendAmount::Exact { nanograms } = &message.amount else {
+                return Ok(None);
+            };
+            total = Add::add(&total, nanograms);
+        }
+        Ok(Some(total))
+    }
+}
+
+/// Reports a transfer batch that Wallet V5 cannot represent unambiguously.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub(crate) enum SendIntentError {
+    /// Wallet V5 action lists contain between one and 255 outgoing messages.
+    #[error("wallet message batch must contain between 1 and 255 messages")]
+    InvalidMessageCount,
+    /// Carry-all-balance mode cannot be combined with another outgoing message.
+    #[error("whole-balance transfer must be the only message in its batch")]
+    WholeBalanceInBatch,
 }
 
 /// Requests one signed wallet transfer.
@@ -108,6 +155,36 @@ pub struct SendRequest {
     pub intent: SendIntent,
 }
 
+/// Requests an owner-signed Wallet V5 message for delivery by a relayer.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct SignMessageRequest {
+    /// A unique idempotency identifier chosen by the application.
+    pub operation_id: NonEmptyString,
+    /// Allows this request to replace an earlier signed message whose outcome is unresolved.
+    ///
+    /// The earlier message remains valid until its expiration time and can win
+    /// the sequence-number race. Require explicit user confirmation before use.
+    #[serde(default)]
+    pub force: bool,
+    /// The immutable messages and expiration boundary covered by the signature.
+    pub intent: SendIntent,
+}
+
+/// A durable owner-signed internal message returned to its caller for relaying.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct SignMessageResult {
+    /// The application operation identifier.
+    pub operation_id: NonEmptyString,
+    /// The complete relaxed internal message encoded as a validated BOC.
+    pub internal_boc: Boc,
+    /// The Unix expiration timestamp covered by the signature.
+    pub valid_until: u64,
+    /// The durable workflow phase after the message becomes available to the caller.
+    pub phase: SendPhase,
+}
+
 /// Public transfer intent used to preview a send without unlocking its secret.
 ///
 /// A preview uses fresh account state and a fake signature. It does not reserve
@@ -123,8 +200,8 @@ pub struct SendPreviewRequest {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct SendPreview {
-    /// The complete outgoing message that was emulated.
-    pub message: SendMessage,
+    /// The complete ordered outgoing message batch that was emulated.
+    pub messages: Vec<SendMessage>,
     /// The resolved wallet message expiration timestamp used by this emulation.
     /// A signed send resolves `EngineDefault` again from fresh provider time
     /// and preserves the same timestamp for `Exact`.
@@ -135,6 +212,18 @@ pub struct SendPreview {
     pub message_boc_base64: Boc,
     /// The bounded Toncenter emulation summary shown before authorization.
     pub emulation: SendEmulation,
+}
+
+/// A validated internal-message signing preview without submission fee claims.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct SignMessagePreview {
+    /// The complete ordered outgoing message batch covered by the future signature.
+    pub messages: Vec<SendMessage>,
+    /// The resolved Unix expiration timestamp that the signer will preserve.
+    pub valid_until: u64,
+    /// Whether fresh account state requires the relayed message to carry wallet `StateInit`.
+    pub needs_state_init: bool,
 }
 
 /// The public phase of the current or last send workflow.
@@ -159,10 +248,15 @@ pub enum SendPhase {
     SubmissionUnknown,
     /// The provider accepted the signed BOC.
     Submitted,
+    /// A signed internal message was durably returned for submission by a relayer.
+    HandedOff,
     /// The external message was found as the inbound message of an on-chain transaction.
     Confirmed,
     /// Another external message consumed the sequence number reserved by this send.
     Replaced,
+    /// The signed sequence number was consumed, but available provider evidence
+    /// cannot identify which competing internal request executed.
+    SequenceNumberConsumed,
     /// Provider time passed the signed validity window and the message was not observed.
     Expired,
     /// An explicit same-sequence-number resend replaced this journal attempt.
@@ -360,7 +454,7 @@ mod tests {
             force: false,
             intent: SendIntent {
                 expiration,
-                message: SendMessage {
+                messages: vec![SendMessage {
                     destination: TonAddressString::try_from(
                         "0:2222222222222222222222222222222222222222222222222222222222222222",
                     )
@@ -368,7 +462,7 @@ mod tests {
                     amount: SendAmount::exact("1").expect("valid amount"),
                     body,
                     state_init: None,
-                },
+                }],
             },
         }
     }

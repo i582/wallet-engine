@@ -23,18 +23,17 @@ use ton_connect_core::{
     ConnectEvent, ConnectEventPayload, ConnectItem, ConnectItemReply, ConnectLink, DeviceInfo,
     DevicePlatform, Ed25519PublicKey, Feature, FriendlyAddress, HeartbeatMode, HttpBridgeUrl,
     KnownAppRequest, NetworkId, PreparedBridgePost, RawMessage, RequestContextError,
-    ReturnStrategy, RpcErrorCode, SendTransactionFeature, SessionCrypto, TonAddressItemReply,
-    TransactionPayload, WalletResponse, WalletResponseError, WalletResponseSuccess, WalletResult,
-    WalletStateInit,
+    ReturnStrategy, RpcErrorCode, SendTransactionFeature, SessionCrypto, SignMessageFeature,
+    SignMessageResult as ProtocolSignMessageResult, TonAddressItemReply, TransactionPayload,
+    WalletResponse, WalletResponseError, WalletResponseSuccess, WalletResult, WalletStateInit,
 };
 use ton_core::cell::TonCell;
 use wallet_engine::{
     Boc, ImportWalletRequest, Network, NonEmptyString, ProviderConfig, SendAmount, SendExpiration,
-    SendIntent, SendMessage, SendMessageBody, SendPhase, SendRequest, TonAddressString,
-    TonConnectAccountInfo, TonConnectDevice, TonConnectDevicePlatform, TonConnectIncomingRequest,
-    TonConnectIncomingRequestKind, TonConnectRpcErrorCode, TonConnectSession,
-    TonConnectSessionConfig, WalletClient, WalletClientConfig, WalletLifecycle,
-    ton_connect_session_from_link,
+    SendIntent, SendMessage, SendMessageBody, SendPhase, SendRequest, SignMessageRequest,
+    TonAddressString, TonConnectAccountInfo, TonConnectDevice, TonConnectDevicePlatform,
+    TonConnectIncomingRequest, TonConnectRpcErrorCode, TonConnectSession, TonConnectSessionConfig,
+    WalletClient, WalletClientConfig, WalletLifecycle, ton_connect_session_from_link,
 };
 
 use super::{host::MemoryPlatformHost, localnet::LocalnetHttpHost, test_wallet};
@@ -100,6 +99,11 @@ pub(crate) const fn dapp_sends_transaction(transaction: DappTransactionConfig) -
     When::DappSendsTransaction(transaction)
 }
 
+/// Commands the connected dApp to request an internal-message signature without broadcasting it.
+pub(crate) const fn dapp_signs_message(transaction: DappTransactionConfig) -> When {
+    When::DappSignsMessage(transaction)
+}
+
 /// Commands the wallet to assert the pending message and return a signed `BoC`.
 pub(crate) const fn wallet_approves_transaction(expected_message: DappTransactionMessage) -> When {
     When::WalletAnswersTransaction(
@@ -117,6 +121,41 @@ pub(crate) const fn wallet_approves_transaction_messages(
         TransactionDecision::Approve,
         DappTransactionMessages::Two(first, second),
     )
+}
+
+/// Commands the protocol wallet to validate one `signMessage` payload and return a signed BOC.
+pub(crate) const fn wallet_signs_message(expected_message: DappTransactionMessage) -> When {
+    When::WalletSignsMessage(DappTransactionMessages::One(expected_message))
+}
+
+/// Commands the protocol wallet to validate an ordered two-message signing request.
+pub(crate) const fn wallet_signs_message_messages(
+    first: DappTransactionMessage,
+    second: DappTransactionMessage,
+) -> When {
+    When::WalletSignsMessage(DappTransactionMessages::Two(first, second))
+}
+
+/// Commands wallet-engine to create a durable internal-signed message without submitting it.
+pub(crate) const fn wallet_signs_message_on_localnet(
+    expected_message: DappTransactionMessage,
+) -> When {
+    When::WalletSignsMessageOnLocalnet(DappTransactionMessages::One(expected_message))
+}
+
+/// Starts configuration of the independent localnet relayer action.
+pub(crate) const fn relayer_submits_signed_message() -> RelayerSubmissionBuilder {
+    RelayerSubmissionBuilder
+}
+
+pub(crate) struct RelayerSubmissionBuilder;
+
+impl RelayerSubmissionBuilder {
+    /// Attaches this TON value to the signed internal request and submits it from the relayer wallet.
+    pub(crate) const fn with_attached_value_nanograms(self, value: &'static str) -> When {
+        let Self = self;
+        When::RelayerSubmitsSignedMessage(value)
+    }
 }
 
 /// Commands wallet-engine to sign, submit, and acknowledge one TON Connect transaction on localnet.
@@ -198,6 +237,11 @@ pub(crate) const fn dapp_rejected_wrong_network() -> Expectation {
 /// Expects the dApp to receive the exact signed `BoC` for its pending transaction.
 pub(crate) const fn dapp_received_transaction_success() -> Expectation {
     Expectation::DappReceivedTransactionSuccess
+}
+
+/// Expects the SDK to return the exact internal BOC produced by `signMessage`.
+pub(crate) const fn dapp_received_sign_message_success() -> Expectation {
+    Expectation::DappReceivedSignMessageSuccess
 }
 
 /// Expects the dApp SDK to surface the wallet's rejection as `UserRejectsError`.
@@ -370,8 +414,12 @@ pub(crate) enum When {
     DappDisconnects,
     WalletAnswersDisconnect,
     DappSendsTransaction(DappTransactionConfig),
+    DappSignsMessage(DappTransactionConfig),
     WalletAnswersTransaction(TransactionDecision, DappTransactionMessages),
     WalletExecutesTransactionOnLocalnet(DappTransactionMessages),
+    WalletSignsMessage(DappTransactionMessages),
+    WalletSignsMessageOnLocalnet(DappTransactionMessages),
+    RelayerSubmitsSignedMessage(&'static str),
 }
 
 pub(crate) enum Expectation {
@@ -381,6 +429,7 @@ pub(crate) enum Expectation {
     DappDisconnected,
     DappRejectedWrongNetwork,
     DappReceivedTransactionSuccess,
+    DappReceivedSignMessageSuccess,
     DappReceivedTransactionRejection,
     DappRejectedTransactionPreflight(TransactionPreflightRejection),
     DappReceivedTransactionBadRequest,
@@ -815,7 +864,9 @@ impl WalletFixture {
     /// Selects the wallet-engine and Acton localnet backend for approved TON Connect sends.
     #[must_use]
     pub(crate) const fn on_localnet(self) -> EngineLocalnetWalletFixtureBuilder {
-        EngineLocalnetWalletFixtureBuilder { wallet: self }
+        let mut wallet = self;
+        wallet.max_messages = 255;
+        EngineLocalnetWalletFixtureBuilder { wallet }
     }
 }
 
@@ -921,6 +972,9 @@ struct ScenarioRunner {
     transaction_sdk_request: Option<serde_json::Value>,
     transaction_request: Option<TransactionPayload>,
     expected_signed_boc: Option<String>,
+    sign_message_sdk_request: Option<serde_json::Value>,
+    sign_message_request: Option<TransactionPayload>,
+    expected_internal_boc: Option<Boc>,
     wallet_client: Option<TonConnectClient>,
     wallet_session: Option<Arc<TonConnectSession>>,
     engine_wallet: Option<EngineWalletHarness>,
@@ -946,6 +1000,9 @@ impl ScenarioRunner {
             transaction_sdk_request: None,
             transaction_request: None,
             expected_signed_boc: None,
+            sign_message_sdk_request: None,
+            sign_message_request: None,
+            expected_internal_boc: None,
             wallet_client: None,
             wallet_session: None,
             engine_wallet: None,
@@ -982,11 +1039,21 @@ impl ScenarioRunner {
             Step::When(When::DappSendsTransaction(transaction)) => {
                 self.send_transaction(&transaction)
             }
+            Step::When(When::DappSignsMessage(transaction)) => self.sign_message(&transaction),
             Step::When(When::WalletAnswersTransaction(decision, expected_messages)) => {
                 self.answer_transaction(decision, &expected_messages)
             }
             Step::When(When::WalletExecutesTransactionOnLocalnet(expected_messages)) => {
                 self.execute_transaction_on_localnet(&expected_messages)
+            }
+            Step::When(When::WalletSignsMessage(expected_messages)) => {
+                self.answer_sign_message(&expected_messages)
+            }
+            Step::When(When::WalletSignsMessageOnLocalnet(expected_messages)) => {
+                self.sign_message_on_localnet(&expected_messages)
+            }
+            Step::When(When::RelayerSubmitsSignedMessage(value)) => {
+                self.relay_signed_message(value)
             }
             Step::Then(Expectation::ConnectLinkCreated) => self.assert_connect_link(),
             Step::Then(Expectation::ManifestAvailable) => self.assert_manifest_available(),
@@ -997,6 +1064,9 @@ impl ScenarioRunner {
             }
             Step::Then(Expectation::DappReceivedTransactionSuccess) => {
                 self.assert_dapp_received_transaction_success()
+            }
+            Step::Then(Expectation::DappReceivedSignMessageSuccess) => {
+                self.assert_dapp_received_sign_message_success()
             }
             Step::Then(Expectation::DappReceivedTransactionRejection) => {
                 self.assert_dapp_received_transaction_rejection()
@@ -1083,9 +1153,9 @@ impl ScenarioRunner {
         let ttl = NonZeroU32::new(300).ok_or_else(|| failure("invalid message TTL"))?;
 
         if matches!(wallet_fixture.backend, WalletBackend::EngineLocalnet { .. }) {
-            if wallet_fixture.max_messages != 1 || wallet_fixture.extra_currency_supported {
+            if wallet_fixture.max_messages != 255 || wallet_fixture.extra_currency_supported {
                 return Err(failure(
-                    "wallet-engine localnet profile advertises one message without extra currencies",
+                    "wallet-engine localnet profile advertises 255 messages without extra currencies",
                 ));
             }
             let account = self
@@ -1210,6 +1280,32 @@ impl ScenarioRunner {
         );
         self.transaction_sdk_request = Some(transaction.sdk_request);
         self.transaction_request = Some(transaction.wire_request);
+        Ok(())
+    }
+
+    /// Renders a deterministic payload and asks the official SDK to call `signMessage`.
+    fn sign_message(&mut self, config: &DappTransactionConfig) -> TestResult {
+        let dapp_url = self
+            .dapp_url
+            .as_deref()
+            .ok_or_else(|| failure("dApp process is not running"))?;
+        let wallet = self
+            .wallet_fixture
+            .as_ref()
+            .ok_or_else(|| failure("wallet fixture is missing"))?;
+        let transaction = config.render(wallet)?;
+        drop(
+            self.http
+                .post(format!("{dapp_url}/command"))
+                .json(&serde_json::json!({
+                    "type": "sign_message",
+                    "transaction": transaction.sdk_request,
+                }))
+                .send()?
+                .error_for_status()?,
+        );
+        self.sign_message_sdk_request = Some(transaction.sdk_request);
+        self.sign_message_request = Some(transaction.wire_request);
         Ok(())
     }
 
@@ -1368,6 +1464,70 @@ impl ScenarioRunner {
         self.post_bridge_message(&post)
     }
 
+    /// Validates a protocol `signMessage` request and returns a deterministic internal BOC.
+    fn answer_sign_message(&mut self, expected_messages: &DappTransactionMessages) -> TestResult {
+        let incoming = self.receive_wallet_request()?;
+        let KnownAppRequest::SignMessage(request) = incoming.decode()? else {
+            return Err(failure(format!(
+                "expected signMessage request, got {}",
+                incoming.request().method
+            )));
+        };
+        let expected = self
+            .sign_message_request
+            .as_ref()
+            .ok_or_else(|| failure("dApp has not requested a message signature"))?;
+        if &request.payload != expected {
+            return Err(failure(format!(
+                "wallet received a different signMessage payload: expected {expected:?}, got {:?}",
+                request.payload
+            )));
+        }
+        self.assert_protocol_messages(&request.payload, expected_messages)?;
+
+        let internal_boc = Boc::try_from(TEST_SIGNED_BOC)?;
+        let protocol_result = ProtocolSignMessageResult {
+            internal_boc: ton_connect_core::CellBoc::try_from(TEST_SIGNED_BOC)?,
+        };
+        let serde_json::Value::Object(result) = serde_json::to_value(protocol_result)? else {
+            return Err(failure("signMessage result did not serialize as an object"));
+        };
+        let response = WalletResponse::Success(WalletResponseSuccess {
+            result: WalletResult::Object(result),
+            id: request.id,
+        });
+        let post = self
+            .wallet_client
+            .as_ref()
+            .ok_or_else(|| failure("wallet is not connected"))?
+            .prepare_response(&incoming, &response)?;
+        self.expected_internal_boc = Some(internal_boc);
+        self.post_bridge_message(&post)
+    }
+
+    /// Compares a decrypted protocol payload with the exact expected ordered message batch.
+    fn assert_protocol_messages(
+        &self,
+        payload: &TransactionPayload,
+        expected_messages: &DappTransactionMessages,
+    ) -> TestResult {
+        let wallet = self
+            .wallet_fixture
+            .as_ref()
+            .ok_or_else(|| failure("wallet fixture is missing"))?;
+        let expected_messages = expected_messages.render(wallet)?;
+        let TransactionPayload::Raw(payload) = payload else {
+            return Err(failure("wallet expected a raw transaction-shaped payload"));
+        };
+        if payload.messages.as_slice() != expected_messages.as_slice() {
+            return Err(failure(format!(
+                "wallet received different messages: expected {expected_messages:?}, got {:?}",
+                payload.messages
+            )));
+        }
+        Ok(())
+    }
+
     /// Validates and rejects a pending production-session send without submitting it on-chain.
     fn answer_engine_transaction(
         &mut self,
@@ -1380,26 +1540,24 @@ impl ScenarioRunner {
             ));
         }
         let incoming = self.receive_engine_wallet_request()?;
-        if incoming.kind != TonConnectIncomingRequestKind::SendTransaction
-            || incoming.error_code.is_some()
-            || incoming.error_message.is_some()
-        {
+        let TonConnectIncomingRequest::SendTransaction {
+            id,
+            request: send_request,
+            ..
+        } = incoming
+        else {
             return Err(failure(format!(
                 "wallet-engine decoded an unexpected TON Connect request: {incoming:?}"
             )));
-        }
-        let send_request = incoming
-            .send_request
-            .as_ref()
-            .ok_or_else(|| failure("wallet-engine TON Connect request has no send intent"))?;
-        self.assert_engine_send_request(send_request, expected_messages)?;
+        };
+        self.assert_engine_send_request(&send_request, expected_messages)?;
 
         let session = self
             .wallet_session
             .as_ref()
             .ok_or_else(|| failure("production TON Connect session is not connected"))?;
         let post = session.prepare_error(
-            incoming.id,
+            id,
             TonConnectRpcErrorCode::UserDeclined,
             "User rejected transaction".to_owned(),
         )?;
@@ -1422,17 +1580,16 @@ impl ScenarioRunner {
         expected_messages: &DappTransactionMessages,
     ) -> TestResult {
         let incoming = self.receive_engine_wallet_request()?;
-        if incoming.kind != TonConnectIncomingRequestKind::SendTransaction
-            || incoming.error_code.is_some()
-            || incoming.error_message.is_some()
-        {
+        let TonConnectIncomingRequest::SendTransaction {
+            id,
+            request: send_request,
+            ..
+        } = incoming
+        else {
             return Err(failure(format!(
                 "wallet-engine decoded an unexpected TON Connect request: {incoming:?}"
             )));
-        }
-        let send_request = incoming
-            .send_request
-            .ok_or_else(|| failure("wallet-engine TON Connect request has no send intent"))?;
+        };
         self.assert_engine_send_request(&send_request, expected_messages)?;
 
         let result = block_on(
@@ -1452,7 +1609,7 @@ impl ScenarioRunner {
             .wallet_session
             .as_ref()
             .ok_or_else(|| failure("production TON Connect session is not connected"))?;
-        let post = session.prepare_send_success(incoming.id, signed_boc.clone())?;
+        let post = session.prepare_send_success(id, signed_boc.clone())?;
         drop(
             self.http
                 .post(&post.url)
@@ -1466,55 +1623,142 @@ impl ScenarioRunner {
         Ok(())
     }
 
+    /// Uses the production session and engine to create a durable relayer-facing internal BOC.
+    fn sign_message_on_localnet(
+        &mut self,
+        expected_messages: &DappTransactionMessages,
+    ) -> TestResult {
+        let incoming = self.receive_engine_wallet_request()?;
+        let TonConnectIncomingRequest::SignMessage {
+            id,
+            request: sign_request,
+            ..
+        } = incoming
+        else {
+            return Err(failure(format!(
+                "wallet-engine decoded an unexpected TON Connect request: {incoming:?}"
+            )));
+        };
+        self.assert_engine_sign_request(&sign_request, expected_messages)?;
+
+        let result = block_on(
+            self.engine_wallet
+                .as_ref()
+                .ok_or_else(|| failure("wallet-engine localnet profile is not running"))?
+                .client
+                .sign_message(sign_request),
+        )?;
+        if result.phase != SendPhase::HandedOff {
+            return Err(failure(format!(
+                "wallet-engine did not hand off the TON Connect signed message: {result:?}"
+            )));
+        }
+        let internal_boc = result.internal_boc;
+        let session = self
+            .wallet_session
+            .as_ref()
+            .ok_or_else(|| failure("production TON Connect session is not connected"))?;
+        let post = session.prepare_sign_message_success(id, internal_boc.to_base64())?;
+        drop(
+            self.http
+                .post(&post.url)
+                .header("content-type", "text/plain; charset=utf-8")
+                .body(post.body)
+                .send()?
+                .error_for_status()?,
+        );
+        session.complete_pending_post()?;
+        self.expected_internal_boc = Some(internal_boc);
+        Ok(())
+    }
+
+    /// Delivers the last signed internal BOC through the independent localnet relayer wallet.
+    fn relay_signed_message(&self, attached_nanograms: &str) -> TestResult {
+        let attached_nanograms = attached_nanograms
+            .parse::<u64>()
+            .map_err(|error| failure(format!("relayer value is invalid: {error}")))?;
+        let internal_boc = self
+            .expected_internal_boc
+            .as_ref()
+            .ok_or_else(|| failure("wallet has not handed off a signed internal message"))?;
+        self.engine_wallet
+            .as_ref()
+            .ok_or_else(|| failure("wallet-engine localnet profile is not running"))?
+            .localnet
+            .relay_signed_message(internal_boc, attached_nanograms)
+            .map_err(failure)
+    }
+
     /// Compares wallet-engine's public send intent with the exact decrypted protocol payload.
     fn assert_engine_send_request(
         &self,
         actual: &SendRequest,
         expected_messages: &DappTransactionMessages,
     ) -> TestResult {
-        let wallet = self
-            .wallet_fixture
-            .as_ref()
-            .ok_or_else(|| failure("wallet fixture is missing"))?;
-        let expected_messages = expected_messages.render(wallet)?;
-        let TransactionPayload::Raw(payload) = self
+        let payload = self
             .transaction_request
             .as_ref()
-            .ok_or_else(|| failure("dApp has not sent a transaction"))?
-        else {
-            return Err(failure("wallet-engine expected a raw transaction payload"));
-        };
-        if payload.messages.as_slice() != expected_messages.as_slice() {
-            return Err(failure(format!(
-                "wallet-engine expected messages {expected_messages:?}, got {:?}",
-                payload.messages
-            )));
-        }
-        let [message] = payload.messages.as_slice() else {
-            return Err(failure(
-                "wallet-engine localnet profile requires exactly one message",
-            ));
-        };
-        let body = message
-            .payload
-            .as_ref()
-            .map(|value| Boc::try_from(value.as_bytes().to_vec()))
-            .transpose()?
-            .map_or(SendMessageBody::Empty, |boc| SendMessageBody::RawPayload {
-                boc,
-            });
+            .ok_or_else(|| failure("dApp has not sent a transaction"))?;
         let expected = SendRequest {
             operation_id: actual.operation_id.clone(),
             force: false,
-            intent: SendIntent {
-                expiration: payload
-                    .valid_until
-                    .map_or(SendExpiration::EngineDefault, |value| {
-                        SendExpiration::Exact {
-                            unix_timestamp: value,
-                        }
-                    }),
-                message: SendMessage {
+            intent: self.expected_engine_intent(payload, expected_messages)?,
+        };
+        if actual != &expected || !actual.operation_id.as_str().starts_with("ton-connect:") {
+            return Err(failure(format!(
+                "wallet-engine produced a different send intent: expected {expected:?}, got {actual:?}"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Compares wallet-engine's internal-sign request with the decrypted protocol payload.
+    fn assert_engine_sign_request(
+        &self,
+        actual: &SignMessageRequest,
+        expected_messages: &DappTransactionMessages,
+    ) -> TestResult {
+        let payload = self
+            .sign_message_request
+            .as_ref()
+            .ok_or_else(|| failure("dApp has not requested a message signature"))?;
+        let expected = SignMessageRequest {
+            operation_id: actual.operation_id.clone(),
+            force: false,
+            intent: self.expected_engine_intent(payload, expected_messages)?,
+        };
+        if actual != &expected || !actual.operation_id.as_str().starts_with("ton-connect:") {
+            return Err(failure(format!(
+                "wallet-engine produced a different signMessage intent: expected {expected:?}, got {actual:?}"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Reconstructs the engine intent expected from one raw protocol payload.
+    fn expected_engine_intent(
+        &self,
+        transaction: &TransactionPayload,
+        expected_messages: &DappTransactionMessages,
+    ) -> TestResult<SendIntent> {
+        self.assert_protocol_messages(transaction, expected_messages)?;
+        let TransactionPayload::Raw(payload) = transaction else {
+            return Err(failure("wallet-engine expected a raw transaction payload"));
+        };
+        let messages = payload
+            .messages
+            .as_slice()
+            .iter()
+            .map(|message| {
+                let body = message
+                    .payload
+                    .as_ref()
+                    .map(|value| Boc::try_from(value.as_bytes().to_vec()))
+                    .transpose()?
+                    .map_or(SendMessageBody::Empty, |boc| SendMessageBody::RawPayload {
+                        boc,
+                    });
+                Ok(SendMessage {
                     destination: TonAddressString::try_from(message.address.to_string())?,
                     amount: SendAmount::exact(message.amount.as_str().to_owned())?,
                     body,
@@ -1523,15 +1767,19 @@ impl ScenarioRunner {
                         .as_ref()
                         .map(|value| Boc::try_from(value.as_bytes().to_vec()))
                         .transpose()?,
-                },
-            },
-        };
-        if actual != &expected || !actual.operation_id.as_str().starts_with("ton-connect:") {
-            return Err(failure(format!(
-                "wallet-engine produced a different send intent: expected {expected:?}, got {actual:?}"
-            )));
-        }
-        Ok(())
+                })
+            })
+            .collect::<TestResult<Vec<_>>>()?;
+        Ok(SendIntent {
+            expiration: payload
+                .valid_until
+                .map_or(SendExpiration::EngineDefault, |value| {
+                    SendExpiration::Exact {
+                        unix_timestamp: value,
+                    }
+                }),
+            messages,
+        })
     }
 
     /// Reads one SSE request through the production FFI-safe TON Connect session wrapper.
@@ -1938,6 +2186,64 @@ impl ScenarioRunner {
         )
     }
 
+    /// Verifies the exact `signMessage` request and the internal BOC returned by the SDK.
+    fn assert_dapp_received_sign_message_success(&self) -> TestResult {
+        let state = self.wait_for_dapp_sign_message_state("success")?;
+        self.assert_dapp_connection_snapshot(&state)?;
+        let expected_request = self
+            .sign_message_sdk_request
+            .as_ref()
+            .ok_or_else(|| failure("dApp has not requested a message signature"))?;
+        if state.sign_message.request.as_ref() != Some(expected_request) {
+            return Err(failure(format!(
+                "dApp retained a different signMessage request: expected {expected_request:?}, got {:?}",
+                state.sign_message.request
+            )));
+        }
+        if state.sign_message.error.is_some() {
+            return Err(failure(format!(
+                "dApp reported an error for a successful signMessage request: {:?}",
+                state.sign_message.error
+            )));
+        }
+        let result = state
+            .sign_message
+            .result
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+            .ok_or_else(|| failure("dApp signMessage success has no object result"))?;
+        let expected_boc = self
+            .expected_internal_boc
+            .as_ref()
+            .map(Boc::to_base64)
+            .ok_or_else(|| failure("wallet did not retain the signed internal BOC"))?;
+        if result
+            .get("internalBoc")
+            .and_then(serde_json::Value::as_str)
+            != Some(expected_boc.as_str())
+            || result
+                .keys()
+                .any(|key| !matches!(key.as_str(), "internalBoc" | "traceId"))
+            || result
+                .get("traceId")
+                .is_some_and(|trace_id| trace_id.as_str().is_none_or(str::is_empty))
+        {
+            return Err(failure(format!(
+                "dApp received an unexpected signMessage result: {result:?}"
+            )));
+        }
+        assert_journal_order(
+            &state.journal,
+            &[
+                "connect_link_created",
+                "wallet_connected",
+                "sign_message_requested",
+                "sign_message_sent",
+                "sign_message_succeeded",
+            ],
+        )
+    }
+
     /// Verifies that a wallet error 300 becomes the SDK's high-level user-rejection error.
     fn assert_dapp_received_transaction_rejection(&self) -> TestResult {
         let state = self.wait_for_dapp_transaction_state("error")?;
@@ -2277,6 +2583,33 @@ impl ScenarioRunner {
         )))
     }
 
+    /// Polls until the official SDK's asynchronous `signMessage` call is terminal.
+    fn wait_for_dapp_sign_message_state(&self, expected_status: &str) -> TestResult<DappState> {
+        let dapp_url = self
+            .dapp_url
+            .as_deref()
+            .ok_or_else(|| failure("dApp process is not running"))?;
+        let deadline = Instant::now()
+            .checked_add(EVENT_TIMEOUT)
+            .ok_or_else(|| failure("event timeout overflow"))?;
+        let mut last_state = None;
+        while Instant::now() < deadline {
+            if let Ok(response) = self.http.get(format!("{dapp_url}/state")).send()
+                && let Ok(response) = response.error_for_status()
+                && let Ok(state) = response.json::<DappState>()
+            {
+                if state.sign_message.status == expected_status {
+                    return Ok(state);
+                }
+                last_state = Some(state);
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        Err(failure(format!(
+            "dApp signMessage did not reach {expected_status:?} before timeout; last state: {last_state:?}"
+        )))
+    }
+
     /// Lazily starts the bridge and dApp exactly once in dependency order.
     fn ensure_processes(&mut self) -> TestResult {
         if self.engine_wallet.is_none() {
@@ -2328,6 +2661,7 @@ struct ConnectCommandResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct DappState {
     status: String,
     account: Option<DappAccount>,
@@ -2335,6 +2669,7 @@ struct DappState {
     config: RenderedDappConfig,
     error: Option<DappError>,
     transaction: DappTransactionState,
+    sign_message: DappTransactionState,
     journal: Vec<DappJournalEvent>,
 }
 
@@ -2607,11 +2942,18 @@ fn test_device(wallet: &WalletFixture) -> TestResult<DeviceInfo> {
         "wallet-engine-test".to_owned(),
         "0.1.0".to_owned(),
         2,
-        vec![Feature::SendTransaction(SendTransactionFeature::new(
-            wallet.max_messages,
-            Some(wallet.extra_currency_supported),
-            None,
-        )?)],
+        vec![
+            Feature::SendTransaction(SendTransactionFeature::new(
+                wallet.max_messages,
+                Some(wallet.extra_currency_supported),
+                None,
+            )?),
+            Feature::SignMessage(SignMessageFeature::new(
+                wallet.max_messages,
+                Some(wallet.extra_currency_supported),
+                None,
+            )?),
+        ],
     )?)
 }
 

@@ -2,7 +2,7 @@
 
 Wallet Engine implements the wallet side of TON Connect protocol version 2.
 It supports encrypted HTTP bridge sessions, `ton_addr`, `ton_proof`, raw
-`sendTransaction` requests, and disconnect requests.
+`sendTransaction`, raw `signMessage`, and disconnect requests.
 
 The host application still owns network transport, protected storage, and all
 approval screens. Private wallet keys and recovery phrases never enter a dApp
@@ -25,7 +25,8 @@ native APIs return complete URLs and encrypted bodies for the host to send.
 | --- | --- |
 | Connect link | Full TON Connect v2 links with one `ton_addr` item |
 | `ton_proof` | Optional proof challenge during connection |
-| `sendTransaction` | One raw internal message |
+| `sendTransaction` | Signs and submits 1 to 255 raw internal messages |
+| `signMessage` | Signs 1 to 255 raw internal messages for a relayer |
 | Message amount | Exact nanogram amount |
 | Message body | Empty body or one Base64-encoded payload cell |
 | Contract deployment | Optional Base64-encoded destination `StateInit` |
@@ -33,14 +34,13 @@ native APIs return complete URLs and encrypted bodies for the host to send.
 | Disconnect | dApp-initiated and wallet-initiated disconnect |
 | Session recovery | Session keys, replay state, SSE cursor, pending requests, and pending responses |
 
-The wallet advertises `SendTransaction` with `maxMessages: 1` and
-`extraCurrencySupported: false`. The current implementation does not support
-these requests:
+The wallet advertises `SendTransaction` and `SignMessage` with
+`maxMessages: 255` and `extraCurrencySupported: false`. The implementation
+does not support these requests:
 
-- transactions with multiple messages.
 - structured transaction items.
 - extra currencies.
-- `signData` and `signMessage`.
+- `signData`.
 - embedded connect-and-act requests.
 
 The engine compares each request network and source address with the connected
@@ -54,6 +54,7 @@ Regular transfers and TON Connect requests use the same `SendIntent` model:
 - `SendExpiration.engineDefault` uses fresh provider time and
   `sendValiditySeconds`.
 - `SendExpiration.exact` preserves the dApp `valid_until` timestamp.
+- `SendIntent.messages` contains an ordered batch of 1 to 255 messages.
 - `SendMessageBody.empty` creates a value-only message.
 - `SendMessageBody.comment` creates a standard text comment.
 - `SendMessageBody.rawPayload` preserves a caller-built body cell.
@@ -62,17 +63,59 @@ Regular transfers and TON Connect requests use the same `SendIntent` model:
 `stateInit` is independent of the message body. A deploy request can contain an
 empty body, a comment, or a raw payload.
 
-Use `previewTonConnect` for a `SendRequest` from TON Connect. The preview uses
-the exact expiration, payload, and `StateInit` from the dApp request. Then show
-the returned fees, actions, warnings, destination, amount, payload presence,
-and deployment state before approval.
+`SendAmount.all` must be the only message in its batch. TON Connect raw
+requests always use exact amounts.
+
+Use `previewTonConnect` for a `SendRequest` from TON Connect. The preview keeps
+the exact expiration, message order, payloads, and `StateInit` values. Show all
+messages, fees, actions, warnings, and deployment states before approval.
 
 After approval, pass the same `SendRequest` to `send`. Return the signed BoC to
 the dApp only for `submitted`, `submissionUnknown`, or `confirmed`. A
 `submissionUnknown` result can already be in the network, so do not sign a
 replacement automatically. TON Connect requests decode with `force = false`.
 If the user explicitly approves a replacement, the wallet can set `force =
-true` on the decoded `SendRequest`; the original transfer can still execute.
+true` on the decoded `SendRequest`. The original transfer can still execute.
+
+Use `previewSignMessage` for the `intent` from a `SignMessageRequest`. This
+preview returns the messages, expiration, and wallet deployment requirement.
+It does not report wallet-paid fees because a relayer supplies the inbound TON.
+
+After approval, pass the same `SignMessageRequest` to `signMessage`. Return
+`internalBoc` only when the result phase is `handedOff`. The engine does not
+submit this message to a provider.
+
+`SignMessageRequest.force` has the same explicit-approval requirement. The
+earlier signed request can still consume the same sequence number.
+
+## Gasless `signMessage` flow
+
+The dApp selects the relayer and requests its estimate. The estimate usually
+contains the requested action and a relayer-fee action. The wallet signs the
+complete ordered batch that the dApp sends through TON Connect.
+
+Use this sequence for a `signMessage` request:
+
+1. Decode and validate the request against the connected account and network.
+2. Call `previewSignMessage` with the request intent.
+3. Show every destination, amount, payload, `StateInit`, and the expiration.
+4. Explain that the relayer can submit the signed request until its expiration.
+5. Call `signMessage` only after explicit approval.
+6. Require the `handedOff` phase before you prepare a successful response.
+7. Return an object with the `internalBoc` field to the dApp.
+
+The returned BoC is a complete relaxed internal message for Wallet V5. It
+contains the signed `internal_signed` body. It also contains the wallet
+`StateInit` when deployment is necessary.
+
+The relayer rebuilds the inbound envelope and supplies enough TON for wallet
+execution. It must keep the signed body and wallet `StateInit` unchanged. The
+dApp owns all relayer API calls.
+
+The journal marks this operation as `handedOff` before the caller receives the
+BoC. A later resolver can report `sequenceNumberConsumed` after the wallet
+sequence number increases. It cannot identify the exact relayer transaction
+because the relayer replaces the outer message envelope.
 
 ## Native session flow
 
@@ -106,15 +149,18 @@ URL. Pass each received byte chunk to `ingest_sse_chunk` with the current Unix
 time. Persist the session after every successful call, even when it returns no
 requests. This stores the latest SSE cursor and replay state.
 
-Handle each returned request by its `kind`:
+Match each returned `TonConnectIncomingRequest` variant:
 
-- For `sendTransaction`, preview `sendRequest`, show approval, and call `send`.
+- For `SendTransaction`, preview `request`, show approval, and call `send`.
   Pass `SendResult.signedBoc` to `prepare_send_success` only for `submitted`,
   `submissionUnknown`, or `confirmed`.
+- For `SignMessage`, preview `request.intent`, show approval, and call
+  `sign_message`. Pass `SignMessageResult.internalBoc` to
+  `prepare_sign_message_success` only for `handedOff`.
 - If the user rejects a transaction, call `prepare_error` with `UserDeclined`.
-- For `disconnect`, call `prepare_disconnect_success` and close the application
+- For `Disconnect`, call `prepare_disconnect_success` and close the application
   session after its response is durable.
-- For `unsupported`, call `prepare_error` with the supplied `errorCode` and
+- For `Unsupported`, call `prepare_error` with the supplied `errorCode` and
   `errorMessage`.
 
 To restore a native session, call `ton_connect_session_restore` with the stored
@@ -193,7 +239,8 @@ One `TonConnectWallet` instance owns one active dApp session. The current
 browser storage key also keeps one resumable session for each wallet record.
 
 The event stream reports approval interactions, successful connection,
-transaction completion, disconnect, and transport or protocol errors.
+request completion, disconnect, and transport or protocol errors. A transaction
+interaction contains `method`, which is `sendTransaction` or `signMessage`.
 
 Call `disconnect()` to notify the dApp and delete the stored session. Call
 `close()` to stop transport work while keeping the session available for
@@ -229,9 +276,9 @@ signed transaction BoC, or proof signature.
 ## Tests
 
 The end-to-end suite starts the official Go bridge, a TypeScript dApp actor,
-and an Acton local network. It covers connection, network checks, transaction
-approval and rejection, payloads, contract deployment, sequential sends,
-expiration, protocol errors, and restart-safe delivery.
+and an Acton local network. It covers connection, network checks, raw batches,
+approval, rejection, payloads, deployment, gasless relaying, expiration,
+protocol errors, and restart-safe delivery.
 
 Read [tests/ton-connect/README.md](tests/ton-connect/README.md) for setup and
 run commands.

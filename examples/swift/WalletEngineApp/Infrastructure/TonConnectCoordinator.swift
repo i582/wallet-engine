@@ -15,7 +15,7 @@ enum TonConnectApproval: Identifiable, Equatable, Sendable {
     case transaction(
         manifest: TonConnectManifest,
         request: TonConnectIncomingRequest,
-        preview: SendPreview
+        preview: TonConnectTransactionPreview
     )
 
     var id: String {
@@ -23,7 +23,26 @@ enum TonConnectApproval: Identifiable, Equatable, Sendable {
         case .connect(let manifest, _):
             "connect:\(manifest.url)"
         case .transaction(_, let request, _):
-            "transaction:\(request.id)"
+            "transaction:\(request.requestId)"
+        }
+    }
+}
+
+/// Preview data whose fee semantics match the requested TON Connect method.
+enum TonConnectTransactionPreview: Equatable, Sendable {
+    case send(SendPreview)
+    case sign(SignMessagePreview)
+}
+
+extension TonConnectIncomingRequest {
+    /// Returns the exact dApp request ID carried by any protocol variant.
+    var requestId: String {
+        switch self {
+        case .sendTransaction(let id, _, _),
+             .signMessage(let id, _, _),
+             .disconnect(let id, _),
+             .unsupported(let id, _, _, _):
+            id
         }
     }
 }
@@ -206,39 +225,57 @@ final class TonConnectCoordinator {
 
     func approveTransaction(force: Bool = false) async {
         guard case .transaction(_, let request, _) = approval,
-              let sendRequest = request.sendRequest,
               let session = rustSession else { return }
         isWorking = true
         diagnostic = nil
-        let result: SendResult
+        let post: TonConnectPreparedPost
         do {
-            result = try await walletSession.send(
-                SendRequest(
-                    operationId: sendRequest.operationId,
-                    force: force,
-                    intent: sendRequest.intent
+            switch request {
+            case .sendTransaction(let id, _, let sendRequest):
+                let result = try await walletSession.send(
+                    SendRequest(
+                        operationId: sendRequest.operationId,
+                        force: force,
+                        intent: sendRequest.intent
+                    )
                 )
-            )
-            guard result.phase == .submitted
+                guard result.phase == .submitted
                     || result.phase == .submissionUnknown
                     || result.phase == .confirmed else {
-                throw TonConnectCoordinatorError.unsuccessfulSend(result.phase)
+                    throw TonConnectCoordinatorError.unsuccessfulSend(result.phase)
+                }
+                post = try session.prepareSendSuccess(
+                    requestId: id,
+                    signedBoc: result.signedBoc
+                )
+            case .signMessage(let id, _, let signRequest):
+                let result = try await walletSession.signMessage(
+                    SignMessageRequest(
+                        operationId: signRequest.operationId,
+                        force: force,
+                        intent: signRequest.intent
+                    )
+                )
+                guard result.phase == .handedOff else {
+                    throw TonConnectCoordinatorError.unsuccessfulSign(result.phase)
+                }
+                post = try session.prepareSignMessageSuccess(
+                    requestId: id,
+                    internalBoc: result.internalBoc
+                )
+            case .disconnect, .unsupported:
+                throw TonConnectCoordinatorError.invalidTransactionRequest
             }
         } catch {
             await failTransaction(request: request, error: error)
             isWorking = false
             return
         }
-
         approval = nil
         do {
-            let post = try session.prepareSendSuccess(
-                requestId: request.id,
-                signedBoc: result.signedBoc
-            )
             try await deliver(post)
         } catch {
-            diagnostic = "Transaction submitted; TON Connect response is waiting for bridge delivery."
+            diagnostic = "The request completed; its TON Connect response is waiting for bridge delivery."
         }
         isWorking = false
     }
@@ -248,9 +285,9 @@ final class TonConnectCoordinator {
         isWorking = true
         do {
             try await sendError(
-                requestId: request.id,
+                requestId: request.requestId,
                 code: .userDeclined,
-                message: "User declined the transaction"
+                message: "User declined the TON Connect request"
             )
             approval = nil
         } catch {
@@ -341,13 +378,13 @@ final class TonConnectCoordinator {
     }
 
     private func handle(_ request: TonConnectIncomingRequest) async {
-        switch request.kind {
-        case .sendTransaction:
+        switch request {
+        case .sendTransaction, .signMessage:
             await preview(request)
-        case .disconnect:
+        case .disconnect(let id, _):
             do {
                 guard let session = rustSession else { return }
-                let post = try session.prepareDisconnectSuccess(requestId: request.id)
+                let post = try session.prepareDisconnectSuccess(requestId: id)
                 // The authenticated disconnect already ended the Rust session.
                 // Reflect that state before posting the acknowledgement so a
                 // bridge failure cannot leave the UI showing a live dApp.
@@ -358,12 +395,12 @@ final class TonConnectCoordinator {
             } catch {
                 diagnostic = Self.sanitized(error)
             }
-        case .unsupported:
+        case .unsupported(let id, _, let errorCode, let errorMessage):
             do {
                 try await sendError(
-                    requestId: request.id,
-                    code: request.errorCode ?? .unknown,
-                    message: request.errorMessage ?? "Method is not supported"
+                    requestId: id,
+                    code: errorCode,
+                    message: errorMessage
                 )
             } catch {
                 diagnostic = Self.sanitized(error)
@@ -372,9 +409,17 @@ final class TonConnectCoordinator {
     }
 
     private func preview(_ request: TonConnectIncomingRequest) async {
-        guard let sendRequest = request.sendRequest, let manifest else { return }
+        guard let manifest else { return }
         do {
-            let preview = try await walletSession.previewTonConnect(sendRequest)
+            let preview: TonConnectTransactionPreview
+            switch request {
+            case .sendTransaction(_, _, let sendRequest):
+                preview = .send(try await walletSession.previewTonConnect(sendRequest))
+            case .signMessage(_, _, let signRequest):
+                preview = .sign(try await walletSession.previewSignMessage(signRequest))
+            case .disconnect, .unsupported:
+                return
+            }
             approval = .transaction(
                 manifest: manifest,
                 request: request,
@@ -383,9 +428,9 @@ final class TonConnectCoordinator {
         } catch {
             do {
                 try await sendError(
-                    requestId: request.id,
+                    requestId: request.requestId,
                     code: .unknown,
-                    message: "Transaction preview failed: \(Self.sanitized(error))"
+                    message: "Request preview failed: \(Self.sanitized(error))"
                 )
             } catch {
                 diagnostic = Self.sanitized(error)
@@ -397,10 +442,10 @@ final class TonConnectCoordinator {
         request: TonConnectIncomingRequest,
         error: Error
     ) async {
-        let message = "Transaction failed: \(Self.sanitized(error))"
+        let message = "TON Connect request failed: \(Self.sanitized(error))"
         diagnostic = message
         do {
-            try await sendError(requestId: request.id, code: .unknown, message: message)
+            try await sendError(requestId: request.requestId, code: .unknown, message: message)
             approval = nil
         } catch {
             diagnostic = Self.sanitized(error)
@@ -539,7 +584,9 @@ nonisolated enum TonConnectCoordinatorError: LocalizedError, Sendable {
     case missingConnectPrompt
     case missingSession
     case sessionNotConnected
+    case invalidTransactionRequest
     case unsuccessfulSend(SendPhase)
+    case unsuccessfulSign(SendPhase)
 
     var errorDescription: String? {
         switch self {
@@ -553,8 +600,12 @@ nonisolated enum TonConnectCoordinatorError: LocalizedError, Sendable {
             "TON Connect session is unavailable."
         case .sessionNotConnected:
             "TON Connect session is not connected."
+        case .invalidTransactionRequest:
+            "TON Connect request is not a transaction-shaped method."
         case .unsuccessfulSend(let phase):
             "Transaction finished with \(phase)."
+        case .unsuccessfulSign(let phase):
+            "Signed message finished with \(phase)."
         }
     }
 }

@@ -65,9 +65,12 @@ before it runs the scenarios. It sets `TON_CONNECT_BRIDGE_BIN` explicitly.
 The suite covers these protocol and chain results:
 
 - connect approval with matching, absent, and mismatched network requests.
-- plain sends, payloads, and destination `StateInit`.
+- plain sends, ordered batches, payloads, and destination `StateInit`.
 - local-network contract deployment and a later second transaction.
 - transaction rejection without an on-chain deployment.
+- sign-only batches that do not broadcast from the wallet.
+- gasless account deployment through a deterministic local relayer.
+- preservation of the signed body and wallet `StateInit` during relaying.
 - expired requests and requests for another sender or network.
 - message-count and extra-currency capability limits.
 - unknown or revoked dApp sessions.

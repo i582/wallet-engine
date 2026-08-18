@@ -17,16 +17,18 @@ mod support;
 use support::ton_connect_scenario::{
     DappConfig, DappManifestConfig, DappTransactionConfig, DappTransactionMessage, bridge,
     connect_link_created, dapp, dapp_connected, dapp_connects, dapp_disconnected, dapp_disconnects,
-    dapp_received_transaction_account_mismatch, dapp_received_transaction_bad_request,
-    dapp_received_transaction_rejection, dapp_received_transaction_success,
-    dapp_received_transaction_unknown_app, dapp_rejected_transaction_for_extra_currency,
-    dapp_rejected_transaction_for_message_limit, dapp_rejected_transaction_wrong_network,
-    dapp_rejected_wrong_network, dapp_sends_transaction, deployment_target, manifest_available,
+    dapp_received_sign_message_success, dapp_received_transaction_account_mismatch,
+    dapp_received_transaction_bad_request, dapp_received_transaction_rejection,
+    dapp_received_transaction_success, dapp_received_transaction_unknown_app,
+    dapp_rejected_transaction_for_extra_currency, dapp_rejected_transaction_for_message_limit,
+    dapp_rejected_transaction_wrong_network, dapp_rejected_wrong_network, dapp_sends_transaction,
+    dapp_signs_message, deployment_target, manifest_available, relayer_submits_signed_message,
     scenario, source_wallet_account, wallet, wallet_answers_disconnect, wallet_approves_connect,
     wallet_approves_transaction, wallet_approves_transaction_messages,
     wallet_executes_transaction_on_localnet, wallet_rejects_expired_transaction,
     wallet_rejects_transaction, wallet_rejects_transaction_for_account_mismatch,
-    wallet_rejects_transaction_from_unknown_app,
+    wallet_rejects_transaction_from_unknown_app, wallet_signs_message_messages,
+    wallet_signs_message_on_localnet,
 };
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -126,6 +128,32 @@ fn sends_a_transaction_through_the_connected_session() -> TestResult {
         .run()
 }
 
+/// Verifies the official SDK's two-message `signMessage` request and internal-BOC response.
+#[test]
+fn signs_two_messages_without_broadcasting_them() -> TestResult {
+    const FIRST_MESSAGE: DappTransactionMessage =
+        DappTransactionMessage::new("{wallet_address}", "10000000").payload("te6ccgEBAQEAAgAAAA==");
+    const SECOND_MESSAGE: DappTransactionMessage =
+        DappTransactionMessage::new("{wallet_address}", "20000000");
+    const SIGN_CONFIG: DappTransactionConfig =
+        DappTransactionConfig::new(TESTNET_NETWORK, FIRST_MESSAGE)
+            .valid_for_seconds(120)
+            .and_message(SECOND_MESSAGE);
+
+    scenario("sign two messages without broadcasting them")
+        .given(bridge().official().in_memory())
+        .given(dapp().config(TEST_DAPP_CONFIG))
+        .given(wallet().network(TESTNET_NETWORK).max_messages(2))
+        .when(dapp_connects())
+        .then(connect_link_created())
+        .when(wallet_approves_connect())
+        .then(dapp_connected())
+        .when(dapp_signs_message(SIGN_CONFIG))
+        .when(wallet_signs_message_messages(FIRST_MESSAGE, SECOND_MESSAGE))
+        .then(dapp_received_sign_message_success())
+        .run()
+}
+
 /// Verifies that a plain transfer preserves amount and omits all optional message fields.
 #[test]
 fn sends_a_plain_transfer_without_optional_fields() -> TestResult {
@@ -197,6 +225,48 @@ fn deploys_an_account_through_ton_connect_on_localnet() -> TestResult {
         .when(dapp_sends_transaction(TRANSACTION_CONFIG))
         .when(wallet_executes_transaction_on_localnet(DEPLOY_MESSAGE))
         .then(dapp_received_transaction_success())
+        .then(
+            deployment_target()
+                .active()
+                .balance_between("900000000", "1000000000")
+                .seqno(0),
+        )
+        .then(source_wallet_account().active().seqno(1))
+        .run()
+}
+
+/// Verifies durable `signMessage` handoff followed by independent relayer execution on localnet.
+#[test]
+fn deploys_an_account_through_a_gasless_relayer_on_localnet() -> TestResult {
+    const DEPLOY_MESSAGE: DappTransactionMessage =
+        DappTransactionMessage::new("{deployment_address}", "1000000000")
+            .state_init("{deployment_state_init}");
+    const SIGN_CONFIG: DappTransactionConfig =
+        DappTransactionConfig::new(TESTNET_NETWORK, DEPLOY_MESSAGE).valid_for_seconds(120);
+    const RELAYER_ATTACHED_VALUE_NANOGRAMS: &str = "200000000";
+
+    scenario("deploy an account through a gasless relayer on localnet")
+        .given(bridge().official().in_memory())
+        .given(dapp().config(TEST_DAPP_CONFIG))
+        .given(
+            wallet()
+                .network(TESTNET_NETWORK)
+                .on_localnet()
+                .with_balance_nanograms("10000000000"),
+        )
+        .when(dapp_connects())
+        .then(connect_link_created())
+        .when(wallet_approves_connect())
+        .then(dapp_connected())
+        .then(deployment_target().absent())
+        .when(dapp_signs_message(SIGN_CONFIG))
+        .when(wallet_signs_message_on_localnet(DEPLOY_MESSAGE))
+        .then(dapp_received_sign_message_success())
+        .then(deployment_target().absent())
+        .when(
+            relayer_submits_signed_message()
+                .with_attached_value_nanograms(RELAYER_ATTACHED_VALUE_NANOGRAMS),
+        )
         .then(
             deployment_target()
                 .active()

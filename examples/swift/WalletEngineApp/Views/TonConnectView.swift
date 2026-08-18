@@ -134,7 +134,9 @@ struct TonConnectView: View {
         switch coordinator.approval {
         case .connect:
             "Approve connection"
-        case .transaction:
+        case .transaction(_, _, .sign):
+            "Review relayed message"
+        case .transaction(_, _, .send):
             "Review transaction"
         case nil:
             coordinator.connection == nil ? "TON Connect" : "Connected app"
@@ -156,7 +158,9 @@ struct TonConnectView: View {
         switch coordinator.approval {
         case .connect:
             "Connect"
-        case .transaction:
+        case .transaction(_, _, .sign):
+            "Sign"
+        case .transaction(_, _, .send):
             "Send"
         case nil:
             ""
@@ -419,66 +423,109 @@ private struct TonConnectCapabilityRow: View {
 
 private struct TonConnectTransactionView: View {
     let manifest: TonConnectManifest
-    let preview: SendPreview
+    let preview: TonConnectTransactionPreview
     let canForceRetry: Bool
     @Binding var force: Bool
 
-    private var amount: String {
-        guard case .exact(let nanograms) = preview.message.amount else { return "All balance" }
-        return "\(GramAmount.format(nanograms: nanograms)) GRAM"
+    private var messages: [SendMessage] {
+        switch preview {
+        case .send(let value): value.messages
+        case .sign(let value): value.messages
+        }
+    }
+
+    private var signsOnly: Bool {
+        if case .sign = preview { return true }
+        return false
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("\(manifest.name) wants to send")
+            Text(
+                signsOnly
+                    ? "\(manifest.name) wants a relayed message signature"
+                    : "\(manifest.name) wants to send"
+            )
                 .font(.title2.weight(.semibold))
 
             VStack(spacing: 0) {
-                PreviewRow(label: "Send", value: amount)
-                PreviewRow(label: "To", value: compact(preview.message.destination))
-                PreviewRow(
-                    label: "Network fee",
-                    value: "\(GramAmount.format(nanograms: preview.emulation.walletFeesNanograms)) GRAM"
-                )
-                PreviewRow(
-                    label: "Transactions",
-                    value: String(preview.emulation.transactionCount)
-                )
-                PreviewRow(label: "Message BOC", value: compact(preview.messageBocBase64))
+                PreviewRow(label: "Messages", value: String(messages.count))
+                ForEach(Array(messages.enumerated()), id: \.offset) { index, message in
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("Message \(index + 1) of \(messages.count)")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 14)
+                            .padding(.top, 14)
+                        PreviewRow(label: "Amount", value: amount(for: message))
+                        PreviewRow(label: "Recipient", value: compact(message.destination))
+                        PreviewRow(label: "Body", value: bodyLabel(for: message))
+                        PreviewRow(
+                            label: "StateInit",
+                            value: message.stateInit == nil ? "Not included" : "Included"
+                        )
+                    }
+                }
+                switch preview {
+                case .send(let send):
+                    PreviewRow(label: "Valid until", value: String(send.validUntil))
+                    PreviewRow(
+                        label: "Network fee",
+                        value: "\(GramAmount.format(nanograms: send.emulation.walletFeesNanograms)) GRAM"
+                    )
+                    PreviewRow(
+                        label: "Transactions",
+                        value: String(send.emulation.transactionCount)
+                    )
+                    PreviewRow(label: "Message BOC", value: compact(send.messageBocBase64))
+                case .sign(let sign):
+                    PreviewRow(label: "Network fee", value: "Paid by relayer")
+                    PreviewRow(label: "Valid until", value: String(sign.validUntil))
+                    PreviewRow(label: "Wallet StateInit", value: sign.needsStateInit ? "Included" : "Not needed")
+                }
             }
             .background(.background.secondary, in: RoundedRectangle(cornerRadius: 14))
 
-            if !preview.emulation.actions.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Actions")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    ForEach(preview.emulation.actions, id: \.actionId) { action in
-                        Label(
-                            action.kind.replacingOccurrences(of: "_", with: " "),
-                            systemImage: action.succeeded ? "checkmark.circle" : "exclamationmark.triangle"
-                        )
-                        .foregroundStyle(action.succeeded ? Color.primary : Color.orange)
+            switch preview {
+            case .send(let send):
+                if !send.emulation.actions.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Actions")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        ForEach(send.emulation.actions, id: \.actionId) { action in
+                            Label(
+                                action.kind.replacingOccurrences(of: "_", with: " "),
+                                systemImage: action.succeeded ? "checkmark.circle" : "exclamationmark.triangle"
+                            )
+                            .foregroundStyle(action.succeeded ? Color.primary : Color.orange)
+                        }
                     }
                 }
-            }
-
-            if !preview.emulation.traceSucceeded || preview.emulation.isIncomplete {
+                if !send.emulation.traceSucceeded || send.emulation.isIncomplete {
+                    Label(
+                        "Some emulated actions may fail. The network can still accept the wallet transaction.",
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+                }
+            case .sign:
                 Label(
-                    "Some emulated actions may fail. The network can still accept the wallet transaction.",
-                    systemImage: "exclamationmark.triangle.fill"
+                    "The wallet will not broadcast this message. The dApp can give it to a relayer until it expires.",
+                    systemImage: "arrow.triangle.branch"
                 )
                 .font(.callout)
-                .foregroundStyle(.orange)
+                .foregroundStyle(.secondary)
             }
 
             if canForceRetry {
                 VStack(alignment: .leading, spacing: 8) {
-                    Label("Previous transfer is unresolved", systemImage: "exclamationmark.triangle.fill")
+                    Label("Previous signed request is unresolved", systemImage: "exclamationmark.triangle.fill")
                         .font(.callout.weight(.semibold))
-                    Text("Its signed message may still execute. If you approve this request, both transfers can affect the balance.")
+                    Text("It may still execute. Approving this request authorizes another signature for the wallet's current sequence number; network ordering determines which one can execute.")
                         .font(.caption)
-                    Toggle("I understand. Approve this transaction anyway.", isOn: $force)
+                    Toggle("I understand. Approve this request anyway.", isOn: $force)
                 }
                 .foregroundStyle(.orange)
                 .padding(14)
@@ -487,6 +534,29 @@ private struct TonConnectTransactionView: View {
         }
     }
 
+    /// Formats one message amount for the approval interface.
+    private func amount(for message: SendMessage) -> String {
+        switch message.amount {
+        case .exact(let nanograms):
+            "\(GramAmount.format(nanograms: nanograms)) GRAM"
+        case .all:
+            "Complete balance"
+        }
+    }
+
+    /// Names the body representation covered by the wallet signature.
+    private func bodyLabel(for message: SendMessage) -> String {
+        switch message.body {
+        case .empty:
+            "Empty"
+        case .comment:
+            "Text comment"
+        case .rawPayload:
+            "Contract payload"
+        }
+    }
+
+    /// Compacts one long value while keeping its identifying prefix and suffix.
     private func compact(_ value: String) -> String {
         guard value.count > 24 else { return value }
         return "\(value.prefix(12))…\(value.suffix(8))"

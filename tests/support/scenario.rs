@@ -1703,14 +1703,14 @@ impl ScenarioRunner {
                         let request = SendPreviewRequest {
                             intent: SendIntent {
                                 expiration: SendExpiration::EngineDefault,
-                                message: SendMessage {
+                                messages: vec![SendMessage {
                                     destination,
                                     amount: action.amount,
                                     body: action.comment.map_or(SendMessageBody::Empty, |text| {
                                         SendMessageBody::Comment { text }
                                     }),
                                     state_init: None,
-                                },
+                                }],
                             },
                         };
                         std::thread::spawn(move || {
@@ -1733,14 +1733,14 @@ impl ScenarioRunner {
                             force: action.force,
                             intent: SendIntent {
                                 expiration: SendExpiration::EngineDefault,
-                                message: SendMessage {
+                                messages: vec![SendMessage {
                                     destination,
                                     amount: action.amount,
                                     body: action.comment.map_or(SendMessageBody::Empty, |text| {
                                         SendMessageBody::Comment { text }
                                     }),
                                     state_init: None,
-                                },
+                                }],
                             },
                         };
                         std::thread::spawn(move || {

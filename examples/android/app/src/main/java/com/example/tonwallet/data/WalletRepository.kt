@@ -102,12 +102,12 @@ class WalletRepository(private val store: SecureWalletStore) {
                 force = force,
                 intent = SendIntent(
                     expiration = SendExpiration.EngineDefault,
-                    message = SendMessage(
+                    messages = listOf(SendMessage(
                         destination = destination.trim(),
                         amount = SendAmount.Exact(nanograms = amountNanograms),
                         body = SendMessageBody.Empty,
                         stateInit = null,
-                    ),
+                    )),
                 ),
             ),
         )

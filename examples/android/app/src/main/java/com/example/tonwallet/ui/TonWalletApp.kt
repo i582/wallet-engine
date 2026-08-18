@@ -1212,7 +1212,7 @@ private fun SendSheet(
                         style = MaterialTheme.typography.titleSmall,
                     )
                     Text(
-                        "Its signed message may still execute. If you send another transfer, both can affect the balance.",
+                        "Its signed message may still execute. Submitting again authorizes another message for the wallet's current sequence number; network ordering determines which can execute.",
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(top = LocalAppSpacing.current.xs),
                     )

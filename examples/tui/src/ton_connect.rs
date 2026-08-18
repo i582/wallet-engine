@@ -15,13 +15,14 @@ use ton_connect_core::{
     ConnectItemReply, DeviceInfo, DevicePlatform, Ed25519PublicKey, Ed25519Signature, Feature,
     HeartbeatMode, HttpBridgeUrl, KnownAppRequest, NetworkId, PreparedBridgePost,
     RawAccountAddress, RawTransactionPayload, RpcError, RpcErrorCode, SendTransactionFeature,
-    SendTransactionRequest, TonAddressItemReply, TonProof, TonProofDomain, TonProofItemReply,
-    TransactionPayload, Uint64String, WalletResponse, WalletResponseError, WalletResponseSuccess,
-    WalletResult, WalletStateInit,
+    SignMessageFeature, SignMessageResult as ProtocolSignMessageResult, TonAddressItemReply,
+    TonProof, TonProofDomain, TonProofItemReply, TransactionPayload, Uint64String, WalletResponse,
+    WalletResponseError, WalletResponseSuccess, WalletResult, WalletStateInit,
 };
 use wallet_engine::{
     Boc, Network, NonEmptyString, SendAmount, SendExpiration, SendIntent, SendMessage,
-    SendMessageBody, SendPhase, SendRequest, TonAddressString, TonConnectProofSignRequest,
+    SendMessageBody, SendPhase, SendPreviewRequest, SendRequest,
+    SignMessageRequest as EngineSignMessageRequest, TonAddressString, TonConnectProofSignRequest,
     WalletClient, WalletDescriptor, WalletLifecycle,
 };
 
@@ -44,6 +45,7 @@ pub(crate) struct ConnectPrompt {
 }
 
 impl ConnectPrompt {
+    /// Returns the user's connection decision to the bridge task.
     pub(crate) fn respond(mut self, approved: bool) {
         if let Some(response) = self.response.take() {
             let _ = response.send(approved);
@@ -53,13 +55,23 @@ impl ConnectPrompt {
 
 pub(crate) struct TransactionPrompt {
     pub(crate) dapp_name: String,
+    pub(crate) messages: Vec<TransactionMessagePreview>,
+    pub(crate) valid_until: u64,
+    pub(crate) wallet_fee_nanograms: Option<String>,
+    pub(crate) wallet_needs_state_init: Option<bool>,
+    pub(crate) sign_only: bool,
+    pub(crate) can_force_retry: bool,
+    pub(crate) force: bool,
+    pub(crate) scroll: usize,
+    response: Option<oneshot::Sender<TransactionDecision>>,
+}
+
+/// One user-visible message in a TON Connect transaction batch.
+pub(crate) struct TransactionMessagePreview {
     pub(crate) destination: String,
     pub(crate) amount_nanograms: String,
     pub(crate) deploys_contract: bool,
     pub(crate) has_payload: bool,
-    pub(crate) can_force_retry: bool,
-    pub(crate) force: bool,
-    response: Option<oneshot::Sender<TransactionDecision>>,
 }
 
 impl TransactionPrompt {
@@ -95,6 +107,7 @@ pub(crate) struct TonConnectController {
 }
 
 impl TonConnectController {
+    /// Starts one TON Connect session and publishes its user-visible events.
     pub(crate) fn start(
         link: String,
         descriptor: WalletDescriptor,
@@ -125,10 +138,12 @@ impl TonConnectController {
         }
     }
 
+    /// Returns the next queued TON Connect event without waiting.
     pub(crate) fn try_next(&mut self) -> Option<TonConnectEvent> {
         self.events.try_recv().ok()
     }
 
+    /// Stops bridge work and waits for the session task to finish.
     pub(crate) async fn shutdown(self) {
         self.cancellation.cancel();
         let _ = self.task.await;
@@ -136,6 +151,7 @@ impl TonConnectController {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Runs one TON Connect session from connection approval through disconnect.
 async fn run(
     link_value: &str,
     descriptor: WalletDescriptor,
@@ -226,6 +242,7 @@ async fn run(
     .await
 }
 
+/// Builds the TON Connect account record for the selected wallet.
 fn ton_connect_account(
     lifecycle: &WalletLifecycle,
     descriptor: &WalletDescriptor,
@@ -241,6 +258,7 @@ fn ton_connect_account(
     ))
 }
 
+/// Rejects a connection request for a network other than the selected wallet network.
 fn enforce_connect_network(items: &[ConnectItem], active: &NetworkId) -> Result<()> {
     let mut has_address = false;
     for item in items {
@@ -260,6 +278,7 @@ fn enforce_connect_network(items: &[ConnectItem], active: &NetworkId) -> Result<
     Ok(())
 }
 
+/// Downloads and decodes one bounded dApp manifest without following redirects.
 async fn load_manifest(client: &Client, url: &str) -> Result<AppManifest> {
     let response = client
         .get(url)
@@ -279,6 +298,7 @@ async fn load_manifest(client: &Client, url: &str) -> Result<AppManifest> {
     Ok(serde_json::from_slice(&body)?)
 }
 
+/// Builds the approved account, proof, and wallet capability response.
 async fn connect_payload(
     requested: &[ConnectItem],
     account: &TonAddressItemReply,
@@ -325,16 +345,16 @@ async fn connect_payload(
             app_name: DEMO_WALLET_APP_NAME.to_owned(),
             app_version: env!("CARGO_PKG_VERSION").to_owned(),
             max_protocol_version: u32::from(ton_connect_core::PROTOCOL_VERSION),
-            features: vec![Feature::SendTransaction(SendTransactionFeature::new(
-                1,
-                Some(false),
-                None,
-            )?)],
+            features: vec![
+                Feature::SendTransaction(SendTransactionFeature::new(255, Some(false), None)?),
+                Feature::SignMessage(SignMessageFeature::new(255, Some(false), None)?),
+            ],
         },
     })
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Reads bridge events until the session disconnects or the application stops it.
 async fn listen(
     client: &Client,
     session: &mut TonConnectClient,
@@ -388,6 +408,7 @@ async fn listen(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Converts one authenticated dApp request into its encrypted wallet response.
 async fn process_request(
     client: &Client,
     session: &TonConnectClient,
@@ -405,9 +426,11 @@ async fn process_request(
             id: request_id,
         }),
         Ok(KnownAppRequest::SendTransaction(request)) => {
-            handle_send_transaction(
+            handle_transaction(
                 session.client_id(),
-                &request,
+                request.id,
+                &request.payload,
+                TransactionMode::Send,
                 wallet_client,
                 descriptor,
                 dapp_name,
@@ -416,8 +439,21 @@ async fn process_request(
             )
             .await
         }
-        Ok(KnownAppRequest::SignMessage(_) | KnownAppRequest::SignData(_))
-        | Err(RpcError::UnsupportedMethod(_)) => rpc_error(
+        Ok(KnownAppRequest::SignMessage(request)) => {
+            handle_transaction(
+                session.client_id(),
+                request.id,
+                &request.payload,
+                TransactionMode::Sign,
+                wallet_client,
+                descriptor,
+                dapp_name,
+                events,
+                cancellation,
+            )
+            .await
+        }
+        Ok(KnownAppRequest::SignData(_)) | Err(RpcError::UnsupportedMethod(_)) => rpc_error(
             request_id,
             RpcErrorCode::MethodNotSupported,
             "Method is not supported",
@@ -432,19 +468,73 @@ async fn process_request(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn handle_send_transaction(
+/// Previews an ordered transaction request and asks the user for a decision.
+async fn handle_transaction(
     session_id: ClientId,
-    request: &SendTransactionRequest,
+    request_id: String,
+    payload: &TransactionPayload,
+    mode: TransactionMode,
     wallet_client: &Arc<WalletClient>,
     descriptor: &WalletDescriptor,
     dapp_name: &str,
     events: &mpsc::UnboundedSender<TonConnectEvent>,
     cancellation: &CancellationToken,
 ) -> WalletResponse {
-    let request_id = request.id.clone();
-    let mut engine_request = match engine_send_request(session_id, request, descriptor) {
-        Ok(request) => request,
-        Err(code) => return rpc_error(request_id, code, "Unsupported transaction shape"),
+    let (operation_id, intent) =
+        match engine_transaction_intent(session_id, &request_id, payload, descriptor) {
+            Ok(request) => request,
+            Err(code) => return rpc_error(request_id, code, "Unsupported transaction shape"),
+        };
+    let (preview_messages, valid_until, wallet_fee_nanograms, wallet_needs_state_init) = match mode
+    {
+        TransactionMode::Send => {
+            match wallet_client
+                .preview_ton_connect(SendRequest {
+                    operation_id: operation_id.clone(),
+                    force: false,
+                    intent: intent.clone(),
+                })
+                .await
+            {
+                Ok(preview) => (
+                    preview.messages,
+                    preview.valid_until,
+                    Some(preview.emulation.wallet_fees_nanograms.to_string()),
+                    None,
+                ),
+                Err(error) => {
+                    let _ = events.send(TonConnectEvent::TransactionFinished(format!(
+                        "Transaction preview failed: {error}"
+                    )));
+                    return rpc_error(
+                        request_id,
+                        RpcErrorCode::Unknown,
+                        "Transaction preview failed",
+                    );
+                }
+            }
+        }
+        TransactionMode::Sign => {
+            match wallet_client
+                .preview_sign_message(SendPreviewRequest {
+                    intent: intent.clone(),
+                })
+                .await
+            {
+                Ok(preview) => (
+                    preview.messages,
+                    preview.valid_until,
+                    None,
+                    Some(preview.needs_state_init),
+                ),
+                Err(error) => {
+                    let _ = events.send(TonConnectEvent::TransactionFinished(format!(
+                        "Message preview failed: {error}"
+                    )));
+                    return rpc_error(request_id, RpcErrorCode::Unknown, "Message preview failed");
+                }
+            }
+        }
     };
     let (approval_tx, approval_rx) = oneshot::channel();
     let can_force_retry = wallet_client
@@ -452,21 +542,36 @@ async fn handle_send_transaction(
         .ok()
         .and_then(|snapshot| snapshot.send.resolution)
         .is_some_and(|resolution| resolution.can_force_retry);
-    let SendAmount::Exact { nanograms } = &engine_request.intent.message.amount else {
-        return rpc_error(request_id, RpcErrorCode::BadRequest, "Invalid amount");
-    };
+    if preview_messages.is_empty() {
+        return rpc_error(
+            request_id,
+            RpcErrorCode::BadRequest,
+            "Invalid message batch",
+        );
+    }
+    let mut prompt_messages = Vec::with_capacity(preview_messages.len());
+    for message in &preview_messages {
+        let SendAmount::Exact { nanograms } = &message.amount else {
+            return rpc_error(request_id, RpcErrorCode::BadRequest, "Invalid amount");
+        };
+        prompt_messages.push(TransactionMessagePreview {
+            destination: message.destination.to_string(),
+            amount_nanograms: nanograms.to_string(),
+            deploys_contract: message.state_init.is_some(),
+            has_payload: matches!(message.body, SendMessageBody::RawPayload { .. }),
+        });
+    }
     if events
         .send(TonConnectEvent::TransactionPrompt(TransactionPrompt {
             dapp_name: dapp_name.to_owned(),
-            destination: engine_request.intent.message.destination.to_string(),
-            amount_nanograms: nanograms.to_string(),
-            deploys_contract: engine_request.intent.message.state_init.is_some(),
-            has_payload: matches!(
-                engine_request.intent.message.body,
-                SendMessageBody::RawPayload { .. }
-            ),
+            messages: prompt_messages,
+            valid_until,
+            wallet_fee_nanograms,
+            wallet_needs_state_init,
+            sign_only: matches!(mode, TransactionMode::Sign),
             can_force_retry,
             force: false,
+            scroll: 0,
             response: Some(approval_tx),
         }))
         .is_err()
@@ -484,8 +589,44 @@ async fn handle_send_transaction(
             "User declined the transaction",
         );
     }
-    engine_request.force = decision.force;
-    match wallet_client.send(engine_request).await {
+    match mode {
+        TransactionMode::Send => {
+            handle_send(
+                wallet_client,
+                SendRequest {
+                    operation_id,
+                    force: decision.force,
+                    intent,
+                },
+                request_id,
+                events,
+            )
+            .await
+        }
+        TransactionMode::Sign => {
+            handle_sign(
+                wallet_client,
+                EngineSignMessageRequest {
+                    operation_id,
+                    force: decision.force,
+                    intent,
+                },
+                request_id,
+                events,
+            )
+            .await
+        }
+    }
+}
+
+/// Runs a TON Connect send and returns the external message BOC to the dApp.
+async fn handle_send(
+    wallet_client: &WalletClient,
+    request: SendRequest,
+    request_id: String,
+    events: &mpsc::UnboundedSender<TonConnectEvent>,
+) -> WalletResponse {
+    match wallet_client.send(request).await {
         Ok(result)
             if matches!(
                 result.phase,
@@ -523,59 +664,130 @@ async fn handle_send_transaction(
     }
 }
 
-fn engine_send_request(
+/// Signs a TON Connect message without broadcasting it from the wallet.
+async fn handle_sign(
+    wallet_client: &WalletClient,
+    request: EngineSignMessageRequest,
+    request_id: String,
+    events: &mpsc::UnboundedSender<TonConnectEvent>,
+) -> WalletResponse {
+    match wallet_client.sign_message(request).await {
+        Ok(result) if result.phase == SendPhase::HandedOff => {
+            let _ = events.send(TonConnectEvent::TransactionFinished(
+                "Signed message returned to the dApp for relaying".to_owned(),
+            ));
+            let result = ProtocolSignMessageResult {
+                internal_boc: match ton_connect_core::CellBoc::try_from(String::from(
+                    result.internal_boc,
+                )) {
+                    Ok(boc) => boc,
+                    Err(error) => {
+                        let _ =
+                            events.send(TonConnectEvent::TransactionFinished(error.to_string()));
+                        return rpc_error(
+                            request_id,
+                            RpcErrorCode::Unknown,
+                            "Signed message serialization failed",
+                        );
+                    }
+                },
+            };
+            let Ok(serde_json::Value::Object(result)) = serde_json::to_value(result) else {
+                return rpc_error(
+                    request_id,
+                    RpcErrorCode::Unknown,
+                    "Signed message serialization failed",
+                );
+            };
+            WalletResponse::Success(WalletResponseSuccess {
+                result: WalletResult::Object(result),
+                id: request_id,
+            })
+        }
+        Ok(result) => {
+            let _ = events.send(TonConnectEvent::TransactionFinished(format!(
+                "Signed message was not handed off: {:?}",
+                result.phase
+            )));
+            rpc_error(
+                request_id,
+                RpcErrorCode::Unknown,
+                "Signed message was not handed off",
+            )
+        }
+        Err(error) => {
+            let _ = events.send(TonConnectEvent::TransactionFinished(error.to_string()));
+            rpc_error(request_id, RpcErrorCode::Unknown, "Message signing failed")
+        }
+    }
+}
+
+/// Distinguishes broadcast sends from messages returned to a relayer.
+#[derive(Clone, Copy)]
+enum TransactionMode {
+    Send,
+    Sign,
+}
+
+/// Maps one raw TON Connect payload into the engine's ordered message model.
+fn engine_transaction_intent(
     session_id: ClientId,
-    request: &SendTransactionRequest,
+    request_id: &str,
+    request: &TransactionPayload,
     descriptor: &WalletDescriptor,
-) -> Result<SendRequest, RpcErrorCode> {
-    let TransactionPayload::Raw(payload) = &request.payload else {
+) -> Result<(NonEmptyString, SendIntent), RpcErrorCode> {
+    let TransactionPayload::Raw(payload) = request else {
         return Err(RpcErrorCode::MethodNotSupported);
     };
     validate_transaction_sender(payload, descriptor)?;
-    let messages = payload.messages.as_slice();
-    let Some(message) = messages.first() else {
-        return Err(RpcErrorCode::BadRequest);
-    };
-    if messages.len() != 1 || message.extra_currency.is_some() {
+    if payload.messages.as_slice().len() > 255 {
         return Err(RpcErrorCode::MethodNotSupported);
     }
-    let body = decode_boc(message.payload.as_ref())?;
-    let state_init = decode_boc(message.state_init.as_ref())?;
-    Ok(SendRequest {
-        operation_id: NonEmptyString::try_from(format!(
-            "ton-connect-{}-{}",
-            session_id, request.id
-        ))
-        .map_err(|_| RpcErrorCode::BadRequest)?,
-        force: false,
-        intent: SendIntent {
-            expiration: payload
-                .valid_until
-                .map_or(SendExpiration::EngineDefault, |value| {
-                    SendExpiration::Exact {
-                        unix_timestamp: value,
-                    }
-                }),
-            message: SendMessage {
-                destination: TonAddressString::try_from(message.address.as_str())
-                    .map_err(|_| RpcErrorCode::BadRequest)?,
-                amount: SendAmount::exact(message.amount.as_str())
-                    .map_err(|_| RpcErrorCode::BadRequest)?,
-                body: body.map_or(SendMessageBody::Empty, |boc| SendMessageBody::RawPayload {
-                    boc,
-                }),
-                state_init,
-            },
-        },
-    })
+    let mut messages = Vec::with_capacity(payload.messages.as_slice().len());
+    for message in payload.messages.as_slice() {
+        if message
+            .extra_currency
+            .as_ref()
+            .is_some_and(|currencies| !currencies.is_empty())
+        {
+            return Err(RpcErrorCode::MethodNotSupported);
+        }
+        let body = decode_boc(message.payload.as_ref())?;
+        let state_init = decode_boc(message.state_init.as_ref())?;
+        messages.push(SendMessage {
+            destination: TonAddressString::try_from(message.address.as_str())
+                .map_err(|_| RpcErrorCode::BadRequest)?,
+            amount: SendAmount::exact(message.amount.as_str())
+                .map_err(|_| RpcErrorCode::BadRequest)?,
+            body: body.map_or(SendMessageBody::Empty, |boc| SendMessageBody::RawPayload {
+                boc,
+            }),
+            state_init,
+        });
+    }
+    let operation_id = NonEmptyString::try_from(format!("ton-connect-{session_id}-{request_id}"))
+        .map_err(|_| RpcErrorCode::BadRequest)?;
+    let intent = SendIntent {
+        expiration: payload
+            .valid_until
+            .map_or(SendExpiration::EngineDefault, |value| {
+                SendExpiration::Exact {
+                    unix_timestamp: value,
+                }
+            }),
+        messages,
+    };
+    Ok((operation_id, intent))
 }
 
+/// Decodes an optional protocol cell into the engine BOC type.
 fn decode_boc(value: Option<&ton_connect_core::CellBoc>) -> Result<Option<Boc>, RpcErrorCode> {
     value
         .map(|value| Boc::try_from(value.as_bytes().to_vec()).map_err(|_| RpcErrorCode::BadRequest))
         .transpose()
 }
 
+/// Makes sure that an optional request network and sender match the selected wallet.
 fn validate_transaction_sender(
     payload: &RawTransactionPayload,
     descriptor: &WalletDescriptor,
@@ -601,6 +813,7 @@ fn validate_transaction_sender(
     Ok(())
 }
 
+/// Builds one TON Connect RPC error with the supplied request identifier.
 fn rpc_error(id: String, code: RpcErrorCode, message: &str) -> WalletResponse {
     WalletResponse::Error {
         error: WalletResponseError {
@@ -612,6 +825,7 @@ fn rpc_error(id: String, code: RpcErrorCode, message: &str) -> WalletResponse {
     }
 }
 
+/// Sends one prepared encrypted response to the bridge.
 async fn send_bridge_post(client: &Client, post: &PreparedBridgePost) -> Result<()> {
     client
         .post(post.url().clone())
@@ -624,6 +838,7 @@ async fn send_bridge_post(client: &Client, post: &PreparedBridgePost) -> Result<
     Ok(())
 }
 
+/// Returns the current Unix timestamp in seconds.
 fn unix_timestamp() -> Result<u64> {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -631,6 +846,7 @@ fn unix_timestamp() -> Result<u64> {
         .context("system clock is before Unix epoch")
 }
 
+/// Maps the current desktop target to its TON Connect platform name.
 const fn current_platform() -> DevicePlatform {
     #[cfg(target_os = "macos")]
     {
@@ -659,6 +875,7 @@ mod tests {
 
     const EMPTY_CELL_BOC: &str = "te6ccgEBAQEAAgAAAA==";
 
+    /// Verifies that request mapping keeps every contract-call field.
     #[test]
     fn send_mapping_preserves_contract_payload_state_init_and_validity() -> Result<()> {
         let descriptor = WalletDescriptor {
@@ -681,38 +898,36 @@ mod tests {
             state_init: Some(CellBoc::try_from(EMPTY_CELL_BOC)?),
             extra_currency: None,
         };
-        let request = SendTransactionRequest {
-            id: "1".to_owned(),
-            payload: TransactionPayload::Raw(RawTransactionPayload {
-                valid_until: Some(1_900_000_000),
-                network: Some(NetworkId::try_from("-3")?),
-                from: Some(AccountAddress::try_from(descriptor.address.to_string())?),
-                messages: NonEmptyVec::try_from(vec![message])?,
-            }),
-        };
+        let request = TransactionPayload::Raw(RawTransactionPayload {
+            valid_until: Some(1_900_000_000),
+            network: Some(NetworkId::try_from("-3")?),
+            from: Some(AccountAddress::try_from(descriptor.address.to_string())?),
+            messages: NonEmptyVec::try_from(vec![message])?,
+        });
 
-        let converted =
-            engine_send_request(ClientId::from_bytes([7_u8; 32]), &request, &descriptor)
+        let (_, converted) =
+            engine_transaction_intent(ClientId::from_bytes([7_u8; 32]), "1", &request, &descriptor)
                 .map_err(|code| anyhow!("unexpected RPC error: {code:?}"))?;
 
         assert_eq!(
-            converted.intent.message.destination.as_str(),
+            converted.messages[0].destination.as_str(),
             destination.as_str()
         );
         assert_eq!(
-            converted.intent.expiration,
+            converted.expiration,
             SendExpiration::Exact {
                 unix_timestamp: 1_900_000_000,
             }
         );
         assert!(matches!(
-            converted.intent.message.body,
+            converted.messages[0].body,
             SendMessageBody::RawPayload { .. }
         ));
-        assert!(converted.intent.message.state_init.is_some());
+        assert!(converted.messages[0].state_init.is_some());
         Ok(())
     }
 
+    /// Verifies that request mapping rejects a network other than the wallet network.
     #[test]
     fn send_mapping_rejects_cross_network_requests() -> Result<()> {
         let descriptor = WalletDescriptor {

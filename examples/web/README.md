@@ -6,7 +6,16 @@ snapshot through the browser host callbacks.
 
 Paste a full `tc://` link to start TON Connect. The example loads the dApp
 manifest, shows connection approval, signs an optional `ton_proof`, previews
-one-message transactions, and restores the encrypted session after reload.
+raw batches of up to 255 messages, and restores the encrypted session after
+reload.
+
+The approval dialog supports `sendTransaction` and gasless `signMessage`.
+For `signMessage`, it shows that a relayer submits the signed request and pays
+the inbound TON fee. The dApp receives the complete signed internal-message
+BoC.
+
+The approval dialog lists every message in order. Each entry shows its amount,
+recipient, body type, and `StateInit` presence.
 
 The example reports Tonkeeper's registered `appName` so current dApps can find
 wallet metadata. A production wallet must register and use its own identity.

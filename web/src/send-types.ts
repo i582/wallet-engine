@@ -35,7 +35,7 @@ export interface SendMessage {
   readonly amount: SendAmount
   readonly body: SendMessageBody
   /** Destination-contract StateInit encoded as a Base64 BOC. */
-  readonly stateInit?: string
+  readonly stateInit?: string | null
 }
 
 /** The policy used to select the wallet message expiration boundary. */
@@ -53,13 +53,22 @@ export type SendExpiration =
 /** The message and expiration choices accepted by preview and send. */
 export interface SendIntent {
   readonly expiration: SendExpiration
-  readonly message: SendMessage
+  /** Non-empty ordered Wallet V5 action batch; at most 255 messages. */
+  readonly messages: readonly SendMessage[]
 }
 
 /** Requests one signed wallet transfer. */
 export interface SendRequest {
   readonly operationId: string
   /** Allows this send to replace an unresolved signed send after explicit user confirmation. */
+  readonly force?: boolean
+  readonly intent: SendIntent
+}
+
+/** Requests one signed internal Wallet V5 message without submission. */
+export interface SignMessageRequest {
+  readonly operationId: string
+  /** Allows replacement of an unresolved signed message after explicit confirmation. */
   readonly force?: boolean
   readonly intent: SendIntent
 }
@@ -71,12 +80,19 @@ export interface SendPreviewRequest {
 
 /** One emulated transfer and its resolved message fields. */
 export interface SendPreview {
-  readonly message: SendMessage
+  readonly messages: readonly SendMessage[]
   /** Resolved Unix expiration timestamp used by this emulation. */
   readonly validUntil: number
   /** Complete fake-signed external-message BOC in standard padded Base64. */
   readonly messageBocBase64: string
   readonly emulation: SendEmulation
+}
+
+/** A validated sign-only request without a wallet-paid fee estimate. */
+export interface SignMessagePreview {
+  readonly messages: readonly SendMessage[]
+  readonly validUntil: number
+  readonly needsStateInit: boolean
 }
 
 /** The result of one signed wallet transfer. */
@@ -86,5 +102,14 @@ export interface SendResult {
   readonly messageHash: Base64Hash
   /** Signed external-message BoC returned to TON Connect callers. */
   readonly signedBoc: string
+  readonly phase: SendPhase
+}
+
+/** A durable internal signed message that the caller can deliver to a relayer. */
+export interface SignMessageResult {
+  readonly operationId: string
+  /** Complete relaxed internal-message BOC. */
+  readonly internalBoc: string
+  readonly validUntil: number
   readonly phase: SendPhase
 }

@@ -5,16 +5,20 @@ Wallet Engine API directly. It does not depend on the previous wallet runtime.
 
 The application can:
 
-- create a testnet wallet;
-- store its recovery phrase in Keychain;
-- show the balance and recent activity;
-- load older transactions;
-- send GRAM;
-- connect dApps through TON Connect;
-- sign `ton_proof` ownership challenges;
-- emulate and approve TON Connect transactions before signing;
-- restore and disconnect encrypted TON Connect sessions;
+- create a testnet wallet.
+- store its recovery phrase in Keychain.
+- show the balance and recent activity.
+- load older transactions.
+- send GRAM.
+- connect dApps through TON Connect.
+- sign `ton_proof` ownership challenges.
+- preview and approve TON Connect transaction batches before signing.
+- sign gasless TON Connect messages for submission by a dApp relayer.
+- restore and disconnect encrypted TON Connect sessions.
 - reveal or delete the selected wallet.
+
+The approval screen lists each message amount, recipient, body type, and
+`StateInit` presence.
 
 The example does not use a streaming connection or a fiat-rate provider.
 
@@ -41,7 +45,7 @@ For authenticated Toncenter requests, copy `.env.example` to `.env` in this
 directory and set `TONCENTER_API_KEY`. The same key is available to mainnet and
 testnet requests. Debug builds copy the value into the local application
 bundle. Release builds never include it. Do not use an embedded service key in
-a distributed application; inject it from a backend or use a key owned by the
+a distributed application. Inject it from a backend or use a key owned by the
 user.
 
 ## Build from the command line
@@ -73,7 +77,8 @@ action.
 - `Infrastructure/WalletSession.swift` owns one `WalletClient`, observes newer
   snapshots, and guards client replacement.
 - `Infrastructure/TonConnectCoordinator.swift` binds the Rust TON Connect
-  reducer to manifest loading, transaction preview, user approval, and send.
+  reducer to manifest loading, request preview, user approval, send, and
+  sign-only handoff.
 - `Infrastructure/TonConnectTransport.swift` performs redirect-free manifest,
   bridge POST, and streaming SSE requests.
 - `Infrastructure/TonConnectSessionStore.swift` keeps secret-bearing session

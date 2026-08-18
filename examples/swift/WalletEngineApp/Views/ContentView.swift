@@ -1751,12 +1751,12 @@ private struct SendWalletView: View {
                         force: force,
                         intent: SendIntent(
                             expiration: .engineDefault,
-                            message: SendMessage(
+                            messages: [SendMessage(
                                 destination: normalizedDestination,
                                 amount: .exact(nanograms: nanograms),
                                 body: .empty,
                                 stateInit: nil
-                            )
+                            )]
                         )
                     )
                 )
@@ -1774,7 +1774,7 @@ private struct SendWalletView: View {
                 case .cancelled:
                     errorMessage = "The transfer was cancelled."
                 case .idle, .validating, .authorizing, .preparing, .persisting,
-                     .readyToSubmit, .submitting:
+                     .readyToSubmit, .submitting, .handedOff, .sequenceNumberConsumed:
                     errorMessage = "The transfer did not reach a final state."
                 }
             } catch {

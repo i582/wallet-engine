@@ -87,6 +87,50 @@ impl TonWallet {
         Ok(external)
     }
 
+    /// Builds a signed internal request that a sponsor can relay to this wallet.
+    ///
+    /// The returned cell is a complete relaxed internal message with no source
+    /// and zero value. A relayer supplies its source and attached TON when it
+    /// submits the signed body to the wallet contract.
+    pub fn create_internal_signed_msg_with_modes(
+        &self,
+        int_msgs: Vec<TonCell>,
+        int_msg_modes: Vec<u8>,
+        seqno: u32,
+        expire_at: u32,
+        add_state_init: bool,
+    ) -> Result<TonCell, TonError> {
+        let body = WalletVersion::build_internal_signed_body_with_modes(
+            self.version,
+            expire_at,
+            seqno,
+            self.wallet_id,
+            int_msgs,
+            int_msg_modes,
+        )?;
+        let signed = self.sign_ext_in_body(&body)?;
+        self.create_internal_signed_msg_from_body(signed, add_state_init)
+    }
+
+    /// Wraps a signed internal request body for transport to a relayer.
+    pub fn create_internal_signed_msg_from_body(
+        &self,
+        signed_body: TonCell,
+        add_state_init: bool,
+    ) -> Result<TonCell, TonError> {
+        let mut info = CommonMsgInfoInt::new(self.address.to_msg_address(), TLBCoins::ZERO);
+        info.bounce = false;
+
+        let mut msg = Msg::new(CommonMsgInfo::Int(info), signed_body);
+        if add_state_init {
+            let code = WalletVersion::get_code(self.version)?.clone();
+            let data =
+                WalletVersion::get_default_data(self.version, &self.key_pair, self.wallet_id)?;
+            msg.init = Some(TLBEitherRef::new(StateInit::new(code, data)));
+        }
+        Ok(msg.to_cell()?)
+    }
+
     pub fn create_ext_in_body(
         &self,
         expire_at: u32,
@@ -329,6 +373,42 @@ mod tests {
                 }
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn wallet_v5_builds_a_complete_internal_signed_message() -> anyhow::Result<()> {
+        let wallet = TonWallet::new_with_params(
+            WalletVersion::V5R1,
+            make_keypair(MNEMONIC_STR_V5),
+            0,
+            WALLET_V5R1_ID_DEFAULT_TESTNET,
+        )?;
+        let action = TonCell::builder().build()?;
+
+        let cell = wallet.create_internal_signed_msg_with_modes(
+            vec![action.clone()],
+            vec![3],
+            0,
+            1_900_000_000,
+            true,
+        )?;
+        let message = Msg::<TonCell>::from_cell(&cell)?;
+        let info = message.info.as_int().expect("message must be internal");
+        assert_eq!(info.src, MsgAddress::NONE);
+        assert_eq!(info.dst, wallet.address.to_msg_address());
+        assert_eq!(info.value.coins, TLBCoins::ZERO);
+        assert!(!info.bounce);
+        assert!(message.init.is_some());
+
+        let (body, signature) =
+            WalletV5InternalSignedBody::read_signed(&mut message.body.value.parser())?;
+        assert_eq!(body.wallet_id, WALLET_V5R1_ID_DEFAULT_TESTNET);
+        assert_eq!(body.valid_until, 1_900_000_000);
+        assert_eq!(body.msg_seqno, 0);
+        assert_eq!(body.msgs_modes, vec![3]);
+        assert_eq!(body.msgs, vec![action]);
+        assert_eq!(signature.len(), 64);
         Ok(())
     }
 }

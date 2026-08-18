@@ -937,11 +937,13 @@ SendIntent transfer_intent(const TransferDraft &draft) {
         SendMessageBody(SendMessageBody::kEmpty {});
     return {
         SendExpiration(SendExpiration::kEngineDefault {}),
-        SendMessage {
-            draft.destination,
-            SendAmount(SendAmount::kExact {draft.amount_nanograms}),
-            body,
-            std::nullopt,
+        {
+            SendMessage {
+                draft.destination,
+                SendAmount(SendAmount::kExact {draft.amount_nanograms}),
+                body,
+                std::nullopt,
+            },
         },
     };
 }
@@ -1036,6 +1038,10 @@ QString send_phase_text(SendPhase phase) {
         return QStringLiteral("preparing");
     case SendPhase::kPersisting:
         return QStringLiteral("persisting");
+    case SendPhase::kHandedOff:
+        return QStringLiteral("handed-off");
+    case SendPhase::kSequenceNumberConsumed:
+        return QStringLiteral("sequence-number-consumed");
     case SendPhase::kReadyToSubmit:
         return QStringLiteral("ready-to-submit");
     case SendPhase::kSubmitting:
@@ -3070,7 +3076,8 @@ private:
             auto *warning_text = new QLabel(
                 QStringLiteral(
                     "A previous signed transfer is unresolved and may still execute. "
-                    "If you send another transfer, both can affect the balance."
+                    "Submitting again authorizes another message for the wallet's "
+                    "current sequence number; network ordering determines which can execute."
                 ),
                 warning
             );

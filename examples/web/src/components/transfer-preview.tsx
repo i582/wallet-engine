@@ -1,5 +1,5 @@
 import {Check, Copy, PaperPlaneTilt, Warning} from "@phosphor-icons/react"
-import type {SendPreview} from "@ton/wallet-engine"
+import type {SendMessage, SendPreview, SignMessagePreview} from "@ton/wallet-engine"
 import {type ReactElement, useState} from "react"
 
 import {Alert, AlertDescription, AlertTitle} from "@/components/ui/alert"
@@ -9,7 +9,7 @@ import {compactAddress, formatNanogramBalance} from "@/lib/format"
 export interface TransferPreviewProps {
   readonly amount: string
   readonly destination: string
-  readonly preview?: SendPreview
+  readonly preview?: SendPreview | SignMessagePreview
 }
 
 /** Renders the same emulation evidence for direct and TON Connect transfers. */
@@ -18,37 +18,57 @@ export function TransferPreview({
   destination,
   preview,
 }: TransferPreviewProps): ReactElement {
+  const sendPreview: SendPreview | undefined =
+    preview !== undefined && "emulation" in preview ? preview : undefined
   const warning: boolean =
-    preview !== undefined && (!preview.emulation.traceSucceeded || preview.emulation.isIncomplete)
-  const simpleTransfer: boolean = hasSimpleTransferActionSet(preview)
+    sendPreview !== undefined &&
+    (!sendPreview.emulation.traceSucceeded || sendPreview.emulation.isIncomplete)
+  const simpleTransfer: boolean = hasSimpleTransferActionSet(sendPreview)
 
   return (
     <div className="space-y-3">
       {simpleTransfer ? <TransferHero destination={destination} /> : null}
 
       <div className="overflow-hidden rounded-xl border border-border">
-        <SummaryRow label="Send" value={`${amount} GRAM`} />
-        <SummaryRow label="To" value={compactAddress(destination)} />
         {preview ? (
+          <MessageBatch messages={preview.messages} />
+        ) : (
           <>
+            <SummaryRow label="Send" value={`${amount} GRAM`} />
+            <SummaryRow label="To" value={compactAddress(destination)} />
+          </>
+        )}
+        {sendPreview ? (
+          <>
+            <SummaryRow label="Valid until" value={sendPreview.validUntil.toString()} />
             <SummaryRow
               label="Network fee"
-              value={`${formatNanogramBalance(preview.emulation.walletFeesNanograms)} GRAM`}
+              value={`${formatNanogramBalance(sendPreview.emulation.walletFeesNanograms)} GRAM`}
             />
             <SummaryRow
               label="Transactions"
-              value={preview.emulation.transactionCount.toString()}
+              value={sendPreview.emulation.transactionCount.toString()}
             />
-            <BocSummaryRow value={preview.messageBocBase64} />
+            <BocSummaryRow value={sendPreview.messageBocBase64} />
+          </>
+        ) : null}
+        {preview !== undefined && !("emulation" in preview) ? (
+          <>
+            <SummaryRow label="Valid until" value={preview.validUntil.toString()} />
+            <SummaryRow label="Network fee" value="Paid by relayer" />
+            <SummaryRow
+              label="Wallet StateInit"
+              value={preview.needsStateInit ? "Included" : "Not needed"}
+            />
           </>
         ) : null}
       </div>
 
-      {!simpleTransfer && preview !== undefined && preview.emulation.actions.length > 0 ? (
+      {!simpleTransfer && sendPreview !== undefined && sendPreview.emulation.actions.length > 0 ? (
         <div className="rounded-xl border border-border px-4 py-3">
           <p className="text-xs font-medium text-muted-foreground">Actions</p>
           <div className="mt-2 flex flex-wrap gap-2">
-            {preview.emulation.actions.map(action => (
+            {sendPreview.emulation.actions.map(action => (
               <span
                 className={action.succeeded ? "text-foreground" : "text-amber-500"}
                 key={action.actionId}
@@ -67,6 +87,69 @@ export function TransferPreview({
           <AlertDescription>The network can still accept the wallet transaction.</AlertDescription>
         </Alert>
       ) : null}
+    </div>
+  )
+}
+
+/** Shows every recipient and value that the wallet will authorize. */
+function MessageBatch({messages}: {readonly messages: readonly SendMessage[]}): ReactElement {
+  return (
+    <div className="divide-y divide-border border-b border-border">
+      {messages.map((message, index) => (
+        <div className="space-y-2 px-4 py-3" key={`${index}:${message.destination}`}>
+          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+            Message {index + 1} of {messages.length}
+          </p>
+          <SummaryValue label="Send" value={messageAmount(message)} />
+          <SummaryValue label="To" value={compactAddress(message.destination)} />
+          <SummaryValue label="Body" value={messageBody(message)} />
+          <SummaryValue
+            label="StateInit"
+            value={
+              message.stateInit === undefined || message.stateInit === null
+                ? "Not included"
+                : "Included"
+            }
+          />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** Formats one wallet amount policy for an approval dialog. */
+function messageAmount(message: SendMessage): string {
+  return message.amount.kind === "exact"
+    ? `${formatNanogramBalance(message.amount.nanograms)} GRAM`
+    : "Complete balance"
+}
+
+/** Names the body representation that the wallet will serialize. */
+function messageBody(message: SendMessage): string {
+  switch (message.body.kind) {
+    case "empty":
+      return "Empty"
+    case "comment":
+      return "Text comment"
+    case "rawPayload":
+      return "Contract payload"
+    default:
+      return "Unknown"
+  }
+}
+
+/** Renders one compact label and value pair inside a message summary. */
+function SummaryValue({
+  label,
+  value,
+}: {
+  readonly label: string
+  readonly value: string
+}): ReactElement {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <span className="truncate text-sm font-medium">{value}</span>
     </div>
   )
 }

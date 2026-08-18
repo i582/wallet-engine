@@ -301,6 +301,22 @@ impl App {
     }
 
     fn handle_ton_connect_transaction(&mut self, key: KeyEvent) {
+        if matches!(
+            key.code,
+            KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown
+        ) {
+            if let Screen::TonConnectTransaction(prompt) = &mut self.screen {
+                let last = prompt.messages.len().saturating_sub(1);
+                prompt.scroll = match key.code {
+                    KeyCode::Up => prompt.scroll.saturating_sub(1),
+                    KeyCode::Down => prompt.scroll.saturating_add(1).min(last),
+                    KeyCode::PageUp => prompt.scroll.saturating_sub(10),
+                    KeyCode::PageDown => prompt.scroll.saturating_add(10).min(last),
+                    _ => prompt.scroll,
+                };
+            }
+            return;
+        }
         if key.code == KeyCode::Char(' ') {
             if let Screen::TonConnectTransaction(prompt) = &mut self.screen
                 && prompt.can_force_retry
@@ -331,11 +347,16 @@ impl App {
         if let Some(approved) = approved {
             let screen = std::mem::replace(&mut self.screen, Screen::Dashboard);
             if let Screen::TonConnectTransaction(prompt) = screen {
+                let sign_only = prompt.sign_only;
                 prompt.respond(approved);
                 self.status = Some(if approved {
-                    "Signing and submitting TON Connect transaction…".to_owned()
+                    if sign_only {
+                        "Signing TON Connect message for the dApp relayer…".to_owned()
+                    } else {
+                        "Signing and submitting TON Connect transaction…".to_owned()
+                    }
                 } else {
-                    "TON Connect transaction declined".to_owned()
+                    "TON Connect request declined".to_owned()
                 });
             }
         }
@@ -602,12 +623,12 @@ impl App {
 
         let intent = SendIntent {
             expiration: SendExpiration::EngineDefault,
-            message: SendMessage {
+            messages: vec![SendMessage {
                 destination,
                 amount,
                 body: SendMessageBody::Empty,
                 state_init: None,
-            },
+            }],
         };
         self.status = Some("Checking transfer…".to_owned());
         match client

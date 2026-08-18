@@ -17,7 +17,7 @@ use crate::{
     UnsignedDecimalString,
 };
 
-const JOURNAL_SCHEMA_VERSION: u32 = 3;
+const JOURNAL_SCHEMA_VERSION: u32 = 5;
 const FIRST_JOURNAL_VERSION: u64 = 1;
 pub(crate) const SEND_SLOT: &str = "outgoing-transfer";
 
@@ -72,13 +72,16 @@ pub(crate) struct PreparedTransfer {
     /// The configured source address after the mnemonic-derived wallet matches it.
     pub source: TonAddressString,
 
-    /// The complete outgoing internal message encoded into the wallet action.
-    pub message: SendMessage,
+    /// The Wallet V5 authenticated entry point used by the signed body.
+    pub kind: SignedMessageKind,
 
-    /// The fresh wallet sequence number signed into the external message.
+    /// The complete ordered outgoing internal-message batch encoded into wallet actions.
+    pub messages: Vec<SendMessage>,
+
+    /// The fresh wallet sequence number signed into the wallet request.
     pub seqno: u32,
 
-    /// Reports whether the external message contains the wallet `StateInit`.
+    /// Reports whether the complete message contains the wallet `StateInit`.
     /// Only an allowed nonactive account with sequence number zero uses it.
     pub needs_state_init: bool,
 
@@ -86,13 +89,22 @@ pub(crate) struct PreparedTransfer {
     /// The engine derives it from provider time and the configured validity interval.
     pub valid_until: u64,
 
-    /// The validated signed external-message BOC submitted to Toncenter.
-    /// The journal preserves it after an ambiguous transport result.
+    /// The validated complete signed-message BOC.
+    /// The journal preserves it after submission or handoff becomes irreversible.
     pub signed_boc: Boc,
 
-    /// The normalized external-message hash in standard padded Base64.
-    /// Applications can use it to locate the submitted message without storing the recovery phrase.
+    /// The complete signed-message hash in standard padded Base64.
     pub message_hash: Base64Hash,
+}
+
+/// Selects the Wallet V5 authenticated entry point and delivery channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SignedMessageKind {
+    /// `external_signed`, submitted through the configured provider.
+    External,
+    /// `internal_signed`, returned to a caller that supplies a relayer.
+    Internal,
 }
 
 /// Full internal state. Public `SendPhase` intentionally remains a compact
@@ -125,10 +137,15 @@ pub(crate) enum SendStage {
     SubmissionUnknown,
     /// Toncenter returned an explicit success and the journal stores the terminal result.
     Submitted,
+    /// The signed internal message is durable and has been returned to its caller.
+    HandedOff,
     /// The signed external message was executed by an on-chain transaction.
     Confirmed,
     /// Another external message consumed the signed sequence number.
     Replaced,
+    /// The sequence number of an internal signed request advanced without
+    /// provider evidence identifying the exact competing request.
+    SequenceNumberConsumed,
     /// The signed validity window and indexer margin elapsed without execution.
     Expired,
     /// An explicit same-sequence-number resend replaced this attempt.
@@ -153,6 +170,7 @@ enum SendEvent {
     AuthorizationSucceeded,
     TransferPrepared,
     PreparedJournalPersisted,
+    InternalMessageJournalPersisted,
     SubmissionStarted,
     SubmissionSucceeded,
     SubmissionUnknown,
@@ -177,13 +195,19 @@ impl SendStage {
             (Self::PersistingPrepared, SendEvent::PreparedJournalPersisted) => {
                 Some(Self::ReadyToSubmit)
             }
+            (Self::PersistingPrepared, SendEvent::InternalMessageJournalPersisted) => {
+                Some(Self::HandedOff)
+            }
             (Self::ReadyToSubmit, SendEvent::SubmissionStarted) => Some(Self::Submitting),
             (Self::Submitting, SendEvent::SubmissionSucceeded) => Some(Self::Submitted),
             (Self::Submitting, SendEvent::SubmissionUnknown) => Some(Self::SubmissionUnknown),
             (Self::Submitting, SendEvent::SubmissionRejected) => Some(Self::Failed),
             (
-                stage
-                @ (Self::SubmissionUnknown | Self::Submitted | Self::Failed | Self::Cancelled),
+                stage @ (Self::SubmissionUnknown
+                | Self::Submitted
+                | Self::HandedOff
+                | Self::Failed
+                | Self::Cancelled),
                 SendEvent::TerminalJournalPersisted,
             ) => Some(stage),
             (stage, SendEvent::JournalConflict) if !stage.is_terminal() => Some(Self::Failed),
@@ -204,8 +228,10 @@ impl SendStage {
             Self::Submitting => SendPhase::Submitting,
             Self::SubmissionUnknown => SendPhase::SubmissionUnknown,
             Self::Submitted => SendPhase::Submitted,
+            Self::HandedOff => SendPhase::HandedOff,
             Self::Confirmed => SendPhase::Confirmed,
             Self::Replaced => SendPhase::Replaced,
+            Self::SequenceNumberConsumed => SendPhase::SequenceNumberConsumed,
             Self::Expired => SendPhase::Expired,
             Self::Superseded => SendPhase::Superseded,
             Self::Failed => SendPhase::Failed,
@@ -218,8 +244,10 @@ impl SendStage {
             self,
             Self::SubmissionUnknown
                 | Self::Submitted
+                | Self::HandedOff
                 | Self::Confirmed
                 | Self::Replaced
+                | Self::SequenceNumberConsumed
                 | Self::Expired
                 | Self::Superseded
                 | Self::Failed
@@ -232,6 +260,7 @@ impl SendStage {
             self,
             Self::Confirmed
                 | Self::Replaced
+                | Self::SequenceNumberConsumed
                 | Self::Expired
                 | Self::Superseded
                 | Self::Failed
@@ -247,7 +276,11 @@ impl SendStage {
     const fn permits_forced_replacement(self) -> bool {
         matches!(
             self,
-            Self::ReadyToSubmit | Self::Submitting | Self::SubmissionUnknown | Self::Submitted
+            Self::ReadyToSubmit
+                | Self::Submitting
+                | Self::SubmissionUnknown
+                | Self::Submitted
+                | Self::HandedOff
         )
     }
 
@@ -282,6 +315,12 @@ pub(crate) enum SendDirective {
         /// The normalized external-message hash in standard padded Base64.
         message_hash: Base64Hash,
     },
+    HandOff {
+        /// The complete signed internal message returned to a relayer client.
+        internal_boc: Boc,
+        /// The signed Unix expiration boundary.
+        valid_until: u64,
+    },
     Finished,
 }
 
@@ -315,8 +354,10 @@ struct DurableSendRecord {
     record_id: NonEmptyString,
     /// The validated source TON address.
     source: TonAddressString,
-    /// The complete outgoing internal message stored with the signed message.
-    message: SendMessage,
+    /// The wallet-contract entry point and delivery channel.
+    kind: SignedMessageKind,
+    /// The complete ordered outgoing internal-message batch stored with the signed message.
+    messages: Vec<SendMessage>,
     /// The wallet sequence number signed into the external message.
     seqno: u32,
     /// Reports whether the signed message contains the wallet `StateInit`.
@@ -351,6 +392,7 @@ pub(crate) struct PendingSendRecord {
     pub(crate) operation_id: NonEmptyString,
     pub(crate) record_id: NonEmptyString,
     pub(crate) source: TonAddressString,
+    pub(crate) kind: SignedMessageKind,
     pub(crate) seqno: u32,
     pub(crate) valid_until: u64,
     pub(crate) message_hash: Base64Hash,
@@ -367,6 +409,7 @@ pub(crate) enum SendResolution {
         transaction_lt: UnsignedDecimalString,
     },
     Replaced,
+    SequenceNumberConsumed,
     Expired,
     StillPending(PendingReason),
 }
@@ -392,6 +435,9 @@ impl PendingSendRecord {
                 None,
             ),
             SendResolution::Replaced => (SendPhase::Replaced, None, None, None),
+            SendResolution::SequenceNumberConsumed => {
+                (SendPhase::SequenceNumberConsumed, None, None, None)
+            }
             SendResolution::Expired => (SendPhase::Expired, None, None, None),
             SendResolution::StillPending(reason) => {
                 (self.stage.public_phase(), None, None, Some(*reason))
@@ -439,6 +485,9 @@ impl PendingSendRecord {
                 Some(transaction_lt.clone()),
             ),
             SendResolution::Replaced => (SendStage::Replaced, None, None),
+            SendResolution::SequenceNumberConsumed => {
+                (SendStage::SequenceNumberConsumed, None, None)
+            }
             SendResolution::Expired => (SendStage::Expired, None, None),
             SendResolution::StillPending(_) => return Ok(None),
         };
@@ -487,6 +536,7 @@ pub(crate) fn pending_send_record(
         operation_id: durable.operation_id.clone(),
         record_id: durable.record_id.clone(),
         source: durable.source.clone(),
+        kind: durable.kind,
         seqno: durable.seqno,
         valid_until: durable.valid_until,
         message_hash: durable.message_hash.clone(),
@@ -524,6 +574,7 @@ pub(crate) fn terminal_send_resolution(
             })?,
         })),
         SendStage::Replaced => Ok(Some(SendResolution::Replaced)),
+        SendStage::SequenceNumberConsumed => Ok(Some(SendResolution::SequenceNumberConsumed)),
         SendStage::Expired => Ok(Some(SendResolution::Expired)),
         SendStage::Validating
         | SendStage::LoadingJournal
@@ -535,6 +586,7 @@ pub(crate) fn terminal_send_resolution(
         | SendStage::Submitting
         | SendStage::SubmissionUnknown
         | SendStage::Submitted
+        | SendStage::HandedOff
         | SendStage::Superseded
         | SendStage::Failed
         | SendStage::Cancelled => Ok(None),
@@ -563,7 +615,10 @@ pub(crate) fn send_snapshot_from_journal(
             can_force_retry: false,
             retry_after_hint_ms: None,
         }),
-        SendStage::Replaced | SendStage::Expired | SendStage::Superseded => Some(ResolutionInfo {
+        SendStage::Replaced
+        | SendStage::SequenceNumberConsumed
+        | SendStage::Expired
+        | SendStage::Superseded => Some(ResolutionInfo {
             transaction_hash: None,
             transaction_lt: None,
             pending_reason: None,
@@ -585,7 +640,8 @@ pub(crate) fn send_snapshot_from_journal(
         SendStage::ReadyToSubmit
         | SendStage::Submitting
         | SendStage::SubmissionUnknown
-        | SendStage::Submitted => Some(ResolutionInfo {
+        | SendStage::Submitted
+        | SendStage::HandedOff => Some(ResolutionInfo {
             transaction_hash: None,
             transaction_lt: None,
             pending_reason: Some(PendingReason::AwaitingWindow),
@@ -616,6 +672,9 @@ pub(crate) struct SendWorkflow {
 
     /// The immutable caller intent for this operation.
     request: SendRequest,
+
+    /// The authenticated wallet entry point and delivery channel for this operation.
+    kind: SignedMessageKind,
 
     /// The wallet-level protected secret used only by the local signing path.
     local_secret_ref: ProtectedSecretRef,
@@ -651,10 +710,44 @@ impl SendWorkflow {
         request: SendRequest,
         local_secret_ref: ProtectedSecretRef,
     ) -> Self {
+        Self::new_with_kind(
+            record_id,
+            source,
+            request,
+            local_secret_ref,
+            SignedMessageKind::External,
+        )
+    }
+
+    /// Creates a workflow that durably hands an internal signed message to its caller.
+    pub(crate) const fn new_internal(
+        record_id: NonEmptyString,
+        source: TonAddressString,
+        request: SendRequest,
+        local_secret_ref: ProtectedSecretRef,
+    ) -> Self {
+        Self::new_with_kind(
+            record_id,
+            source,
+            request,
+            local_secret_ref,
+            SignedMessageKind::Internal,
+        )
+    }
+
+    /// Initializes the reducer for one explicit signed-message delivery channel.
+    const fn new_with_kind(
+        record_id: NonEmptyString,
+        source: TonAddressString,
+        request: SendRequest,
+        local_secret_ref: ProtectedSecretRef,
+        kind: SignedMessageKind,
+    ) -> Self {
         Self {
             record_id,
             source,
             request,
+            kind,
             local_secret_ref,
             stage: SendStage::Validating,
             fresh_account: None,
@@ -781,7 +874,10 @@ impl SendWorkflow {
         }
 
         let event = if self.stage == SendStage::PersistingPrepared {
-            SendEvent::PreparedJournalPersisted
+            match self.kind {
+                SignedMessageKind::External => SendEvent::PreparedJournalPersisted,
+                SignedMessageKind::Internal => SendEvent::InternalMessageJournalPersisted,
+            }
         } else {
             SendEvent::TerminalJournalPersisted
         };
@@ -798,6 +894,13 @@ impl SendWorkflow {
                     message_hash: prepared.message_hash.clone(),
                 })
             }
+            SendStage::HandedOff => {
+                let prepared = self.prepared_ref()?;
+                Ok(SendDirective::HandOff {
+                    internal_boc: prepared.signed_boc.clone(),
+                    valid_until: prepared.valid_until,
+                })
+            }
             SendStage::SubmissionUnknown
             | SendStage::Submitted
             | SendStage::Failed
@@ -811,6 +914,7 @@ impl SendWorkflow {
             | SendStage::Submitting
             | SendStage::Confirmed
             | SendStage::Replaced
+            | SendStage::SequenceNumberConsumed
             | SendStage::Expired
             | SendStage::Superseded) => Err(SendWorkflowError::InvalidTransition {
                 from: stage,
@@ -904,13 +1008,22 @@ impl SendWorkflow {
             operation_id: prepared.operation_id.clone(),
             record_id: prepared.record_id.clone(),
             source: prepared.source.clone(),
-            message: prepared.message.clone(),
+            kind: prepared.kind,
+            messages: prepared.messages.clone(),
             seqno: prepared.seqno,
             needs_state_init: prepared.needs_state_init,
             valid_until: prepared.valid_until,
             signed_boc: prepared.signed_boc.clone(),
             message_hash: prepared.message_hash.clone(),
-            stage: self.stage,
+            stage: match (self.stage, self.kind) {
+                (SendStage::PersistingPrepared, SignedMessageKind::External) => {
+                    SendStage::ReadyToSubmit
+                }
+                (SendStage::PersistingPrepared, SignedMessageKind::Internal) => {
+                    SendStage::HandedOff
+                }
+                (stage, _) => stage,
+            },
             provider_reference: self.provider_reference.clone(),
             diagnostic: self.diagnostic.clone(),
             confirmed_transaction_hash: None,
@@ -950,7 +1063,8 @@ impl SendWorkflow {
         if prepared.operation_id != self.request.operation_id
             || prepared.record_id != self.record_id
             || prepared.source != self.source
-            || prepared.message != self.request.intent.message
+            || prepared.kind != self.kind
+            || prepared.messages != self.request.intent.messages
             || matches!(
                 &self.request.intent.expiration,
                 SendExpiration::Exact { unix_timestamp }
@@ -1377,6 +1491,45 @@ mod tests {
     }
 
     #[test]
+    fn internal_signed_message_is_durable_before_handoff() {
+        let request = request();
+        let mut workflow =
+            SendWorkflow::new_internal(non_empty("record"), source(), request, local_secret_ref());
+        assert!(workflow.begin().is_ok());
+        assert_eq!(
+            workflow.journal_loaded(None),
+            Ok(SendDirective::FetchFreshAccount)
+        );
+        assert!(workflow.fresh_account_loaded(fresh_account()).is_ok());
+        assert!(workflow.authorization_succeeded().is_ok());
+        let mut prepared = prepared_transfer();
+        prepared.kind = SignedMessageKind::Internal;
+
+        let SendDirective::PersistJournal(mutation) = workflow
+            .transfer_prepared(prepared.clone())
+            .expect("internal message reaches durable commit")
+        else {
+            panic!("prepared internal message must request journal persistence");
+        };
+        let durable =
+            decode_durable_record(&mutation.replacement).expect("prepared internal record decodes");
+        assert_eq!(durable.kind, SignedMessageKind::Internal);
+        assert_eq!(durable.stage, SendStage::HandedOff);
+
+        assert_eq!(
+            workflow.journal_persisted(&JournalCompareExchangeResult {
+                applied: true,
+                current: Some(mutation.replacement),
+            }),
+            Ok(SendDirective::HandOff {
+                internal_boc: prepared.signed_boc,
+                valid_until: prepared.valid_until,
+            })
+        );
+        assert_eq!(workflow.snapshot().phase, SendPhase::HandedOff);
+    }
+
+    #[test]
     fn every_nonreplaceable_durable_stage_blocks_a_new_signature() {
         for stage in [
             SendStage::LoadingJournal,
@@ -1567,23 +1720,23 @@ mod tests {
             Box::new(|prepared| prepared.operation_id = non_empty("other-operation")),
             Box::new(|prepared| prepared.record_id = non_empty("other-record")),
             Box::new(|prepared| prepared.source = other_address()),
-            Box::new(|prepared| prepared.message.destination = other_address()),
+            Box::new(|prepared| prepared.messages[0].destination = other_address()),
             Box::new(|prepared| {
-                prepared.message.amount = SendAmount::exact("2").expect("valid exact amount");
+                prepared.messages[0].amount = SendAmount::exact("2").expect("valid exact amount");
             }),
             Box::new(|prepared| {
-                prepared.message.body = SendMessageBody::Comment {
+                prepared.messages[0].body = SendMessageBody::Comment {
                     text: "different".to_owned(),
                 };
             }),
             Box::new(|prepared| {
-                prepared.message.body = SendMessageBody::RawPayload {
+                prepared.messages[0].body = SendMessageBody::RawPayload {
                     boc: Boc::try_from(TonCell::EMPTY_BOC.to_vec())
                         .expect("the empty-cell BOC fixture is valid"),
                 };
             }),
             Box::new(|prepared| {
-                prepared.message.state_init = Some(
+                prepared.messages[0].state_init = Some(
                     Boc::try_from(TonCell::EMPTY_BOC.to_vec())
                         .expect("the empty-cell BOC fixture is valid"),
                 );
@@ -1642,13 +1795,13 @@ mod tests {
             force: false,
             intent: SendIntent {
                 expiration: SendExpiration::EngineDefault,
-                message: SendMessage {
+                messages: vec![SendMessage {
                     destination: TonAddressString::try_from(RAW_DESTINATION)
                         .expect("valid destination address"),
                     amount: SendAmount::exact("1").expect("valid exact amount"),
                     body: SendMessageBody::Empty,
                     state_init: None,
-                },
+                }],
             },
         }
     }
@@ -1683,12 +1836,13 @@ mod tests {
             operation_id: non_empty("operation"),
             record_id: non_empty("record"),
             source: source(),
-            message: SendMessage {
+            kind: SignedMessageKind::External,
+            messages: vec![SendMessage {
                 destination: destination(),
                 amount: SendAmount::exact("1").expect("valid exact amount"),
                 body: SendMessageBody::Empty,
                 state_init: None,
-            },
+            }],
             seqno: 7,
             needs_state_init: false,
             valid_until: 1_800_000_300,
@@ -1749,7 +1903,8 @@ mod tests {
             operation_id: prepared.operation_id,
             record_id: prepared.record_id,
             source: prepared.source,
-            message: prepared.message,
+            kind: prepared.kind,
+            messages: prepared.messages,
             seqno: prepared.seqno,
             needs_state_init: prepared.needs_state_init,
             valid_until: prepared.valid_until,

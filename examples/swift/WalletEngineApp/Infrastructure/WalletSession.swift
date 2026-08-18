@@ -185,6 +185,52 @@ final class WalletSession {
         }
     }
 
+    /// Signs a Wallet V5 internal message and refreshes durable send state.
+    func signMessage(_ request: SignMessageRequest) async throws -> SignMessageResult {
+        guard !isShutDown else { throw WalletSessionError.shutDown }
+        guard !isReplacingClient else { throw WalletSessionError.superseded }
+        let activeClient = client
+        let generation = lifecycleGeneration
+        do {
+            let result = try await activeClient.signMessage(request: request)
+            guard isCurrent(activeClient, generation: generation) else {
+                throw WalletSessionError.superseded
+            }
+            apply(try activeClient.snapshot())
+            diagnostic = nil
+            return result
+        } catch {
+            if isCurrent(activeClient, generation: generation) {
+                applyCurrentSnapshotIfAvailable(from: activeClient)
+                diagnostic = Self.sanitized(error)
+            }
+            throw error
+        }
+    }
+
+    /// Validates a relayed-message request without claiming wallet-paid fees.
+    func previewSignMessage(_ request: SignMessageRequest) async throws -> SignMessagePreview {
+        guard !isShutDown else { throw WalletSessionError.shutDown }
+        guard !isReplacingClient else { throw WalletSessionError.superseded }
+        let activeClient = client
+        let generation = lifecycleGeneration
+        do {
+            let preview = try await activeClient.previewSignMessage(
+                request: SendPreviewRequest(intent: request.intent)
+            )
+            guard isCurrent(activeClient, generation: generation) else {
+                throw WalletSessionError.superseded
+            }
+            diagnostic = nil
+            return preview
+        } catch {
+            if isCurrent(activeClient, generation: generation) {
+                diagnostic = Self.sanitized(error)
+            }
+            throw error
+        }
+    }
+
     func cancelTonConnectPreview() async {
         await performControl { client in
             try await client.cancelSendPreview()

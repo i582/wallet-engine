@@ -25,7 +25,7 @@ use ton::ton_wallet::{
     Mnemonic, TonWallet, WALLET_V5R1_ID_DEFAULT_TESTNET, WalletV5ExtMsgBody, WalletVersion,
 };
 use wallet_engine::{
-    HttpHeader, HttpHostError, HttpHostErrorKind, HttpMethod, HttpRequest, HttpRequestId,
+    Boc, HttpHeader, HttpHostError, HttpHostErrorKind, HttpMethod, HttpRequest, HttpRequestId,
     HttpResponse, WalletHttpHost,
 };
 
@@ -237,6 +237,81 @@ impl LocalnetHttpHost {
     )]
     pub(super) fn account_balance(&self, address: &str) -> Result<u128, String> {
         lock(&self.localnet).balance(address)
+    }
+
+    /// Delivers a wallet-signed internal message through an independently funded wallet.
+    #[allow(
+        dead_code,
+        reason = "used by the separate TON Connect integration-test target"
+    )]
+    pub(super) fn relay_signed_message(
+        &self,
+        internal_boc: &Boc,
+        attached_nanograms: u64,
+    ) -> Result<(), String> {
+        const RELAYER_BALANCE_NANOGRAMS: u64 = 2_000_000_000;
+
+        let localnet = lock(&self.localnet);
+        let mnemonic = std::str::from_utf8(test_wallet().other_recovery_phrase_bytes())
+            .map_err(|error| error.to_string())?;
+        let key_pair = Mnemonic::from_str(mnemonic, None)
+            .and_then(|mnemonic| mnemonic.to_key_pair())
+            .map_err(|error| error.to_string())?;
+        let relayer_wallet_id = WALLET_V5R1_ID_DEFAULT_TESTNET
+            .checked_add(1)
+            .ok_or_else(|| "localnet relayer wallet ID overflowed".to_owned())?;
+        let relayer =
+            TonWallet::new_with_params(WalletVersion::Wallet, key_pair, 0, relayer_wallet_id)
+                .map_err(|error| error.to_string())?;
+        let relayer_address = relayer.address.to_string();
+        localnet.fund(&relayer_address, RELAYER_BALANCE_NANOGRAMS)?;
+        localnet.mine()?;
+        localnet.wait_for_state(&relayer_address, "uninitialized", None)?;
+
+        let signed_bytes = STANDARD
+            .decode(internal_boc.to_base64())
+            .map_err(|error| error.to_string())?;
+        let signed_cell = TonCell::from_boc(signed_bytes).map_err(|error| error.to_string())?;
+        let signed_message =
+            Msg::<TonCell>::from_cell(&signed_cell).map_err(|error| error.to_string())?;
+        let destination = TonAddress::from_str(&self.address).map_err(|error| error.to_string())?;
+        let mut info = CommonMsgInfoInt::new(
+            destination.to_msg_address(),
+            TLBCoins::new(u128::from(attached_nanograms)),
+        );
+        info.bounce = false;
+        let mut relayed_message = Msg::new(info, signed_message.body.value.clone());
+        relayed_message.init = signed_message.init;
+        let relayed_cell = relayed_message
+            .to_cell()
+            .map_err(|error| error.to_string())?;
+        let external = relayer
+            .create_ext_in_msg(vec![relayed_cell], 0, u32::MAX, true)
+            .map_err(|error| error.to_string())?;
+        let boc = STANDARD.encode(external.to_boc().map_err(|error| error.to_string())?);
+        let (status, body) = request(
+            &localnet.client,
+            Method::POST,
+            &format!("{}/api/v2/jsonRPC", localnet.base_url),
+            Some(&json!({
+                "jsonrpc": "2.0",
+                "id": "wallet-engine-localnet-relay",
+                "method": "sendBoc",
+                "params": { "boc": boc }
+            })),
+        )?;
+        if !(200..300).contains(&status)
+            || body.pointer("/result/@type").and_then(Value::as_str) != Some("ok")
+        {
+            return Err(format!(
+                "localnet relayer submission failed with HTTP {status}: {body}"
+            ));
+        }
+
+        for _ in 0..3 {
+            localnet.mine()?;
+        }
+        localnet.wait_for_state(&relayer_address, "active", Some(1))
     }
 
     pub(super) fn spam_transfers(&self, count: u32) -> Result<(), String> {

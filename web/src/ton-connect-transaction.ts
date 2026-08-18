@@ -1,5 +1,5 @@
 import {canonicalRequestId, isUnsignedDecimal} from "./ton-connect-protocol"
-import type {SendRequest} from "./send-types"
+import type {SendRequest, SignMessageRequest} from "./send-types"
 import type {
   AppRequest,
   RawMessage,
@@ -16,7 +16,8 @@ export type PreparedTransaction =
         Extract<TonConnectInteraction, {readonly kind: "transaction"}>,
         "preview"
       >
-      readonly sendRequest: SendRequest
+      readonly method: "sendTransaction" | "signMessage"
+      readonly walletRequest: SendRequest | SignMessageRequest
     }
   | {
       readonly ok: false
@@ -34,6 +35,9 @@ export interface PrepareTransactionOptions {
 
 export function prepareTransaction(options: PrepareTransactionOptions): PreparedTransaction {
   const {request, account, descriptor, sessionId, dappName} = options
+  if (request.method !== "sendTransaction" && request.method !== "signMessage") {
+    return {ok: false, code: 400, message: "Method is not supported"}
+  }
   if (request.params.length !== 1) {
     return {ok: false, code: 1, message: "Malformed request"}
   }
@@ -43,43 +47,52 @@ export function prepareTransaction(options: PrepareTransactionOptions): Prepared
   } catch {
     return {ok: false, code: 1, message: "Malformed request"}
   }
-  if (payload.messages?.length !== 1 || payload.items !== undefined) {
+  if (
+    payload.messages === undefined ||
+    payload.messages.length === 0 ||
+    payload.messages.length > 255 ||
+    payload.items !== undefined
+  ) {
     return {ok: false, code: 400, message: "Unsupported transaction shape"}
   }
   if ("validUntil" in payload) {
     return {ok: false, code: 1, message: "Malformed transaction"}
   }
-  const message: RawMessage | undefined = payload.messages[0]
-  if (!isValidMessage(message, payload, account, descriptor)) {
+  const messages: readonly RawMessage[] = payload.messages
+  if (messages.some(message => !isValidMessage(message, payload, account, descriptor))) {
     return {ok: false, code: 1, message: "Malformed transaction"}
   }
+  const first: RawMessage = messages[0] as RawMessage
   return {
     ok: true,
+    method: request.method,
     interaction: {
       kind: "transaction",
       id: crypto.randomUUID(),
       dappName,
-      destination: message.address,
-      amountNanograms: message.amount,
-      deploysContract: message.stateInit !== undefined,
-      hasPayload: message.payload !== undefined,
+      method: request.method,
+      destination: first.address,
+      amountNanograms: first.amount,
+      messageCount: messages.length,
+      deploysContract: messages.some(message => message.stateInit !== undefined),
+      hasPayload: messages.some(message => message.payload !== undefined),
     },
-    sendRequest: {
+    walletRequest: {
       operationId: `ton-connect:${sessionId}:${canonicalRequestId(request.id)}`,
       intent: {
         expiration:
           payload.valid_until === undefined
             ? {kind: "engineDefault"}
             : {kind: "exact", unixTimestamp: payload.valid_until},
-        message: {
+        messages: messages.map(message => ({
           destination: message.address,
-          amount: {kind: "exact", nanograms: message.amount},
+          amount: {kind: "exact" as const, nanograms: message.amount},
           body:
             message.payload === undefined
-              ? {kind: "empty"}
-              : {kind: "rawPayload", boc: message.payload},
+              ? ({kind: "empty"} as const)
+              : ({kind: "rawPayload", boc: message.payload} as const),
           stateInit: message.stateInit,
-        },
+        })),
       },
     },
   }

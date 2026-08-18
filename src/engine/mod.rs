@@ -19,6 +19,7 @@ mod resolve;
 mod send;
 mod send_http;
 mod send_state;
+mod sign_message;
 mod state;
 mod validation;
 

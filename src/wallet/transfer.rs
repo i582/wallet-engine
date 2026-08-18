@@ -21,16 +21,15 @@ use ton::ton_wallet::{WALLET_V5R1_ID_DEFAULT, WALLET_V5R1_ID_DEFAULT_TESTNET, Wa
 
 use crate::types::{Boc, BocError};
 use crate::{
-    Base64Hash, Base64HashError, Network, NonEmptyString, SendAmount, SendMessage, SendMessageBody,
-    SendPreviewRequest, SendRequest, TonAddressString,
+    Base64Hash, Base64HashError, Network, NonEmptyString, SendAmount, SendIntentError, SendMessage,
+    SendMessageBody, SendPreviewRequest, SendRequest, TonAddressString,
 };
 
 use super::crypto::{WalletCryptoError, derive_wallet, derive_wallet_public_state};
-use super::send::{FreshSendAccount, PreparedTransfer};
+use super::send::{FreshSendAccount, PreparedTransfer, SignedMessageKind};
 
 const EXACT_AMOUNT_SEND_MODE: u8 = SEND_MODE_PAY_FEES_SEPARATELY | SEND_MODE_IGNORE_ERRORS;
 const ALL_BALANCE_SEND_MODE: u8 = SEND_MODE_CARRY_ALL_BALANCE | SEND_MODE_IGNORE_ERRORS;
-
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum TransferError {
     #[error("mnemonic is not valid UTF-8")]
@@ -39,6 +38,8 @@ pub(crate) enum TransferError {
     WalletDerivation(#[source] WalletCryptoError),
     #[error("transfer amount exceeds the TON coin representation")]
     AmountOutOfRange,
+    #[error(transparent)]
+    InvalidIntent(#[from] SendIntentError),
     #[error("transfer expiration timestamp exceeds the wallet uint32 field")]
     ExpirationOutOfRange,
     #[error("wallet public key does not derive the configured source address")]
@@ -70,8 +71,9 @@ pub(crate) fn prepare_transfer(
 ) -> Result<PreparedTransfer, TransferError> {
     let mnemonic = std::str::from_utf8(mnemonic_bytes).map_err(TransferError::MnemonicEncoding)?;
     let wallet = derive_wallet(mnemonic, network).map_err(TransferError::WalletDerivation)?;
-    let message = request.intent.message.clone();
-    let (internal, send_mode) = build_internal_message(&message)?;
+    let _ = request.intent.exact_value_total()?;
+    let messages = request.intent.messages.clone();
+    let (internal, send_modes) = build_internal_messages(&messages)?;
 
     // Provider and journal timestamps remain u64. Narrow only at the protocol
     // boundary because wallet V5 serializes valid_until as uint32.
@@ -80,8 +82,8 @@ pub(crate) fn prepare_transfer(
 
     let external = wallet
         .create_ext_in_msg_with_modes(
-            vec![internal],
-            vec![send_mode],
+            internal,
+            send_modes,
             account.seqno,
             wallet_valid_until,
             account.needs_state_init(),
@@ -102,7 +104,65 @@ pub(crate) fn prepare_transfer(
         operation_id: request.operation_id.clone(),
         record_id: record_id.clone(),
         source: source.clone(),
-        message,
+        kind: SignedMessageKind::External,
+        messages,
+        seqno: account.seqno,
+        needs_state_init: account.needs_state_init(),
+        valid_until,
+        signed_boc,
+        message_hash,
+    })
+}
+
+/// Builds a complete owner-signed internal message without submitting it.
+///
+/// The returned BOC can be handed to a TON Connect dApp or another relayer
+/// client. It contains the wallet destination, signed body, and deployment
+/// `StateInit` when fresh account state requires it.
+pub(crate) fn prepare_internal_signed_transfer(
+    mnemonic_bytes: &[u8],
+    record_id: &NonEmptyString,
+    source: &TonAddressString,
+    network: Network,
+    request: &SendRequest,
+    account: &FreshSendAccount,
+    valid_until: u64,
+) -> Result<PreparedTransfer, TransferError> {
+    let mnemonic = std::str::from_utf8(mnemonic_bytes).map_err(TransferError::MnemonicEncoding)?;
+    let wallet = derive_wallet(mnemonic, network).map_err(TransferError::WalletDerivation)?;
+    let _ = request.intent.exact_value_total()?;
+    let messages = request.intent.messages.clone();
+    let (internal, send_modes) = build_internal_messages(&messages)?;
+    let wallet_valid_until =
+        u32::try_from(valid_until).map_err(|_| TransferError::ExpirationOutOfRange)?;
+
+    let signed = wallet
+        .create_internal_signed_msg_with_modes(
+            internal,
+            send_modes,
+            account.seqno,
+            wallet_valid_until,
+            account.needs_state_init(),
+        )
+        .map_err(TransferError::ExternalMessage)?;
+    let message =
+        Msg::<TonCell>::from_cell(&signed).map_err(TransferError::MessageNormalization)?;
+    let message_hash = Base64Hash::from_bytes(
+        message
+            .cell_hash()
+            .map_err(TransferError::MessageHash)?
+            .as_slice(),
+    )
+    .map_err(TransferError::InvalidMessageHash)?;
+    let signed_boc = Boc::try_from(signed.to_boc().map_err(TransferError::BocEncoding)?)
+        .map_err(TransferError::InvalidBoc)?;
+
+    Ok(PreparedTransfer {
+        operation_id: request.operation_id.clone(),
+        record_id: record_id.clone(),
+        source: source.clone(),
+        kind: SignedMessageKind::Internal,
+        messages,
         seqno: account.seqno,
         needs_state_init: account.needs_state_init(),
         valid_until,
@@ -124,7 +184,8 @@ pub(crate) fn prepare_transfer_emulation(
     account: &FreshSendAccount,
     valid_until: u64,
 ) -> Result<Boc, TransferError> {
-    let (internal, send_mode) = build_internal_message(&request.intent.message)?;
+    let _ = request.intent.exact_value_total()?;
+    let (internal, send_modes) = build_internal_messages(&request.intent.messages)?;
     let wallet_id = match network {
         Network::Mainnet => WALLET_V5R1_ID_DEFAULT,
         Network::Testnet => WALLET_V5R1_ID_DEFAULT_TESTNET,
@@ -140,8 +201,8 @@ pub(crate) fn prepare_transfer_emulation(
         wallet_valid_until,
         account.seqno,
         wallet_id,
-        vec![internal],
-        vec![send_mode],
+        internal,
+        send_modes,
     )
     .map_err(TransferError::ExternalMessage)?;
 
@@ -174,6 +235,20 @@ pub(crate) fn prepare_transfer_emulation(
 
     Boc::try_from(external.to_boc().map_err(TransferError::BocEncoding)?)
         .map_err(TransferError::InvalidBoc)
+}
+
+/// Serializes one ordered message batch and selects each wallet send mode.
+fn build_internal_messages(
+    send_messages: &[SendMessage],
+) -> Result<(Vec<TonCell>, Vec<u8>), TransferError> {
+    let mut messages = Vec::with_capacity(send_messages.len());
+    let mut modes = Vec::with_capacity(send_messages.len());
+    for message in send_messages {
+        let (message, mode) = build_internal_message(message)?;
+        messages.push(message);
+        modes.push(mode);
+    }
+    Ok((messages, modes))
 }
 
 /// Serializes one complete send message and selects its wallet send mode.
@@ -241,6 +316,7 @@ mod tests {
 
     use crate::{SendExpiration, SendIntent};
     use ton::block_tlb::CommonMsgInfo;
+    use ton::ton_core::types::tlb_core::MsgAddress;
 
     use super::*;
 
@@ -387,11 +463,11 @@ mod tests {
         let request = SendPreviewRequest {
             intent: SendIntent {
                 expiration: SendExpiration::EngineDefault,
-                message: send_message(
+                messages: vec![send_message(
                     SendAmount::exact("1").expect("valid exact amount"),
                     SendMessageBody::Empty,
                     None,
-                ),
+                )],
             },
         };
         let account = FreshSendAccount {
@@ -427,7 +503,7 @@ mod tests {
         let plain = SendPreviewRequest {
             intent: SendIntent {
                 expiration: SendExpiration::EngineDefault,
-                message: send_message(amount, SendMessageBody::Empty, None),
+                messages: vec![send_message(amount, SendMessageBody::Empty, None)],
             },
         };
         let mut payload = TonCell::builder();
@@ -447,19 +523,19 @@ mod tests {
             .expect("StateInit BOC validates");
         let with_payload = SendPreviewRequest {
             intent: SendIntent {
-                message: SendMessage {
+                messages: vec![SendMessage {
                     body: SendMessageBody::RawPayload { boc: payload },
-                    ..plain.intent.message.clone()
-                },
+                    ..plain.intent.messages[0].clone()
+                }],
                 ..plain.intent.clone()
             },
         };
         let with_state_init = SendPreviewRequest {
             intent: SendIntent {
-                message: SendMessage {
+                messages: vec![SendMessage {
                     state_init: Some(state_init),
-                    ..plain.intent.message.clone()
-                },
+                    ..plain.intent.messages[0].clone()
+                }],
                 ..plain.intent.clone()
             },
         };
@@ -479,6 +555,88 @@ mod tests {
 
         assert_ne!(emulate(&with_payload), plain_boc);
         assert_ne!(emulate(&with_state_init), plain_boc);
+    }
+
+    #[test]
+    fn internal_signing_preserves_the_ordered_batch_and_deployment_state() {
+        const MNEMONIC: &str = "section garden tomato dinner season dice renew length useful spin trade intact use universe what post spike keen mandate behind concert egg doll rug";
+
+        let source = derive_source(MNEMONIC.as_bytes(), Network::Testnet)
+            .expect("fixture mnemonic derives a wallet");
+        let source = TonAddressString::from_address(&source, Network::Testnet);
+        let request = SendRequest {
+            operation_id: NonEmptyString::try_from("sign-message-operation")
+                .expect("operation id is valid"),
+            force: false,
+            intent: SendIntent {
+                expiration: SendExpiration::Exact {
+                    unix_timestamp: 1_900_000_000,
+                },
+                messages: vec![
+                    send_message(
+                        SendAmount::exact("1").expect("amount is valid"),
+                        SendMessageBody::Empty,
+                        None,
+                    ),
+                    send_message(
+                        SendAmount::exact("2").expect("amount is valid"),
+                        SendMessageBody::Empty,
+                        None,
+                    ),
+                ],
+            },
+        };
+        let account = FreshSendAccount {
+            status: crate::AccountStatus::Uninitialized,
+            seqno: 0,
+        };
+
+        let prepared = prepare_internal_signed_transfer(
+            MNEMONIC.as_bytes(),
+            &NonEmptyString::try_from("record").expect("record id is valid"),
+            &source,
+            Network::Testnet,
+            &request,
+            &account,
+            1_900_000_000,
+        )
+        .expect("internal signed message builds");
+        let outer = Msg::<TonCell>::from_boc(prepared.signed_boc.as_bytes().to_vec())
+            .expect("signed BOC decodes as a message");
+        let CommonMsgInfo::Int(info) = &outer.info else {
+            panic!("signed message must use an internal envelope");
+        };
+        assert_eq!(info.src, MsgAddress::NONE);
+        assert_eq!(info.dst, source.as_address().to_msg_address());
+        assert_eq!(info.value.coins, TLBCoins::ZERO);
+        assert!(!info.bounce);
+        assert!(outer.init.is_some());
+
+        let (body, signature) = ton::ton_wallet::WalletV5InternalSignedBody::read_signed(
+            &mut outer.body.value.parser(),
+        )
+        .expect("signed body decodes");
+        assert_eq!(body.valid_until, 1_900_000_000);
+        assert_eq!(body.msg_seqno, 0);
+        assert_eq!(body.msgs_modes, vec![EXACT_AMOUNT_SEND_MODE; 2]);
+        assert_eq!(body.msgs.len(), 2);
+        assert_eq!(signature.len(), 64);
+
+        let values = body
+            .msgs
+            .iter()
+            .map(|cell| {
+                Msg::<TonCell>::from_cell(cell)
+                    .expect("action message decodes")
+                    .info
+                    .as_int()
+                    .expect("action is internal")
+                    .value
+                    .coins
+                    .to_u128()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(values, vec![1, 2]);
     }
 
     /// Builds one test message with a stable destination.

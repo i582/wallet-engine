@@ -675,9 +675,13 @@ expiration from provider time. `exact` preserves the timestamp in the intent.
 Call `send` after user confirmation. Give it a unique operation ID and the
 same immutable `SendIntent` that the user approved.
 
-`SendIntent` contains one `SendMessage` and one expiration policy. A message
-contains its destination, amount, body, and optional destination `StateInit`.
-The body is empty, a plaintext comment, or one caller-built payload cell.
+`SendIntent` contains one expiration policy and an ordered batch of 1 to 255
+`SendMessage` values. Each message contains its destination, amount, body, and
+optional destination `StateInit`. A body is empty, a plaintext comment, or one
+caller-built payload cell.
+
+`SendAmount.all` must be the only message in its batch. Wallet V5 applies the
+batch in order.
 
 Use `engineDefault` expiration for a normal wallet transfer. Use `exact` only
 when a trusted caller supplies a Unix expiration timestamp. TON Connect uses
@@ -696,8 +700,15 @@ signed message valid for longer.
 3. emulates it with a placeholder signature and `ignore_chksig`.
 4. returns fees, actions, trace status, and the preview expiration time.
 
-`previewTonConnect` accepts the complete TON Connect `SendRequest`. It preserves
-the dApp expiration, payload, and destination `StateInit` in the preview.
+`previewTonConnect` accepts the complete TON Connect `SendRequest`. It keeps the
+dApp expiration, message order, payloads, and destination `StateInit` values.
+
+`previewSignMessage` validates a sign-only intent from fresh public state. It
+does not report wallet-paid fees because a relayer supplies the inbound TON.
+
+`signMessage` signs and journals a Wallet V5 `internal_signed` request. It
+returns a complete relaxed internal-message BoC with the `handedOff` phase. It
+does not submit the message.
 
 `send` starts a new workflow after confirmation:
 
@@ -742,6 +753,8 @@ Handle every send phase explicitly:
 | `failed` | Provider explicitly rejected the request. |
 | `submissionUnknown` | The BoC can be accepted, but the result is unknown. |
 | `cancelled` | The operation stopped before the durable submission boundary. |
+| `handedOff` | The signed internal BoC is durable and available to a relayer. |
+| `sequenceNumberConsumed` | The reserved sequence number changed, but the exact relayer transaction is unknown. |
 
 CAUTION: If the phase is `submissionUnknown`, do not create and submit a new
 transfer automatically. The first signed message can already be in the
@@ -754,8 +767,8 @@ these writes durable before it reports success.
 
 Wallet Engine implements wallet-side TON Connect v2 sessions for native and
 browser applications. It handles link parsing, authenticated encryption,
-replay protection, transaction mapping, proof signing, and restart-safe
-responses.
+replay protection, raw transaction batches, gasless `signMessage`, proof
+signing, and restart-safe responses.
 
 The host shows every approval and owns protected session storage. Native hosts
 also own manifest and bridge transport. The browser package provides this

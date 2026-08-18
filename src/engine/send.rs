@@ -11,7 +11,7 @@ use super::state::{OperationFamily, ensure_running};
 
 use crate::wallet::send::{FreshSendAccount, SendDirective, SendWorkflow};
 use crate::wallet::transfer::{derive_source, prepare_transfer};
-use crate::{AccountStatus, SendAmount, SendPhase, SendRequest, SendResult, WalletClientError};
+use crate::{AccountStatus, SendPhase, SendRequest, SendResult, WalletClientError};
 
 use super::provider::parse_account;
 use super::resolution::ResolutionRequests;
@@ -181,7 +181,12 @@ impl WalletClient {
         // Reject an impossible value before reading the mnemonic or creating a signed BOC.
         // Fees are intentionally not estimated here, so equality can still fail on-chain.
         let available = &account.balance_nanograms;
-        if let SendAmount::Exact { nanograms } = &request.intent.message.amount
+        let Ok(requested) = request.intent.exact_value_total() else {
+            let error = WalletClientError::InvalidSendRequest;
+            self.fail_send(generation, error.to_string())?;
+            return Err(error);
+        };
+        if let Some(nanograms) = &requested
             && nanograms > available
         {
             let error = WalletClientError::InsufficientBalance {

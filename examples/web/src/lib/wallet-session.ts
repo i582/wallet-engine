@@ -121,11 +121,13 @@ export class WalletSession {
     return await this.client.previewSend({
       intent: {
         expiration: {kind: "engineDefault"},
-        message: {
-          destination,
-          amount: {kind: "exact", nanograms: amountNanograms},
-          body: {kind: "empty"},
-        },
+        messages: [
+          {
+            destination,
+            amount: {kind: "exact", nanograms: amountNanograms},
+            body: {kind: "empty"},
+          },
+        ],
       },
     })
   }
@@ -147,11 +149,13 @@ export class WalletSession {
         force,
         intent: {
           expiration: {kind: "engineDefault"},
-          message: {
-            destination,
-            amount: {kind: "exact", nanograms: amountNanograms},
-            body: {kind: "empty"},
-          },
+          messages: [
+            {
+              destination,
+              amount: {kind: "exact", nanograms: amountNanograms},
+              body: {kind: "empty"},
+            },
+          ],
         },
       })
     } catch (cause) {

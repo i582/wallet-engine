@@ -1,6 +1,6 @@
 import type {KeyPair} from "@tonconnect/protocol"
 
-import type {SendPreview} from "./send-types"
+import type {SendPreview, SignMessagePreview} from "./send-types"
 import type {WalletDescriptor} from "./types"
 import type {WalletClient} from "./wallet-client"
 import type {WalletLifecycle} from "./wallet-lifecycle"
@@ -186,13 +186,15 @@ export type TonConnectInteraction =
     }
   | {
       readonly kind: "transaction"
+      readonly method: "sendTransaction" | "signMessage"
       readonly id: string
       readonly dappName: string
       readonly destination: string
       readonly amountNanograms: string
+      readonly messageCount: number
       readonly deploysContract: boolean
       readonly hasPayload: boolean
-      readonly preview: SendPreview
+      readonly preview: SendPreview | SignMessagePreview
     }
 
 /** Observable event emitted by the TON Connect wallet runtime. */

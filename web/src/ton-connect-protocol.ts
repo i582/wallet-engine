@@ -138,7 +138,10 @@ export function deviceInfo(identity: TonConnectWalletIdentity): DeviceInfo {
     appName: identity.appName,
     appVersion: identity.appVersion,
     maxProtocolVersion: 2,
-    features: [{name: "SendTransaction", maxMessages: 1, extraCurrencySupported: false}],
+    features: [
+      {name: "SendTransaction", maxMessages: 255, extraCurrencySupported: false},
+      {name: "SignMessage", maxMessages: 255, extraCurrencySupported: false},
+    ],
   }
 }
 

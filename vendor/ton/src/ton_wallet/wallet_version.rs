@@ -121,6 +121,31 @@ impl WalletVersion {
         res.map_err(TonError::from)
     }
 
+    /// Builds an unsigned owner-authorized request for delivery by an internal message.
+    pub fn build_internal_signed_body_with_modes(
+        version: WalletVersion,
+        valid_until: u32,
+        msg_seqno: u32,
+        wallet_id: i32,
+        msgs: Vec<TonCell>,
+        msgs_modes: Vec<u8>,
+    ) -> Result<TonCell, TonError> {
+        match version {
+            V5R1 | Wallet => WalletV5InternalSignedBody {
+                wallet_id,
+                valid_until,
+                msg_seqno,
+                msgs_modes,
+                msgs,
+            }
+            .to_cell()
+            .map_err(TonError::from),
+            _ => Err(TonError::from(TonCoreError::Custom(format!(
+                "internal signed requests are unsupported for {version:?}"
+            )))),
+        }
+    }
+
     pub(super) fn sign_msg(
         version: WalletVersion,
         msg_cell: &TonCell,
