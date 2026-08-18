@@ -8,6 +8,12 @@
 
 static size_t live_allocations = 0u;
 static int8_t next_alloc_status_code = WALLET_ENGINE_PRIVATE_CALL_SUCCESS;
+static int8_t next_object_clone_status_code = WALLET_ENGINE_PRIVATE_CALL_SUCCESS;
+static int8_t next_object_free_status_code = WALLET_ENGINE_PRIVATE_CALL_SUCCESS;
+static bool object_clone_returns_null = false;
+static size_t object_reference_count = 1u;
+
+#define TEST_OBJECT_HANDLE UINT64_C(0x1000)
 
 WalletEnginePrivateRustBuffer ffi_wallet_engine_rustbuffer_alloc(
     uint64_t size,
@@ -86,6 +92,65 @@ static WalletEnginePrivateRustBuffer test_owned_rustbuffer(
     buffer.len = (uint64_t)len;
     live_allocations += 1u;
     return buffer;
+}
+
+static void test_set_object_call_status(
+    WalletEnginePrivateRustCallStatus *out_status,
+    int8_t code,
+    const uint8_t *diagnostic,
+    size_t diagnostic_len
+) {
+    assert(out_status != NULL);
+    *out_status = (WalletEnginePrivateRustCallStatus){.code = code};
+    if (code == WALLET_ENGINE_PRIVATE_CALL_ERROR
+        || code == WALLET_ENGINE_PRIVATE_CALL_UNEXPECTED_ERROR) {
+        out_status->error_buf = test_owned_rustbuffer(diagnostic, diagnostic_len);
+    }
+}
+
+uint64_t uniffi_wallet_engine_fn_clone_objectfixture(
+    uint64_t handle,
+    WalletEnginePrivateRustCallStatus *out_status
+) {
+    static const uint8_t diagnostic[] = "object clone panic";
+    const int8_t status_code = next_object_clone_status_code;
+    assert(handle == TEST_OBJECT_HANDLE);
+    next_object_clone_status_code = WALLET_ENGINE_PRIVATE_CALL_SUCCESS;
+    test_set_object_call_status(
+        out_status,
+        status_code,
+        diagnostic,
+        sizeof(diagnostic) - 1u
+    );
+    if (status_code != WALLET_ENGINE_PRIVATE_CALL_SUCCESS) {
+        return 0u;
+    }
+    if (object_clone_returns_null) {
+        object_clone_returns_null = false;
+        return 0u;
+    }
+    object_reference_count += 1u;
+    return handle;
+}
+
+void uniffi_wallet_engine_fn_free_objectfixture(
+    uint64_t handle,
+    WalletEnginePrivateRustCallStatus *out_status
+) {
+    static const uint8_t diagnostic[] = "object free panic";
+    const int8_t status_code = next_object_free_status_code;
+    assert(handle == TEST_OBJECT_HANDLE);
+    next_object_free_status_code = WALLET_ENGINE_PRIVATE_CALL_SUCCESS;
+    test_set_object_call_status(
+        out_status,
+        status_code,
+        diagnostic,
+        sizeof(diagnostic) - 1u
+    );
+    if (status_code == WALLET_ENGINE_PRIVATE_CALL_SUCCESS) {
+        assert(object_reference_count != 0u);
+        object_reference_count -= 1u;
+    }
 }
 
 static void assert_diagnostic(
@@ -239,6 +304,134 @@ static void test_rust_call_status_handling(void) {
         &result.error_buf
     ) == WALLET_ENGINE_ABI_STATUS_PANIC);
     assert(result.error_buf.data == NULL);
+    assert(live_allocations == 0u);
+}
+
+static void test_object_handle_lifecycle(void) {
+    WalletEnginePrivateRustCallResult result = {0};
+    uint64_t cloned_handle = UINT64_MAX;
+
+    assert(wallet_engine_private_object_fixture_clone_reference(
+        TEST_OBJECT_HANDLE,
+        &cloned_handle,
+        &result
+    ) == WALLET_ENGINE_ABI_STATUS_OK);
+    assert(cloned_handle == TEST_OBJECT_HANDLE);
+    assert(result.outcome == WALLET_ENGINE_PRIVATE_RUST_CALL_SUCCESS);
+    assert(object_reference_count == 2u);
+    wallet_engine_private_rust_call_result_clear(&result);
+
+    assert(wallet_engine_private_object_fixture_free_reference(
+        cloned_handle,
+        &result
+    ) == WALLET_ENGINE_ABI_STATUS_OK);
+    assert(result.outcome == WALLET_ENGINE_PRIVATE_RUST_CALL_SUCCESS);
+    assert(object_reference_count == 1u);
+    wallet_engine_private_rust_call_result_clear(&result);
+
+    next_object_clone_status_code = WALLET_ENGINE_PRIVATE_CALL_UNEXPECTED_ERROR;
+    cloned_handle = UINT64_MAX;
+    assert(wallet_engine_private_object_fixture_clone_reference(
+        TEST_OBJECT_HANDLE,
+        &cloned_handle,
+        &result
+    ) == WALLET_ENGINE_ABI_STATUS_PANIC);
+    assert(cloned_handle == 0u);
+    assert_diagnostic(result.diagnostic, "object clone panic");
+    wallet_engine_private_rust_call_result_clear(&result);
+    assert(live_allocations == 0u);
+    assert(object_reference_count == 1u);
+
+    next_object_clone_status_code = WALLET_ENGINE_PRIVATE_CALL_ERROR;
+    assert(wallet_engine_private_object_fixture_clone_reference(
+        TEST_OBJECT_HANDLE,
+        &cloned_handle,
+        &result
+    ) == WALLET_ENGINE_ABI_STATUS_PANIC);
+    assert_diagnostic(
+        result.diagnostic,
+        "UniFFI object clone returned a non-success status"
+    );
+    wallet_engine_private_rust_call_result_clear(&result);
+    assert(live_allocations == 0u);
+
+    next_object_clone_status_code = WALLET_ENGINE_PRIVATE_CALL_CANCELLED;
+    assert(wallet_engine_private_object_fixture_clone_reference(
+        TEST_OBJECT_HANDLE,
+        &cloned_handle,
+        &result
+    ) == WALLET_ENGINE_ABI_STATUS_PANIC);
+    assert_diagnostic(
+        result.diagnostic,
+        "UniFFI object clone returned a non-success status"
+    );
+    wallet_engine_private_rust_call_result_clear(&result);
+
+    object_clone_returns_null = true;
+    assert(wallet_engine_private_object_fixture_clone_reference(
+        TEST_OBJECT_HANDLE,
+        &cloned_handle,
+        &result
+    ) == WALLET_ENGINE_ABI_STATUS_PANIC);
+    assert_diagnostic(result.diagnostic, "UniFFI object clone returned a null handle");
+    wallet_engine_private_rust_call_result_clear(&result);
+
+    next_object_free_status_code = WALLET_ENGINE_PRIVATE_CALL_UNEXPECTED_ERROR;
+    assert(wallet_engine_private_object_fixture_free_reference(
+        TEST_OBJECT_HANDLE,
+        &result
+    ) == WALLET_ENGINE_ABI_STATUS_PANIC);
+    assert_diagnostic(result.diagnostic, "object free panic");
+    wallet_engine_private_rust_call_result_clear(&result);
+    assert(live_allocations == 0u);
+    assert(object_reference_count == 1u);
+
+    assert(wallet_engine_private_object_clone_reference(
+        0u,
+        uniffi_wallet_engine_fn_clone_objectfixture,
+        &cloned_handle,
+        &result
+    ) == WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT);
+    assert(wallet_engine_private_object_clone_reference(
+        TEST_OBJECT_HANDLE,
+        NULL,
+        &cloned_handle,
+        &result
+    ) == WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT);
+    assert(wallet_engine_private_object_clone_reference(
+        TEST_OBJECT_HANDLE,
+        uniffi_wallet_engine_fn_clone_objectfixture,
+        NULL,
+        &result
+    ) == WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT);
+    assert(wallet_engine_private_object_clone_reference(
+        TEST_OBJECT_HANDLE,
+        uniffi_wallet_engine_fn_clone_objectfixture,
+        &cloned_handle,
+        NULL
+    ) == WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT);
+    assert(wallet_engine_private_object_free_reference(
+        0u,
+        uniffi_wallet_engine_fn_free_objectfixture,
+        &result
+    ) == WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT);
+    assert(wallet_engine_private_object_free_reference(
+        TEST_OBJECT_HANDLE,
+        NULL,
+        &result
+    ) == WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT);
+    assert(wallet_engine_private_object_free_reference(
+        TEST_OBJECT_HANDLE,
+        uniffi_wallet_engine_fn_free_objectfixture,
+        NULL
+    ) == WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT);
+
+    assert(wallet_engine_private_object_fixture_free_reference(
+        TEST_OBJECT_HANDLE,
+        &result
+    ) == WALLET_ENGINE_ABI_STATUS_OK);
+    wallet_engine_private_rust_call_result_clear(&result);
+    assert(object_reference_count == 0u);
     assert(live_allocations == 0u);
 }
 
@@ -1466,6 +1659,7 @@ static void test_malformed_compound_values(void) {
 
 int main(void) {
     test_rust_call_status_handling();
+    test_object_handle_lifecycle();
     test_u8_round_trip();
     test_i8_round_trip();
     test_u16_round_trip();

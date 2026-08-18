@@ -1,0 +1,36 @@
+
+extern uint64_t {{CLONE_SYMBOL}}(
+    uint64_t handle,
+    WalletEnginePrivateRustCallStatus *out_status
+);
+
+extern void {{FREE_SYMBOL}}(
+    uint64_t handle,
+    WalletEnginePrivateRustCallStatus *out_status
+);
+
+WALLET_ENGINE_PRIVATE WalletEngineAbiStatus
+wallet_engine_private_{{FUNCTION_NAME}}_clone_reference(
+    uint64_t handle,
+    uint64_t *out_handle,
+    WalletEnginePrivateRustCallResult *out_call_result
+) {
+    return wallet_engine_private_object_clone_reference(
+        handle,
+        {{CLONE_SYMBOL}},
+        out_handle,
+        out_call_result
+    );
+}
+
+WALLET_ENGINE_PRIVATE WalletEngineAbiStatus
+wallet_engine_private_{{FUNCTION_NAME}}_free_reference(
+    uint64_t handle,
+    WalletEnginePrivateRustCallResult *out_call_result
+) {
+    return wallet_engine_private_object_free_reference(
+        handle,
+        {{FREE_SYMBOL}},
+        out_call_result
+    );
+}

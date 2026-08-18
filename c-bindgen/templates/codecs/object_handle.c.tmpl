@@ -1,0 +1,90 @@
+
+typedef uint64_t (*WalletEnginePrivateObjectCloneFn)(
+    uint64_t handle,
+    WalletEnginePrivateRustCallStatus *out_status
+);
+
+typedef void (*WalletEnginePrivateObjectFreeFn)(
+    uint64_t handle,
+    WalletEnginePrivateRustCallStatus *out_status
+);
+
+WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_object_clone_reference(
+    uint64_t handle,
+    WalletEnginePrivateObjectCloneFn clone_fn,
+    uint64_t *out_handle,
+    WalletEnginePrivateRustCallResult *out_call_result
+) {
+    static const char non_success_status[] =
+        "UniFFI object clone returned a non-success status";
+    static const char null_handle[] = "UniFFI object clone returned a null handle";
+    WalletEnginePrivateRustCallStatus status = {0};
+    WalletEngineAbiStatus abi_status;
+    uint64_t cloned_handle;
+
+    if (handle == 0u || clone_fn == NULL || out_handle == NULL || out_call_result == NULL) {
+        return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
+    }
+    *out_handle = 0u;
+    *out_call_result = (WalletEnginePrivateRustCallResult){
+        .outcome = WALLET_ENGINE_PRIVATE_RUST_CALL_SUCCESS,
+    };
+
+    cloned_handle = clone_fn(handle, &status);
+    abi_status = wallet_engine_private_take_rust_call_status(&status, out_call_result);
+    if (abi_status != WALLET_ENGINE_ABI_STATUS_OK) {
+        return abi_status;
+    }
+    if (out_call_result->outcome != WALLET_ENGINE_PRIVATE_RUST_CALL_SUCCESS) {
+        out_call_result->outcome = WALLET_ENGINE_PRIVATE_RUST_CALL_PANIC;
+        out_call_result->diagnostic = (WalletEnginePrivateDiagnosticView){
+            non_success_status,
+            sizeof(non_success_status) - 1u,
+        };
+        return WALLET_ENGINE_ABI_STATUS_PANIC;
+    }
+    if (cloned_handle == 0u) {
+        out_call_result->outcome = WALLET_ENGINE_PRIVATE_RUST_CALL_PANIC;
+        out_call_result->diagnostic = (WalletEnginePrivateDiagnosticView){
+            null_handle,
+            sizeof(null_handle) - 1u,
+        };
+        return WALLET_ENGINE_ABI_STATUS_PANIC;
+    }
+
+    *out_handle = cloned_handle;
+    return WALLET_ENGINE_ABI_STATUS_OK;
+}
+
+WALLET_ENGINE_PRIVATE WalletEngineAbiStatus wallet_engine_private_object_free_reference(
+    uint64_t handle,
+    WalletEnginePrivateObjectFreeFn free_fn,
+    WalletEnginePrivateRustCallResult *out_call_result
+) {
+    static const char non_success_status[] =
+        "UniFFI object free returned a non-success status";
+    WalletEnginePrivateRustCallStatus status = {0};
+    WalletEngineAbiStatus abi_status;
+
+    if (handle == 0u || free_fn == NULL || out_call_result == NULL) {
+        return WALLET_ENGINE_ABI_STATUS_INVALID_ARGUMENT;
+    }
+    *out_call_result = (WalletEnginePrivateRustCallResult){
+        .outcome = WALLET_ENGINE_PRIVATE_RUST_CALL_SUCCESS,
+    };
+
+    free_fn(handle, &status);
+    abi_status = wallet_engine_private_take_rust_call_status(&status, out_call_result);
+    if (abi_status != WALLET_ENGINE_ABI_STATUS_OK) {
+        return abi_status;
+    }
+    if (out_call_result->outcome != WALLET_ENGINE_PRIVATE_RUST_CALL_SUCCESS) {
+        out_call_result->outcome = WALLET_ENGINE_PRIVATE_RUST_CALL_PANIC;
+        out_call_result->diagnostic = (WalletEnginePrivateDiagnosticView){
+            non_success_status,
+            sizeof(non_success_status) - 1u,
+        };
+        return WALLET_ENGINE_ABI_STATUS_PANIC;
+    }
+    return WALLET_ENGINE_ABI_STATUS_OK;
+}

@@ -13,6 +13,8 @@ The generator currently:
 - generates UniFFI-compatible wire codecs for builtin values;
 - consumes UniFFI `RustCallStatus` with owned error-buffer cleanup and borrowed
   panic diagnostics;
+- generates private clone/free reference adapters for Rust-owned UniFFI object
+  handles;
 - generates public C types and codecs for flat non-error enums;
 - generates public C wrappers and codecs for supported optional values;
 - generates borrowed C list views and codecs for supported sequences;
@@ -182,6 +184,25 @@ buffers on success/cancellation, and malformed buffer layouts become guarded
 panic outcomes rather than reaching a typed decoder. Raw UniFFI status and
 buffer structs remain absent from `wallet_engine.h`.
 
+### Private Rust object lifecycle
+
+For every Rust-owned UniFFI object, the generated facade declares its exact
+private clone/free symbols and emits a typed adapter over one common lifecycle
+runtime. Clone accepts one valid owned raw reference and returns another owned
+reference; free consumes exactly one reference. A zero handle, missing callback,
+or missing output is rejected before entering Rust.
+
+Both operations consume `RustCallStatus`. A real UniFFI panic preserves its
+borrowed diagnostic, while impossible declared-error/cancellation statuses and
+a successful clone returning zero are converted into guarded panic results.
+The caller clears the private result exactly once after it stops borrowing the
+diagnostic. Foreign callback-interface handles are intentionally excluded: the
+host instance map and its clone/free contract belong to the callback runtime.
+
+This layer is still private. Public typed `retain`/`release` functions will be
+generated together with object storage and synchronous methods, so raw UniFFI
+`u64` handles remain absent from `wallet_engine.h`.
+
 The pure codec behavior is tested in `tests/codec.c`. That C11 executable
 checks exact wire bytes and write/read round trips for every integer width,
 booleans, strings, bytes, a flat enum, optional values, sequences of scalars,
@@ -190,7 +211,9 @@ sequences of records, a semantic custom string type, a fielded enum, and a rich
 error with both fieldless and payload variants. The malformed cases cover
 truncated and trailing data, invalid UTF-8, impossible lengths, unknown tags,
 arena rollback, every `RustCallStatus` branch, diagnostic lifetime, and owned
-error-buffer cleanup.
+error-buffer cleanup. It also checks successful object clone/free balance,
+panic propagation, impossible lifecycle statuses, null clone results, and
+argument validation.
 
 ### Flat enums
 

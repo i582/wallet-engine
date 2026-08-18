@@ -4,6 +4,7 @@ use crate::{
     compound_map::CompoundTypeRef,
     enum_map::FlatEnum,
     model::BindingsModel,
+    object_map::ObjectHandle,
     optional_map::OptionalType,
     record_map::{RecordField, RecordType},
     sequence_map::SequenceType,
@@ -13,6 +14,7 @@ use crate::{
     type_registry::NestedWireSize,
 };
 
+const PRIVATE_RUNTIME: &str = include_str!("../../templates/codecs/private.c.tmpl");
 const BASE: &str = include_str!("../../templates/codecs/base.c.tmpl");
 const U8_CODEC: &str = include_str!("../../templates/codecs/u8.c.tmpl");
 const I8_CODEC: &str = include_str!("../../templates/codecs/i8.c.tmpl");
@@ -25,6 +27,9 @@ const I64_CODEC: &str = include_str!("../../templates/codecs/i64.c.tmpl");
 const BOOLEAN_CODEC: &str = include_str!("../../templates/codecs/bool.c.tmpl");
 const UTF8_RUNTIME: &str = include_str!("../../templates/codecs/utf8.c.tmpl");
 const RUSTBUFFER_RUNTIME: &str = include_str!("../../templates/codecs/rustbuffer.c.tmpl");
+const OBJECT_HANDLE_RUNTIME: &str = include_str!("../../templates/codecs/object_handle.c.tmpl");
+const RUST_OBJECT_LIFECYCLE: &str =
+    include_str!("../../templates/codecs/rust_object_lifecycle.c.tmpl");
 const STRING_CODEC: &str = include_str!("../../templates/codecs/string.c.tmpl");
 const BYTES_CODEC: &str = include_str!("../../templates/codecs/bytes.c.tmpl");
 const FLAT_ENUM_CODEC: &str = include_str!("../../templates/codecs/flat_enum.c.tmpl");
@@ -77,11 +82,13 @@ const ERROR_READ_ARENA_FIELD: &str =
     include_str!("../../templates/codecs/error_read_arena_field.c.tmpl");
 
 pub(super) fn render(model: &BindingsModel) -> String {
-    let mut output = if model.has_wire_types() {
-        String::from(BASE)
-    } else {
-        String::new()
-    };
+    let mut output = String::new();
+    if model.has_wire_types() || model.has_rust_object_handles() {
+        output.push_str(PRIVATE_RUNTIME);
+    }
+    if model.has_wire_types() {
+        output.push_str(BASE);
+    }
 
     if model.needs_u8_wire_codec() {
         output.push_str(U8_CODEC);
@@ -121,6 +128,12 @@ pub(super) fn render(model: &BindingsModel) -> String {
             model.private_ffi().rustbuffer_alloc(),
             model.private_ffi().rustbuffer_free(),
         ));
+    }
+    if model.has_rust_object_handles() {
+        output.push_str(OBJECT_HANDLE_RUNTIME);
+        for handle in model.rust_object_handles() {
+            output.push_str(&render_rust_object_lifecycle(handle));
+        }
     }
     if model.needs_output_arena() {
         output.push_str(ARENA_RUNTIME);
@@ -166,6 +179,21 @@ fn rustbuffer_runtime(alloc_symbol: &str, free_symbol: &str) -> String {
     template::render(
         RUSTBUFFER_RUNTIME,
         &[("ALLOC_SYMBOL", alloc_symbol), ("FREE_SYMBOL", free_symbol)],
+    )
+}
+
+fn render_rust_object_lifecycle(handle: &ObjectHandle) -> String {
+    let (Some(clone_symbol), Some(free_symbol)) = (handle.clone_symbol(), handle.free_symbol())
+    else {
+        unreachable!("Rust-owned object is missing UniFFI lifecycle symbols");
+    };
+    template::render(
+        RUST_OBJECT_LIFECYCLE,
+        &[
+            ("FUNCTION_NAME", handle.function_name()),
+            ("CLONE_SYMBOL", clone_symbol),
+            ("FREE_SYMBOL", free_symbol),
+        ],
     )
 }
 
@@ -497,6 +525,29 @@ mod tests {
         assert!(codec.contains("wallet_engine_private_take_rust_call_status"));
         assert!(codec.contains("Rust panic returned an invalid UTF-8 diagnostic"));
         assert!(!codec.contains("wallet_engine_private_write_i64"));
+        Ok(())
+    }
+
+    #[test]
+    fn renders_only_rust_owned_object_lifecycle() -> Result<()> {
+        let component = ComponentInterface::from_webidl(
+            r"
+            namespace wallet_engine {};
+
+            interface ObjectFixture { constructor(); };
+
+            [Trait, WithForeign]
+            interface HostFixture { void execute(); };
+            ",
+            "wallet_engine",
+        )?;
+        let model = BindingsModel::from_components(&[component])?;
+        let codec = render(&model);
+
+        assert!(codec.contains("wallet_engine_private_object_clone_reference"));
+        assert!(codec.contains("wallet_engine_private_object_fixture_clone_reference"));
+        assert!(codec.contains("uniffi_wallet_engine_fn_clone_objectfixture"));
+        assert!(!codec.contains("uniffi_wallet_engine_fn_clone_hostfixture"));
         Ok(())
     }
 

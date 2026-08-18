@@ -25,7 +25,10 @@ impl HandleKind {
 pub(super) struct ObjectHandle {
     rust_name: String,
     c_name: String,
+    function_name: String,
     kind: HandleKind,
+    clone_symbol: Option<String>,
+    free_symbol: Option<String>,
 }
 
 impl ObjectHandle {
@@ -37,8 +40,20 @@ impl ObjectHandle {
         &self.c_name
     }
 
+    pub(super) fn function_name(&self) -> &str {
+        &self.function_name
+    }
+
     pub(super) const fn kind(&self) -> HandleKind {
         self.kind
+    }
+
+    pub(super) fn clone_symbol(&self) -> Option<&str> {
+        self.clone_symbol.as_deref()
+    }
+
+    pub(super) fn free_symbol(&self) -> Option<&str> {
+        self.free_symbol.as_deref()
     }
 }
 
@@ -50,14 +65,22 @@ pub(super) fn collect_object_handles(
         .object_definitions()
         .iter()
         .filter(|object| !object.remote() && is_local(&object.as_type(), component.crate_name()))
-        .map(|object| ObjectHandle {
-            rust_name: object.name().to_owned(),
-            c_name: naming::type_name(object.name()),
-            kind: if object.has_callback_interface() {
+        .map(|object| {
+            let kind = if object.has_callback_interface() {
                 HandleKind::ForeignCallbackInterface
             } else {
                 HandleKind::RustObject
-            },
+            };
+            ObjectHandle {
+                rust_name: object.name().to_owned(),
+                c_name: naming::type_name(object.name()),
+                function_name: naming::function_name(object.name()),
+                kind,
+                clone_symbol: (kind == HandleKind::RustObject)
+                    .then(|| object.ffi_object_clone().name().to_owned()),
+                free_symbol: (kind == HandleKind::RustObject)
+                    .then(|| object.ffi_object_free().name().to_owned()),
+            }
         })
         .chain(
             component
@@ -67,7 +90,10 @@ pub(super) fn collect_object_handles(
                 .map(|interface| ObjectHandle {
                     rust_name: interface.name().to_owned(),
                     c_name: naming::type_name(interface.name()),
+                    function_name: naming::function_name(interface.name()),
                     kind: HandleKind::ForeignCallbackInterface,
+                    clone_symbol: None,
+                    free_symbol: None,
                 }),
         )
         .collect::<Vec<_>>();
@@ -115,10 +141,23 @@ mod tests {
         assert_eq!(handles[0].rust_name(), "Client");
         assert_eq!(handles[0].c_name(), "WalletEngineClient");
         assert_eq!(handles[0].kind(), HandleKind::RustObject);
+        assert_eq!(handles[0].function_name(), "client");
+        assert_eq!(
+            handles[0].clone_symbol(),
+            Some("uniffi_wallet_engine_fn_clone_client")
+        );
+        assert_eq!(
+            handles[0].free_symbol(),
+            Some("uniffi_wallet_engine_fn_free_client")
+        );
         assert_eq!(handles[1].rust_name(), "Host");
         assert_eq!(handles[1].kind(), HandleKind::ForeignCallbackInterface);
+        assert_eq!(handles[1].clone_symbol(), None);
+        assert_eq!(handles[1].free_symbol(), None);
         assert_eq!(handles[2].rust_name(), "LegacyHost");
         assert_eq!(handles[2].kind(), HandleKind::ForeignCallbackInterface);
+        assert_eq!(handles[2].clone_symbol(), None);
+        assert_eq!(handles[2].free_symbol(), None);
         Ok(())
     }
 }

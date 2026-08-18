@@ -1,0 +1,7 @@
+
+/* Private UniFFI-compatible runtime. These symbols are not part of the C ABI. */
+#if defined(__GNUC__)
+#  define WALLET_ENGINE_PRIVATE __attribute__((visibility("hidden")))
+#else
+#  define WALLET_ENGINE_PRIVATE
+#endif

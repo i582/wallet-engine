@@ -17,7 +17,7 @@ use crate::{
     type_registry::TypeRegistry,
 };
 
-pub(super) const MANIFEST_SCHEMA_VERSION: u32 = 14;
+pub(super) const MANIFEST_SCHEMA_VERSION: u32 = 15;
 const EXPERIMENTAL_ABI_VERSION: u32 = 0;
 const EXPECTED_CRATE_NAME: &str = "wallet_engine";
 const EXPECTED_NAMESPACE: &str = "wallet_engine";
@@ -293,6 +293,7 @@ impl BindingsModel {
             || self.has_sequence_types()
             || self.has_record_types()
             || self.has_error_types()
+            || self.has_rust_object_handles()
     }
 
     pub(super) fn needs_output_arena(&self) -> bool {
@@ -349,6 +350,18 @@ impl BindingsModel {
         &self.object_handles
     }
 
+    pub(super) fn has_rust_object_handles(&self) -> bool {
+        self.object_handles
+            .iter()
+            .any(|handle| handle.kind() == crate::object_map::HandleKind::RustObject)
+    }
+
+    pub(super) fn rust_object_handles(&self) -> impl Iterator<Item = &ObjectHandle> {
+        self.object_handles
+            .iter()
+            .filter(|handle| handle.kind() == crate::object_map::HandleKind::RustObject)
+    }
+
     pub(super) const fn private_ffi(&self) -> &PrivateFfi {
         &self.private_ffi
     }
@@ -380,7 +393,7 @@ impl Manifest {
         Self {
             schema_version: MANIFEST_SCHEMA_VERSION,
             generation: GenerationManifest {
-                phase: "rust-call-status",
+                phase: "object-lifecycle-runtime",
                 artifacts: [
                     "wallet_engine.h",
                     "wallet_engine.c",
@@ -682,7 +695,7 @@ mod tests {
         let manifest = model.manifest();
         let enum_ = &manifest.generation.rendered_flat_enums[0];
 
-        assert_eq!(manifest.generation.phase, "rust-call-status");
+        assert_eq!(manifest.generation.phase, "object-lifecycle-runtime");
         assert_eq!(enum_.rust, "Network");
         assert_eq!(enum_.variants[0].value, 0);
         assert_eq!(enum_.variants[1].value, 1);
