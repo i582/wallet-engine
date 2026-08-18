@@ -12,9 +12,6 @@ build:
 build-dev:
     cargo build --locked
 
-build-release-size:
-    cargo build --profile release-size --locked
-
 fmt:
     cargo fmt --all
     cargo fmt --manifest-path apple-bindgen/Cargo.toml

@@ -4,6 +4,8 @@ import {
   type RecoveryPhrase,
   type SendPreview,
   type SendResult,
+  TonConnectWallet,
+  type TonConnectWalletEvent,
   type WalletDescriptor,
   WalletClient,
   WalletLifecycle,
@@ -26,6 +28,7 @@ export class WalletSession {
   private readonly client: WalletClient
   private readonly lifecycle: WalletLifecycle
   private readonly store: BrowserWalletStore
+  private readonly tonConnect: TonConnectWallet
   private closed: boolean = false
 
   private constructor(
@@ -38,6 +41,16 @@ export class WalletSession {
     this.client = client
     this.lifecycle = lifecycle
     this.store = store
+    this.tonConnect = new TonConnectWallet({
+      descriptor,
+      walletClient: client,
+      lifecycle,
+      identity: {
+        appName: "tonkeeper",
+        appVersion: "0.1.0",
+      },
+      storage: store,
+    })
   }
 
   static async create(): Promise<CreatedWalletSession> {
@@ -106,8 +119,14 @@ export class WalletSession {
   async previewSend(destination: string, amountNanograms: string): Promise<SendPreview> {
     this.assertOpen()
     return await this.client.previewSend({
-      destination,
-      amount: {kind: "exact", nanograms: amountNanograms},
+      intent: {
+        expiration: {kind: "engineDefault"},
+        message: {
+          destination,
+          amount: {kind: "exact", nanograms: amountNanograms},
+          body: {kind: "empty"},
+        },
+      },
     })
   }
 
@@ -121,8 +140,14 @@ export class WalletSession {
     try {
       return await this.client.send({
         operationId: crypto.randomUUID(),
-        destination,
-        amount: {kind: "exact", nanograms: amountNanograms},
+        intent: {
+          expiration: {kind: "engineDefault"},
+          message: {
+            destination,
+            amount: {kind: "exact", nanograms: amountNanograms},
+            body: {kind: "empty"},
+          },
+        },
       })
     } catch (cause) {
       const diagnostic: string | undefined = this.client.snapshot().send.errorMessage
@@ -133,10 +158,36 @@ export class WalletSession {
     }
   }
 
+  onTonConnectEvent(listener: (event: TonConnectWalletEvent) => void): () => void {
+    this.assertOpen()
+    return this.tonConnect.onEvent(listener)
+  }
+
+  async startTonConnect(link: string): Promise<void> {
+    this.assertOpen()
+    await this.tonConnect.start(link)
+  }
+
+  async restoreTonConnect(): Promise<boolean> {
+    this.assertOpen()
+    return await this.tonConnect.restore()
+  }
+
+  respondTonConnect(interactionId: string, approved: boolean): void {
+    this.assertOpen()
+    this.tonConnect.respond(interactionId, approved)
+  }
+
+  async disconnectTonConnect(): Promise<void> {
+    this.assertOpen()
+    await this.tonConnect.disconnect()
+  }
+
   async forget(): Promise<void> {
     if (this.closed) {
       return
     }
+    await this.tonConnect.disconnect()
     await this.client.close()
     await this.lifecycle.deleteWallet(this.descriptor)
     await this.store.clearWallet()
@@ -148,6 +199,7 @@ export class WalletSession {
     if (this.closed) {
       return
     }
+    await this.tonConnect.close()
     await this.client.close()
     this.lifecycle.close()
     this.closed = true

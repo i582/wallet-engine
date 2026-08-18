@@ -123,6 +123,7 @@ private struct WalletDashboard: View {
     @State private var wallets: [StoredWallet] = []
     @State private var selectedWalletAddress: String?
     @State private var session: WalletSession?
+    @State private var tonConnect: TonConnectCoordinator?
     @State private var sessionError: String?
     @State private var isConfirmingWalletDeletion = false
     @State private var presentedSheet: WalletSheet?
@@ -200,6 +201,10 @@ private struct WalletDashboard: View {
             || walletSnapshot?.activityResource.phase == .failed
     }
 
+    private var refreshDiagnostic: String? {
+        sessionError ?? session?.diagnostic
+    }
+
     private var loadMoreHistoryError: String? {
         walletSnapshot?.activityPaginationResource.phase == .failed
             ? "Could not load more activity"
@@ -230,14 +235,29 @@ private struct WalletDashboard: View {
                             onReceive: { presentedSheet = .receive }
                         )
                         if hasRefreshNotice {
-                            WalletDataNotice(onRetry: refreshAccount)
+                            WalletDataNotice(
+                                diagnostic: refreshDiagnostic,
+                                onRetry: refreshAccount,
+                                onDismiss: {
+                                    sessionError = nil
+                                    session?.dismissDiagnostic()
+                                }
+                            )
                         }
                     }
                     if let persistenceError {
-                        Label(persistenceError, systemImage: "externaldrive.badge.exclamationmark")
-                            .font(.callout)
-                            .foregroundStyle(.red)
-                            .textSelection(.enabled)
+                        DismissibleDiagnostic(
+                            message: persistenceError,
+                            systemImage: "externaldrive.badge.exclamationmark",
+                            onDismiss: { self.persistenceError = nil }
+                        )
+                    }
+                    if let tonConnectDiagnostic = tonConnect?.diagnostic {
+                        DismissibleDiagnostic(
+                            message: tonConnectDiagnostic,
+                            systemImage: "link.badge.plus",
+                            onDismiss: { tonConnect?.dismissDiagnostic() }
+                        )
                     }
                     RecentActivity(
                         transactions: transactions,
@@ -281,7 +301,16 @@ private struct WalletDashboard: View {
                 .accessibilityLabel("Settings")
             }
 
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                if activeWallet != nil {
+                    Button {
+                        presentedSheet = .tonConnect
+                    } label: {
+                        Label("Connect app", systemImage: "link")
+                    }
+                    .help("Connect a TON app")
+                }
+
                 Button {
                     presentedSheet = .create
                 } label: {
@@ -327,7 +356,16 @@ private struct WalletDashboard: View {
                 }
             }
 
-            ToolbarItem(placement: .primaryAction) {
+            ToolbarItemGroup(placement: .primaryAction) {
+                if activeWallet != nil {
+                    Button {
+                        presentedSheet = .tonConnect
+                    } label: {
+                        Label("Connect app", systemImage: "link")
+                    }
+                    .help("Connect a TON app")
+                }
+
                 Button {
                     presentedSheet = .create
                 } label: {
@@ -394,6 +432,10 @@ private struct WalletDashboard: View {
                         refreshAccount()
                     }
                 }
+            case .tonConnect:
+                if let tonConnect {
+                    TonConnectView(coordinator: tonConnect)
+                }
             }
         }
         .confirmationDialog(
@@ -415,6 +457,13 @@ private struct WalletDashboard: View {
         }
         .task(id: activeWallet?.recordId) {
             await activateWalletData()
+        }
+        .overlay(alignment: .topLeading) {
+            if let tonConnect {
+                TonConnectApprovalObserver(coordinator: tonConnect) {
+                    presentedSheet = .tonConnect
+                }
+            }
         }
         .onDisappear(perform: stopWalletData)
     }
@@ -497,6 +546,7 @@ private struct WalletDashboard: View {
             : remainingWallets[min(deletedIndex, remainingWallets.count - 1)].address
 
         do {
+            await tonConnect?.disconnect()
             try await lifecycle.deleteWallet(descriptor)
             try WalletStore.save(wallets: remainingWallets, selectedAddress: nextAddress)
             wallets = remainingWallets
@@ -541,6 +591,8 @@ private struct WalletDashboard: View {
         let generation = activationGeneration
         guard let wallet = activeWallet else {
             let previous = session
+            tonConnect?.close()
+            tonConnect = nil
             session = nil
             sessionError = nil
             await previous?.shutdown()
@@ -576,6 +628,14 @@ private struct WalletDashboard: View {
             }
 
             await installedSession.refresh()
+            tonConnect?.close()
+            let coordinator = try TonConnectCoordinator(
+                wallet: installedWallet,
+                walletSession: installedSession,
+                lifecycle: lifecycle
+            )
+            tonConnect = coordinator
+            await coordinator.restore()
             sessionError = nil
         } catch is CancellationError {
             return
@@ -589,11 +649,14 @@ private struct WalletDashboard: View {
     private func stopWalletData() {
         activationGeneration &+= 1
         let previous = session
+        tonConnect?.close()
+        tonConnect = nil
         session = nil
         Task {
             await previous?.shutdown()
         }
     }
+
 }
 
 private enum WalletSheet: String, Identifiable {
@@ -601,8 +664,29 @@ private enum WalletSheet: String, Identifiable {
     case rename
     case receive
     case send
+    case tonConnect
 
     var id: String { rawValue }
+}
+
+/// Bridges nested `@Observable` approval changes to the dashboard's sheet state.
+///
+/// The dashboard owns the presentation enum, while the coordinator owns the
+/// asynchronous TON Connect state. Keeping the observation in a child view
+/// makes SwiftUI track the coordinator's `approval` property directly, so an
+/// incoming request can present a sheet even when no TON Connect sheet is open.
+private struct TonConnectApprovalObserver: View {
+    let coordinator: TonConnectCoordinator
+    let onApproval: () -> Void
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onChange(of: coordinator.approval?.id, initial: true) { _, _ in
+                guard coordinator.approval != nil else { return }
+                onApproval()
+            }
+    }
 }
 
 private struct EmptyWalletState: View {
@@ -798,29 +882,119 @@ private struct BalancePanel: View {
 }
 
 private struct WalletDataNotice: View {
+    let diagnostic: String?
     let onRetry: () -> Void
+    let onDismiss: () -> Void
+
+    @State private var isDismissed = false
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 10) {
-                Label("Couldn’t refresh wallet data", systemImage: "exclamationmark.circle")
-                    .font(.callout)
-                Spacer()
-                Button("Try again", action: onRetry)
+        if !isDismissed {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) {
+                    message
+                    Spacer()
+                    Button("Try again") {
+                        isDismissed = false
+                        onRetry()
+                    }
                     .platformLinkButtonStyle()
-            }
+                    dismissButton
+                }
 
-            VStack(alignment: .leading, spacing: 8) {
-                Label("Couldn’t refresh wallet data", systemImage: "exclamationmark.circle")
-                    .font(.callout)
-                Button("Try again", action: onRetry)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .top, spacing: 10) {
+                        message
+                        Spacer()
+                        dismissButton
+                    }
+                    Button("Try again") {
+                        isDismissed = false
+                        onRetry()
+                    }
                     .platformLinkButtonStyle()
+                }
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
+            .onChange(of: diagnostic) { _, _ in
+                isDismissed = false
             }
         }
+    }
+
+    private var message: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Label("Couldn’t refresh wallet data", systemImage: "exclamationmark.circle")
+                .font(.callout)
+            if let diagnostic {
+                Text(diagnostic)
+                    .font(.caption)
+                    .textSelection(.enabled)
+            }
+        }
+    }
+
+    private var dismissButton: some View {
+        Button {
+            isDismissed = true
+            onDismiss()
+        } label: {
+            Image(systemName: "xmark")
+                .font(.caption.weight(.bold))
+                .frame(width: 28, height: 28)
+        }
+        .buttonStyle(.plain)
         .foregroundStyle(.secondary)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityLabel("Dismiss wallet data error")
+    }
+}
+
+/// A compact diagnostic banner for errors that do not have a retry action.
+/// Dismissal changes presentation only; the caller decides whether to clear the
+/// underlying model error as well.
+struct DismissibleDiagnostic: View {
+    let message: String
+    let systemImage: String
+    let onDismiss: () -> Void
+
+    @State private var isDismissed = false
+
+    var body: some View {
+        if !isDismissed {
+            HStack(alignment: .top, spacing: 10) {
+                Label {
+                    Text(message)
+                        .textSelection(.enabled)
+                } icon: {
+                    Image(systemName: systemImage)
+                }
+                .font(.callout)
+                .foregroundStyle(.red)
+
+                Spacer(minLength: 0)
+
+                Button {
+                    isDismissed = true
+                    onDismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption.weight(.bold))
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Dismiss error")
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+            .onChange(of: message) { _, _ in
+                isDismissed = false
+            }
+        }
     }
 }
 
@@ -841,6 +1015,7 @@ private struct WalletActions: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
+
         }
         .controlSize(.large)
     }
@@ -1529,9 +1704,15 @@ private struct SendWalletView: View {
                 let result = try await session.send(
                     SendRequest(
                         operationId: UUID().uuidString.lowercased(),
-                        destination: normalizedDestination,
-                        amount: .exact(nanograms: nanograms),
-                        comment: nil,
+                        intent: SendIntent(
+                            expiration: .engineDefault,
+                            message: SendMessage(
+                                destination: normalizedDestination,
+                                amount: .exact(nanograms: nanograms),
+                                body: .empty,
+                                stateInit: nil
+                            )
+                        )
                     )
                 )
                 switch result.phase {

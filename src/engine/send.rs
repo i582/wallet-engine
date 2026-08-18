@@ -1,5 +1,6 @@
 //! Wallet transfer orchestration.
 use super::client::WalletClient;
+use super::expiration::resolve_send_expiration;
 use super::http::build_toncenter_v2_request;
 use super::send_http::{
     SendBocResponse, build_send_boc_request, build_seqno_request, is_explicit_send_rejection,
@@ -33,7 +34,6 @@ impl WalletClient {
     /// Workflow failures return a typed send error. The same bounded diagnostic
     /// is published in `snapshot().send.error_message`.
     pub async fn send(&self, request: SendRequest) -> Result<SendResult, WalletClientError> {
-        // Reject malformed input before reserving IDs or changing observable state.
         // Reserve one send generation and every HTTP ID under the state lock.
         // This makes concurrent sends single-flight and lets late callbacks be ignored safely.
         let (
@@ -175,7 +175,7 @@ impl WalletClient {
         // Reject an impossible value before reading the mnemonic or creating a signed BOC.
         // Fees are intentionally not estimated here, so equality can still fail on-chain.
         let available = &account.balance_nanograms;
-        if let SendAmount::Exact { nanograms } = &request.amount
+        if let SendAmount::Exact { nanograms } = &request.intent.message.amount
             && nanograms > available
         {
             let error = WalletClientError::InsufficientBalance {
@@ -204,11 +204,12 @@ impl WalletClient {
 
         // Use synchronized provider time for the real signature. A UI preview
         // can be several blocks old by the time the user confirms it.
-        let valid_until = provider_time
-            .checked_add(config.send_validity_seconds)
-            .ok_or_else(|| {
-                self.send_failed_error(generation, "transfer expiration timestamp overflow")
-            })?;
+        let valid_until = resolve_send_expiration(
+            &request.intent.expiration,
+            provider_time,
+            config.send_validity_seconds,
+        )
+        .map_err(|error| self.send_failed_error(generation, error.to_string()))?;
 
         let directive = workflow
             .fresh_account_loaded(fresh.clone())
@@ -267,6 +268,7 @@ impl WalletClient {
         .map_err(|error| {
             self.send_failed_error(generation, format!("failed to prepare transfer: {error}"))
         })?;
+        let signed_boc = prepared.signed_boc.clone();
 
         let submit_request =
             build_send_boc_request(&config, submit_request_id, &prepared.signed_boc).map_err(
@@ -367,6 +369,7 @@ impl WalletClient {
         Ok(SendResult {
             operation_id: request.operation_id,
             message_hash,
+            signed_boc,
             phase,
         })
     }

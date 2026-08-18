@@ -1,4 +1,11 @@
-import type {SendPreview, SendResult, WalletSnapshot} from "@ton/wallet-engine"
+import type {
+  SendPreview,
+  SendResult,
+  TonConnectInteraction,
+  TonConnectWalletEvent,
+  WalletSnapshot,
+} from "@ton/wallet-engine"
+import {parseTonConnectLink} from "@ton/wallet-engine"
 import {type ReactElement, useEffect, useState} from "react"
 
 import {RecoveryScreen} from "@/components/recovery-screen"
@@ -6,6 +13,11 @@ import {WalletDashboard} from "@/components/wallet-dashboard"
 import {WelcomeScreen} from "@/components/welcome-screen"
 import {fetchGramUsdRate} from "@/lib/tonapi-rates"
 import {WalletSession} from "@/lib/wallet-session"
+
+interface TonConnectConnection {
+  readonly kind: "connected"
+  readonly dappName: string
+}
 
 export function App(): ReactElement {
   const [session, setSession] = useState<WalletSession>()
@@ -17,6 +29,10 @@ export function App(): ReactElement {
   const [error, setError] = useState<string>()
   const [restoring, setRestoring] = useState<boolean>(true)
   const [gramUsdRate, setGramUsdRate] = useState<number>()
+  const [tonConnectInteraction, setTonConnectInteraction] = useState<TonConnectInteraction>()
+  const [tonConnectConnection, setTonConnectConnection] = useState<TonConnectConnection>()
+  const connectedDappName: string | undefined =
+    tonConnectConnection?.kind === "connected" ? tonConnectConnection.dappName : undefined
 
   useEffect(() => {
     let active: boolean = true
@@ -68,6 +84,58 @@ export function App(): ReactElement {
         void session.close()
       }
     }
+  }, [session])
+
+  useEffect(() => {
+    if (!session) {
+      return
+    }
+    // biome-ignore lint/correctness/useQwikValidLexicalScope: this is a browser paste listener owned by a React effect.
+    const receivePaste = (event: ClipboardEvent): void => {
+      const value: string = event.clipboardData?.getData("text").trim() ?? ""
+      if (!isTonConnectLink(value)) {
+        return
+      }
+      event.preventDefault()
+      setError(undefined)
+      session.startTonConnect(value).catch((cause: unknown) => setError(errorMessage(cause)))
+    }
+    globalThis.addEventListener("paste", receivePaste)
+    return () => globalThis.removeEventListener("paste", receivePaste)
+  }, [session])
+
+  useEffect(() => {
+    if (!session) {
+      return
+    }
+    // biome-ignore lint/correctness/useQwikValidLexicalScope: this is a React effect subscription, not a Qwik resumable closure.
+    const receiveTonConnectEvent = (event: TonConnectWalletEvent): void => {
+      if (event.kind === "interaction") {
+        setTonConnectInteraction(event.interaction)
+        return
+      }
+      if (event.kind === "connected") {
+        setTonConnectInteraction(undefined)
+        setTonConnectConnection({kind: "connected", dappName: event.dappName})
+        setError(undefined)
+        return
+      }
+      if (event.kind === "transactionFinished") {
+        setTonConnectInteraction(undefined)
+        setSnapshot(session.snapshot())
+        return
+      }
+      if (event.kind === "disconnected") {
+        setTonConnectInteraction(undefined)
+        setTonConnectConnection(undefined)
+        setError(undefined)
+        return
+      }
+      setError(event.message)
+    }
+    const unsubscribe = session.onTonConnectEvent(receiveTonConnectEvent)
+    session.restoreTonConnect().catch((cause: unknown) => setError(errorMessage(cause)))
+    return unsubscribe
   }, [session])
 
   async function createWallet(): Promise<void> {
@@ -163,6 +231,25 @@ export function App(): ReactElement {
     }
   }
 
+  async function startTonConnect(link: string): Promise<void> {
+    if (!session) {
+      throw new Error("The wallet is not open")
+    }
+    setError(undefined)
+    session.startTonConnect(link).catch((cause: unknown) => setError(errorMessage(cause)))
+  }
+
+  function respondTonConnect(interactionId: string, approved: boolean): void {
+    session?.respondTonConnect(interactionId, approved)
+    setTonConnectInteraction(undefined)
+  }
+
+  async function disconnectTonConnect(): Promise<void> {
+    await session?.disconnectTonConnect()
+    setTonConnectConnection(undefined)
+    setTonConnectInteraction(undefined)
+  }
+
   if (session && recoveryWords) {
     return <RecoveryScreen words={recoveryWords} onContinue={openWallet} />
   }
@@ -179,12 +266,18 @@ export function App(): ReactElement {
         loadingMore={loadingMore}
         refreshing={refreshing}
         snapshot={snapshot}
+        connectedDappName={connectedDappName}
+        tonConnectInteraction={tonConnectInteraction}
+        onDismissError={() => setError(undefined)}
         onForget={forgetWallet}
         onLoadMore={loadMoreActivity}
         onCancelSendPreview={cancelTransferPreview}
         onPreviewSend={previewTransfer}
         onRefresh={refreshWallet}
         onSend={sendTransfer}
+        onStartTonConnect={startTonConnect}
+        onRespondTonConnect={respondTonConnect}
+        onDisconnectTonConnect={disconnectTonConnect}
       />
     )
   }
@@ -205,4 +298,16 @@ function errorMessage(cause: unknown): string {
     return cause.message
   }
   return "The wallet operation failed"
+}
+
+function isTonConnectLink(value: string): boolean {
+  if (!value.startsWith("tc://")) {
+    return false
+  }
+  try {
+    parseTonConnectLink(value)
+    return true
+  } catch {
+    return false
+  }
 }

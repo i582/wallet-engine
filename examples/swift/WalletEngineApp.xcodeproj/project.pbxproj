@@ -99,7 +99,7 @@
 			files = ();
 			inputPaths = ("$(SRCROOT)/copy-local-environment.sh",);
 			name = "Copy Local Environment";
-			outputPaths = ("$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/toncenter-testnet-api-key",);
+			outputPaths = ("$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/toncenter-api-key",);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "\"${SRCROOT}/copy-local-environment.sh\"\n";
@@ -111,7 +111,7 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
-		A1000000000000000000000E /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; SWIFT_VERSION = 6.0;}; name = Debug;};
+		A1000000000000000000000E /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; SWIFT_VERSION = 6.0;}; name = Debug;};
 		A1000000000000000000000F /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; SWIFT_VERSION = 6.0;}; name = Release;};
 		A10000000000000000000010 /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -138,6 +138,7 @@
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -177,8 +178,8 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		A10000000000000000000008 /* Build configuration list for PBXNativeTarget "WalletEngineApp" */ = {isa = XCConfigurationList; buildConfigurations = (A10000000000000000000010 /* Debug */, A10000000000000000000011 /* Release */,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;};
-		A1000000000000000000000D /* Build configuration list for PBXProject "WalletEngineApp" */ = {isa = XCConfigurationList; buildConfigurations = (A1000000000000000000000E /* Debug */, A1000000000000000000000F /* Release */,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;};
+		A10000000000000000000008 /* Build configuration list for PBXNativeTarget "WalletEngineApp" */ = {isa = XCConfigurationList; buildConfigurations = (A10000000000000000000010 /* Debug */, A10000000000000000000011 /* Release */,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug;};
+		A1000000000000000000000D /* Build configuration list for PBXProject "WalletEngineApp" */ = {isa = XCConfigurationList; buildConfigurations = (A1000000000000000000000E /* Debug */, A1000000000000000000000F /* Release */,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug;};
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */

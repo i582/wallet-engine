@@ -34,7 +34,7 @@ impl std::fmt::Debug for DiskStore {
         formatter
             .debug_struct("DiskStore")
             .field("path", &self.path)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -127,7 +127,7 @@ impl WalletPlatformHost for DiskStore {
         request: ProtectedSecretStore,
     ) -> Result<(), ProtectedSecretHostError> {
         let mut state = self.lock().map_err(secret_storage_error)?;
-        state
+        let _ = state
             .secrets
             .insert(request.secret_ref.value, request.bytes);
         self.persist(&state).map_err(secret_storage_error)
@@ -138,7 +138,7 @@ impl WalletPlatformHost for DiskStore {
         secret_ref: ProtectedSecretRef,
     ) -> Result<(), ProtectedSecretHostError> {
         let mut state = self.lock().map_err(secret_storage_error)?;
-        state.secrets.remove(&secret_ref.value);
+        let _ = state.secrets.remove(&secret_ref.value);
         self.persist(&state).map_err(secret_storage_error)
     }
 
@@ -166,7 +166,7 @@ impl WalletPlatformHost for DiskStore {
             });
         }
 
-        state.journals.insert(key, mutation.replacement.clone());
+        let _ = state.journals.insert(key, mutation.replacement.clone());
         self.persist(&state).map_err(journal_storage_error)?;
         Ok(JournalCompareExchangeResult {
             applied: true,
@@ -179,6 +179,10 @@ fn journal_key(key: &JournalKey) -> String {
     format!("{}:{}", key.record_id, key.slot)
 }
 
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "used directly as an anyhow Result::map_err adapter"
+)]
 fn secret_storage_error(error: anyhow::Error) -> ProtectedSecretHostError {
     ProtectedSecretHostError::Failed {
         kind: ProtectedSecretHostErrorKind::Unavailable,
@@ -186,6 +190,10 @@ fn secret_storage_error(error: anyhow::Error) -> ProtectedSecretHostError {
     }
 }
 
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "used directly as an anyhow Result::map_err adapter"
+)]
 fn journal_storage_error(error: anyhow::Error) -> JournalHostError {
     JournalHostError::Failed {
         kind: JournalHostErrorKind::Unavailable,
@@ -195,11 +203,11 @@ fn journal_storage_error(error: anyhow::Error) -> JournalHostError {
 
 fn private_file(path: &Path) -> Result<File> {
     let mut options = OpenOptions::new();
-    options.create(true).truncate(true).write(true);
+    let _ = options.create(true).truncate(true).write(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o600);
+        let _ = options.mode(0o600);
     }
     options
         .open(path)

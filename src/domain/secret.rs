@@ -16,6 +16,8 @@ pub enum SecretAccessReason {
     CreateWallet,
     /// The engine needs the mnemonic to sign a transfer.
     SignTransfer,
+    /// The engine needs the mnemonic for an off-chain TON Connect ownership proof.
+    SignTonConnectProof,
     /// The user requested the recovery phrase.
     RevealRecoveryPhrase,
 }

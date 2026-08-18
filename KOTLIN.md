@@ -35,6 +35,16 @@ The generated `WalletHttpHost` and `WalletPlatformHost` callbacks and the
 exported engine methods use Kotlin `suspend` functions. No handwritten JNI
 adapter is required.
 
+## TON Connect
+
+The generated Kotlin module includes `TonConnectSession`, manifest parsing,
+account reply data, and `ton_proof` signing. The application owns manifest and
+bridge transport, approval screens, and protected session storage.
+
+Read [TON_CONNECT.md](TON_CONNECT.md) for the required session and bridge POST
+order. The current Android example does not implement the TON Connect user
+interface.
+
 ## Clear client secret copies
 
 Rust clears the secret buffers that it owns. Kotlin `String` values are

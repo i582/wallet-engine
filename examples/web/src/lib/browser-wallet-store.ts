@@ -3,6 +3,7 @@ import type {
   ProtectedSecretRef,
   ProtectedSecretStore,
   ProtectedSecretStoreHost,
+  TonConnectStorage,
   WalletDescriptor,
 } from "@ton/wallet-engine"
 import {type DBSchema, type IDBPDatabase, openDB} from "idb"
@@ -19,20 +20,29 @@ interface WalletExampleDatabase extends DBSchema {
     readonly key: string
     readonly value: WalletDescriptor
   }
+  readonly tonConnect: {
+    readonly key: string
+    readonly value: string
+  }
 }
 
 /**
  * Persists the example wallet across reloads.
  * This database is not a substitute for an encrypted browser vault.
  */
-export class BrowserWalletStore implements ProtectedSecretStoreHost {
+export class BrowserWalletStore implements ProtectedSecretStoreHost, TonConnectStorage {
   private readonly database: Promise<IDBPDatabase<WalletExampleDatabase>>
 
   constructor() {
-    this.database = openDB<WalletExampleDatabase>(DATABASE_NAME, 1, {
-      upgrade(database: IDBPDatabase<WalletExampleDatabase>): void {
-        database.createObjectStore("secrets")
-        database.createObjectStore("state")
+    this.database = openDB<WalletExampleDatabase>(DATABASE_NAME, 2, {
+      upgrade(database: IDBPDatabase<WalletExampleDatabase>, oldVersion: number): void {
+        if (oldVersion < 1) {
+          database.createObjectStore("secrets")
+          database.createObjectStore("state")
+        }
+        if (oldVersion < 2) {
+          database.createObjectStore("tonConnect")
+        }
       },
     })
   }
@@ -70,6 +80,18 @@ export class BrowserWalletStore implements ProtectedSecretStoreHost {
 
   async clearWallet(): Promise<void> {
     await (await this.database).delete("state", WALLET_KEY)
+  }
+
+  async load(key: string): Promise<string | undefined> {
+    return await (await this.database).get("tonConnect", key)
+  }
+
+  async save(key: string, value: string): Promise<void> {
+    await (await this.database).put("tonConnect", value, key)
+  }
+
+  async remove(key: string): Promise<void> {
+    await (await this.database).delete("tonConnect", key)
   }
 }
 

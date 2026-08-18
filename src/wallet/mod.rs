@@ -8,7 +8,10 @@ pub(crate) mod send;
 pub(crate) mod transfer;
 
 use std::sync::Arc;
-use ton::ton_core::types::TonAddress;
+
+use ed25519_dalek::{Signer as _, SigningKey};
+use ton::ton_core::{traits::tlb::TLB as _, types::TonAddress};
+use ton_connect_core::{RawAccountAddress, ton_proof_signing_hash};
 
 use self::crypto::{
     SensitiveMnemonic, derive_wallet, derive_wallet_public_state, generate_mnemonic,
@@ -40,6 +43,42 @@ pub struct WalletDescriptor {
     pub network: Network,
     /// The host protected-storage reference for the mnemonic.
     pub secret_ref: ProtectedSecretRef,
+}
+
+/// Requests an address-bound off-chain TON Connect ownership proof signature.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct TonConnectProofSignRequest {
+    /// Wallet whose protected key must sign the proof.
+    pub descriptor: WalletDescriptor,
+    /// Exact manifest domain shown to and approved by the user.
+    pub domain: String,
+    /// Unix signing timestamp in seconds.
+    pub timestamp: u64,
+    /// Exact dApp challenge from the `ton_proof` connect item.
+    pub payload: String,
+}
+
+/// Ed25519 result of an authorized TON Connect ownership proof.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct TonConnectProofSignature {
+    /// Exact 64-byte Ed25519 signature.
+    pub signature: Vec<u8>,
+}
+
+/// Public account material sent in a TON Connect `ton_addr` reply.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct TonConnectAccountInfo {
+    /// Canonical raw TON address (`workchain:hex`).
+    pub address: String,
+    /// TON network global ID encoded as a decimal string.
+    pub network: String,
+    /// Canonical standard-base64 wallet `StateInit` `BoC`.
+    pub wallet_state_init: String,
+    /// Raw 32-byte Ed25519 public key.
+    pub public_key: Vec<u8>,
 }
 
 /// Requests generation of a new wallet account.
@@ -117,6 +156,9 @@ pub enum WalletLifecycleError {
     /// Rust cannot construct the requested wallet address.
     #[error("wallet address derivation failed")]
     AddressDerivationFailed,
+    /// The TON Connect proof fields or signing key are invalid.
+    #[error("TON Connect ownership proof signing failed")]
+    TonConnectSigningFailed,
     /// The protected mnemonic derives a different address from the descriptor.
     #[error("protected recovery phrase does not belong to this wallet")]
     SecretWalletMismatch,
@@ -251,6 +293,42 @@ impl WalletLifecycle {
             .await
             .map_err(Into::into)
     }
+
+    /// Authorizes the protected key and signs a TON Connect ownership proof.
+    ///
+    /// Rust constructs the protocol digest itself. The caller cannot use this
+    /// API as a generic Ed25519 signing oracle, and no mnemonic or private-key
+    /// bytes cross the API boundary.
+    pub async fn sign_ton_connect_proof(
+        &self,
+        request: TonConnectProofSignRequest,
+    ) -> Result<TonConnectProofSignature, WalletLifecycleError> {
+        validate_descriptor(&request.descriptor)?;
+
+        let bytes = self
+            .platform_host
+            .read_protected_secret(ProtectedSecretRead {
+                secret_ref: request.descriptor.secret_ref.clone(),
+                reason: SecretAccessReason::SignTonConnectProof,
+                prompt: format!(
+                    "Authenticate to sign in to {} with TON Connect",
+                    request.domain
+                ),
+            })
+            .await?;
+        let secret = SensitiveMnemonic::from_bytes(bytes)
+            .map_err(|_| WalletLifecycleError::InvalidRecoveryPhrase)?;
+
+        sign_ton_connect_proof(&secret, &request)
+    }
+
+    /// Derives the public TON Connect account reply without reading a secret.
+    pub fn ton_connect_account(
+        &self,
+        descriptor: WalletDescriptor,
+    ) -> Result<TonConnectAccountInfo, WalletLifecycleError> {
+        derive_ton_connect_account(descriptor)
+    }
 }
 
 impl WalletLifecycle {
@@ -318,6 +396,65 @@ fn recovery_phrase(secret: &SensitiveMnemonic) -> Result<RecoveryPhrase, WalletL
     })
 }
 
+fn sign_ton_connect_proof(
+    secret: &SensitiveMnemonic,
+    request: &TonConnectProofSignRequest,
+) -> Result<TonConnectProofSignature, WalletLifecycleError> {
+    let phrase = secret
+        .as_str()
+        .map_err(|_| WalletLifecycleError::InvalidRecoveryPhrase)?;
+    let wallet = derive_wallet(phrase, request.descriptor.network)
+        .map_err(|_| WalletLifecycleError::AddressDerivationFailed)?;
+    if wallet.address != *request.descriptor.address.as_address()
+        || wallet.key_pair.public_key.as_slice() != request.descriptor.public_key
+    {
+        return Err(WalletLifecycleError::SecretWalletMismatch);
+    }
+
+    let address_hash = <[u8; 32]>::try_from(wallet.address.hash.as_slice())
+        .map_err(|_| WalletLifecycleError::TonConnectSigningFailed)?;
+    let address = RawAccountAddress::new(wallet.address.workchain, address_hash);
+    let digest = ton_proof_signing_hash(
+        &address,
+        &request.domain,
+        request.timestamp,
+        &request.payload,
+    )
+    .map_err(|_| WalletLifecycleError::TonConnectSigningFailed)?;
+    let signing_key = SigningKey::from_keypair_bytes(&wallet.key_pair.secret_key)
+        .map_err(|_| WalletLifecycleError::TonConnectSigningFailed)?;
+    if signing_key.verifying_key().to_bytes() != wallet.key_pair.public_key {
+        return Err(WalletLifecycleError::SecretWalletMismatch);
+    }
+
+    Ok(TonConnectProofSignature {
+        signature: signing_key.sign(&digest).to_bytes().to_vec(),
+    })
+}
+
+fn derive_ton_connect_account(
+    descriptor: WalletDescriptor,
+) -> Result<TonConnectAccountInfo, WalletLifecycleError> {
+    validate_descriptor(&descriptor)?;
+    let (address, state_init) =
+        derive_wallet_public_state(&descriptor.public_key, descriptor.network)
+            .map_err(|_| WalletLifecycleError::AddressDerivationFailed)?;
+    let wallet_state_init = state_init
+        .to_boc_base64()
+        .map_err(|_| WalletLifecycleError::AddressDerivationFailed)?;
+
+    Ok(TonConnectAccountInfo {
+        address: address.to_hex(),
+        network: match descriptor.network {
+            Network::Mainnet => "-239",
+            Network::Testnet => "-3",
+        }
+        .to_owned(),
+        wallet_state_init,
+        public_key: descriptor.public_key,
+    })
+}
+
 fn secret_ref_for(record_id: &str) -> ProtectedSecretRef {
     ProtectedSecretRef {
         value: format!("wallet:{record_id}:mnemonic"),
@@ -355,7 +492,11 @@ fn validate_record_id(record_id: &str) -> Result<(), WalletLifecycleError> {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr as _;
+
     use super::*;
+
+    const MNEMONIC: &str = "fancy carpet hello mandate penalty trial consider property top vicious exit rebuild tragic profit urban major total month holiday sudden rib gather media vicious";
 
     #[test]
     fn descriptor_rejects_each_broken_identity_binding_independently() {
@@ -397,6 +538,89 @@ mod tests {
             validate_record_id(&"a".repeat(MAX_RECORD_ID_BYTES + 1)),
             Err(WalletLifecycleError::InvalidRecordId)
         );
+    }
+
+    #[test]
+    fn ton_connect_proof_signing_is_bound_to_the_descriptor_and_fields()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let words = MNEMONIC
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let secret = SensitiveMnemonic::from_words(words)?;
+        let descriptor = derive_descriptor("ton-connect-proof", Network::Testnet, &secret)?;
+        let request = TonConnectProofSignRequest {
+            descriptor: descriptor.clone(),
+            domain: "wallet.example".to_owned(),
+            timestamp: 1_800_000_000,
+            payload: "one-time challenge".to_owned(),
+        };
+        let signed = sign_ton_connect_proof(&secret, &request)?;
+        let signature = <[u8; 64]>::try_from(signed.signature.as_slice())?;
+        let public_key = <[u8; 32]>::try_from(descriptor.public_key.as_slice())?;
+        let address = descriptor.address.as_address();
+        let address_hash = <[u8; 32]>::try_from(address.hash.as_slice())?;
+        let raw_address = RawAccountAddress::new(address.workchain, address_hash);
+        let hash = ton_proof_signing_hash(
+            &raw_address,
+            &request.domain,
+            request.timestamp,
+            &request.payload,
+        )?;
+
+        assert!(ton_connect_core::verify_signature(
+            &hash,
+            &ton_connect_core::Ed25519Signature::from_bytes(signature),
+            &ton_connect_core::Ed25519PublicKey::from_bytes(public_key),
+            ton_connect_core::SignatureDomain::Empty,
+        )?);
+
+        let changed_hash = ton_proof_signing_hash(
+            &raw_address,
+            &request.domain,
+            request.timestamp,
+            "different challenge",
+        )?;
+        assert!(!ton_connect_core::verify_signature(
+            &changed_hash,
+            &ton_connect_core::Ed25519Signature::from_bytes(signature),
+            &ton_connect_core::Ed25519PublicKey::from_bytes(public_key),
+            ton_connect_core::SignatureDomain::Empty,
+        )?);
+        Ok(())
+    }
+
+    #[test]
+    fn ton_connect_account_material_is_self_consistent() -> Result<(), Box<dyn std::error::Error>> {
+        let info = derive_ton_connect_account(valid_descriptor())?;
+        let state_init = ton_connect_core::WalletStateInit::try_from(info.wallet_state_init)?;
+        let address = RawAccountAddress::from_str(&info.address)?;
+        let public_key = <[u8; 32]>::try_from(info.public_key.as_slice())?;
+        let verified = state_init.verify_standard_wallet(
+            &address,
+            &ton_connect_core::Ed25519PublicKey::from_bytes(public_key),
+        )?;
+
+        assert_eq!(info.network, "-3");
+        assert_eq!(
+            verified.version(),
+            ton_connect_core::StandardWalletVersion::Wallet
+        );
+        Ok(())
+    }
+
+    /// Rejects persisted wallet metadata that cannot reconstruct its account state.
+    #[test]
+    fn descriptor_without_public_key_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
+        let descriptor = valid_descriptor();
+        let mut json = serde_json::to_value(descriptor)?;
+        let object = json
+            .as_object_mut()
+            .ok_or("wallet descriptor must serialize as an object")?;
+        let _ = object.remove("publicKey");
+
+        assert!(serde_json::from_value::<WalletDescriptor>(json).is_err());
+        Ok(())
     }
 
     fn valid_descriptor() -> WalletDescriptor {

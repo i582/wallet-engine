@@ -23,10 +23,9 @@ for architecture in ${ARCHS}; do
     CARGO_TARGET_DIR="${target_root}" \
         cargo build \
         --manifest-path "${repository_root}/Cargo.toml" \
-        --release \
         --locked \
         --target "${rust_target}"
-    library="${target_root}/${rust_target}/release/libwallet_engine.a"
+    library="${target_root}/${rust_target}/debug/libwallet_engine.a"
     libraries="${libraries} ${library}"
 done
 

@@ -174,6 +174,20 @@ describe("high-level WASM API", () => {
     expect(created.descriptor.address).toStartWith("0Q")
     expect(created.descriptor.publicKey).toHaveLength(32)
 
+    const account = lifecycle.tonConnectAccount(created.descriptor)
+    expect(account.address).toStartWith("0:")
+    expect(account.network).toBe("-3")
+    expect(account.walletStateInit.length).toBeGreaterThan(16)
+    expect(account.publicKey).toEqual(created.descriptor.publicKey)
+
+    const proof = await lifecycle.signTonConnectProof({
+      descriptor: created.descriptor,
+      domain: "app.example",
+      timestamp: 1_800_000_000,
+      payload: "single-use challenge",
+    })
+    expect(proof.signature).toHaveLength(64)
+
     const revealed = await lifecycle.revealRecoveryPhrase(created.descriptor)
     expect(revealed.phrase).toEqual(created.recoveryPhrase.phrase)
 

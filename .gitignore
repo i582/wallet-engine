@@ -7,6 +7,8 @@ xtask/target/
 
 # Generated foreign-language bindings
 /bindings/
+/tests/ton-connect/dapp/dist/
+/tests/ton-connect/dapp/node_modules/
 
 # IDE files
 .idea/
@@ -33,6 +35,7 @@ wallet_engine_toncenter_api_key
 # Code intelligence and local tooling
 .codegraph/
 .codebase-memory/
+.playwright-mcp/
 .mcp.json
 
 # Coverage and reports
@@ -40,3 +43,6 @@ coverage/
 lcov.info
 mutants.out/
 mutants.out.old/
+
+# Local research notes and checked-out reference implementations
+research/

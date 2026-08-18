@@ -7,12 +7,14 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use num_bigint::BigUint;
 use wallet_engine::{
     CreateWalletRequest, CreatedWallet, ImportWalletRequest, Network, NonEmptyString,
-    ProviderConfig, SendAmount, SendPhase, SendPreviewRequest, SendRequest, TonAddressString,
-    WalletClient, WalletClientConfig, WalletDescriptor, WalletLifecycle, WalletSnapshot,
+    ProviderConfig, SendAmount, SendExpiration, SendIntent, SendMessage, SendMessageBody,
+    SendPhase, SendPreviewRequest, SendRequest, TonAddressString, WalletClient, WalletClientConfig,
+    WalletDescriptor, WalletLifecycle, WalletSnapshot,
 };
 
 use crate::http_host::ReqwestHttpHost;
 use crate::storage::DiskStore;
+use crate::ton_connect::{ConnectPrompt, TonConnectController, TonConnectEvent, TransactionPrompt};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InputField {
@@ -26,6 +28,10 @@ pub(crate) enum Screen {
     Import,
     Dashboard,
     Send,
+    TonConnectLink,
+    TonConnectConnecting,
+    TonConnectConfirm(ConnectPrompt),
+    TonConnectTransaction(TransactionPrompt),
     ConfirmDelete,
 }
 
@@ -36,12 +42,14 @@ pub(crate) struct App {
     pub(crate) import_words: String,
     pub(crate) send_destination: String,
     pub(crate) send_amount: String,
+    pub(crate) ton_connect_link: String,
     pub(crate) input_field: InputField,
     store: Arc<DiskStore>,
     http_host: Arc<ReqwestHttpHost>,
     lifecycle: Arc<WalletLifecycle>,
     client: Option<Arc<WalletClient>>,
     descriptor: Option<WalletDescriptor>,
+    ton_connect: Option<TonConnectController>,
     quit: bool,
 }
 
@@ -58,12 +66,14 @@ impl App {
             import_words: String::new(),
             send_destination: String::new(),
             send_amount: String::new(),
+            ton_connect_link: String::new(),
             input_field: InputField::Destination,
             store,
             http_host,
             lifecycle,
             client: None,
             descriptor: None,
+            ton_connect: None,
             quit: false,
         };
 
@@ -96,11 +106,18 @@ impl App {
             Screen::Import => self.handle_import(key).await,
             Screen::Dashboard => self.handle_dashboard(key).await,
             Screen::Send => self.handle_send(key).await,
+            Screen::TonConnectLink => self.handle_ton_connect_link(key).await,
+            Screen::TonConnectConnecting => self.handle_ton_connect_connecting(key).await,
+            Screen::TonConnectConfirm(_) => self.handle_ton_connect_confirmation(key),
+            Screen::TonConnectTransaction(_) => self.handle_ton_connect_transaction(key),
             Screen::ConfirmDelete => self.handle_delete_confirmation(key).await,
         }
     }
 
     pub(crate) async fn shutdown(&mut self) {
+        if let Some(controller) = self.ton_connect.take() {
+            controller.shutdown().await;
+        }
         if let Some(client) = self.client.take() {
             let _ = client.shutdown().await;
         }
@@ -155,6 +172,16 @@ impl App {
                 self.status = None;
                 self.screen = Screen::Send;
             }
+            KeyCode::Char('t') => {
+                if self.ton_connect.is_some() {
+                    self.status = Some("A TON Connect session is already active".to_owned());
+                } else {
+                    self.ton_connect_link.clear();
+                    self.status = None;
+                    self.screen = Screen::TonConnectLink;
+                }
+            }
+            KeyCode::Char('x') => self.stop_ton_connect().await,
             KeyCode::Char('d') => self.screen = Screen::ConfirmDelete,
             KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
             _ => {}
@@ -219,6 +246,151 @@ impl App {
             KeyCode::Char('y') => self.delete_wallet().await,
             KeyCode::Char('n') | KeyCode::Esc => self.screen = Screen::Dashboard,
             _ => {}
+        }
+    }
+
+    async fn handle_ton_connect_link(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => self.screen = Screen::Dashboard,
+            KeyCode::Enter => self.start_ton_connect(),
+            KeyCode::Backspace => {
+                self.ton_connect_link.pop();
+            }
+            KeyCode::Char(character) if !character.is_control() => {
+                self.ton_connect_link.push(character);
+            }
+            _ => {}
+        }
+    }
+
+    async fn handle_ton_connect_connecting(&mut self, key: KeyEvent) {
+        if matches!(key.code, KeyCode::Esc) {
+            self.stop_ton_connect().await;
+        }
+    }
+
+    fn handle_ton_connect_confirmation(&mut self, key: KeyEvent) {
+        let approved = match key.code {
+            KeyCode::Char('y') => Some(true),
+            KeyCode::Char('n') | KeyCode::Esc => Some(false),
+            _ => None,
+        };
+        if let Some(approved) = approved {
+            let screen = std::mem::replace(&mut self.screen, Screen::TonConnectConnecting);
+            if let Screen::TonConnectConfirm(prompt) = screen {
+                prompt.respond(approved);
+            }
+        }
+    }
+
+    fn handle_ton_connect_transaction(&mut self, key: KeyEvent) {
+        let approved = match key.code {
+            KeyCode::Char('y') => Some(true),
+            KeyCode::Char('n') | KeyCode::Esc => Some(false),
+            _ => None,
+        };
+        if let Some(approved) = approved {
+            let screen = std::mem::replace(&mut self.screen, Screen::Dashboard);
+            if let Screen::TonConnectTransaction(prompt) = screen {
+                prompt.respond(approved);
+                self.status = Some(if approved {
+                    "Signing and submitting TON Connect transaction…".to_owned()
+                } else {
+                    "TON Connect transaction declined".to_owned()
+                });
+            }
+        }
+    }
+
+    pub(crate) fn handle_paste(&mut self, value: &str) {
+        match self.screen {
+            Screen::Import => self.import_words.push_str(value),
+            Screen::TonConnectLink => self.ton_connect_link.push_str(value.trim()),
+            Screen::Welcome
+            | Screen::Recovery(_)
+            | Screen::Dashboard
+            | Screen::Send
+            | Screen::TonConnectConnecting
+            | Screen::TonConnectConfirm(_)
+            | Screen::TonConnectTransaction(_)
+            | Screen::ConfirmDelete => {}
+        }
+    }
+
+    fn start_ton_connect(&mut self) {
+        let Some(descriptor) = self.descriptor.clone() else {
+            self.status = Some("Wallet descriptor is unavailable".to_owned());
+            return;
+        };
+        let Some(client) = self.client.clone() else {
+            self.status = Some("Wallet client is unavailable".to_owned());
+            return;
+        };
+        let link = self.ton_connect_link.trim().to_owned();
+        if link.is_empty() {
+            self.status = Some("Paste a TON Connect link".to_owned());
+            return;
+        }
+        self.ton_connect = Some(TonConnectController::start(
+            link,
+            descriptor,
+            self.lifecycle.clone(),
+            client,
+        ));
+        self.status = Some("Loading dApp manifest…".to_owned());
+        self.screen = Screen::TonConnectConnecting;
+    }
+
+    async fn stop_ton_connect(&mut self) {
+        if let Some(controller) = self.ton_connect.take() {
+            controller.shutdown().await;
+            self.status = Some("TON Connect session stopped".to_owned());
+        }
+        self.screen = Screen::Dashboard;
+    }
+
+    pub(crate) async fn poll_ton_connect(&mut self) {
+        let mut finished = false;
+        while let Some(event) = self
+            .ton_connect
+            .as_mut()
+            .and_then(TonConnectController::try_next)
+        {
+            match event {
+                TonConnectEvent::ConnectPrompt(prompt) => {
+                    self.status = None;
+                    self.screen = Screen::TonConnectConfirm(prompt);
+                }
+                TonConnectEvent::Connected { dapp_name, account } => {
+                    self.status = Some(format!("Connected to {dapp_name} as {account}"));
+                    self.screen = Screen::Dashboard;
+                }
+                TonConnectEvent::TransactionPrompt(prompt) => {
+                    self.status = None;
+                    self.screen = Screen::TonConnectTransaction(prompt);
+                }
+                TonConnectEvent::TransactionFinished(status) => {
+                    self.status = Some(status);
+                    self.snapshot = self
+                        .client
+                        .as_ref()
+                        .and_then(|client| client.snapshot().ok());
+                    self.screen = Screen::Dashboard;
+                }
+                TonConnectEvent::Disconnected => {
+                    self.status = Some("dApp disconnected".to_owned());
+                    self.screen = Screen::Dashboard;
+                    finished = true;
+                }
+                TonConnectEvent::Failed(error) => {
+                    self.status = Some(format!("TON Connect failed: {error}"));
+                    self.screen = Screen::Dashboard;
+                    finished = true;
+                }
+            }
+        }
+        if finished && let Some(controller) = self.ton_connect.take() {
+            controller.shutdown().await;
         }
     }
 
@@ -382,12 +554,19 @@ impl App {
             }
         };
 
+        let intent = SendIntent {
+            expiration: SendExpiration::EngineDefault,
+            message: SendMessage {
+                destination,
+                amount,
+                body: SendMessageBody::Empty,
+                state_init: None,
+            },
+        };
         self.status = Some("Checking transfer…".to_owned());
         match client
             .preview_send(SendPreviewRequest {
-                destination: destination.clone(),
-                amount: amount.clone(),
-                comment: None,
+                intent: intent.clone(),
             })
             .await
         {
@@ -408,9 +587,7 @@ impl App {
         };
         let request = SendRequest {
             operation_id,
-            destination,
-            amount,
-            comment: None,
+            intent,
         };
         match client.send(request).await {
             Ok(result) => {

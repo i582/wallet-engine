@@ -4,6 +4,13 @@ This example shows the smallest complete browser flow for `@ton/wallet-engine`.
 It creates a testnet wallet. Then it loads the account and activity
 snapshot through the browser host callbacks.
 
+Paste a full `tc://` link to start TON Connect. The example loads the dApp
+manifest, shows connection approval, signs an optional `ton_proof`, previews
+one-message transactions, and restores the encrypted session after reload.
+
+The example reports Tonkeeper's registered `appName` so current dApps can find
+wallet metadata. A production wallet must register and use its own identity.
+
 The send screen calls `previewSend` before confirmation. It shows Toncenter
 fees and actions when they are available. A preview failure displays a warning
 and keeps the **Send anyway** action available.
@@ -18,6 +25,7 @@ The example keeps interface code separate from engine code:
 
 - `src/lib/wallet-session.ts` contains the Wallet Engine integration.
 - `src/lib/browser-wallet-store.ts` persists the descriptor and secret host data.
+- `src/components/ton-connect-dialog.tsx` shows connection and transaction approvals.
 - `src/components/` contains the React interface.
 - `src/components/ui/` contains the local shadcn components.
 
@@ -48,4 +56,9 @@ This behavior is useful for an example. IndexedDB is not protected wallet
 storage. Use an external signer or an audited encrypted browser vault for a
 production wallet.
 
-The example also uses IndexedDB for the durable send journal.
+The example also uses IndexedDB for the durable send journal and TON Connect
+session. The TON Connect value contains a session secret key. Use protected
+storage in a production wallet.
+
+Read [TON_CONNECT.md](../../TON_CONNECT.md) for the complete integration and
+security contract.

@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
+use std::future::{Future, poll_fn};
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -15,10 +16,10 @@ use ton::ton_core::cell::TonCell;
 use ton::ton_core::traits::tlb::TLB;
 use wallet_engine::{
     AccountStatus, ActivityCursor, DomainError, HttpHostErrorKind, Network, NonEmptyString,
-    PendingReason, ProtectedSecretRef, ProviderConfig, ResourcePhase, SendAmount, SendPhase,
-    SendPreview, SendPreviewRequest, SendRequest, SendResult, SendSnapshot, TonAddressString,
-    WalletClient, WalletClientConfig, WalletClientError, WalletHttpHost, WalletOperationOutcome,
-    WalletUpdate,
+    PendingReason, ProtectedSecretRef, ProviderConfig, ResourcePhase, SendAmount, SendExpiration,
+    SendIntent, SendMessage, SendMessageBody, SendPhase, SendPreview, SendPreviewRequest,
+    SendRequest, SendResult, SendSnapshot, TonAddressString, WalletClient, WalletClientConfig,
+    WalletClientError, WalletHttpHost, WalletOperationOutcome, WalletUpdate,
 };
 
 use super::host::{MemoryPlatformHost, PlatformCallKind, RequestKind, ScenarioHttpHost};
@@ -65,6 +66,22 @@ fn step_timeout() -> Duration {
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|seconds| *seconds > 0)
         .map_or(DEFAULT_STEP_TIMEOUT, Duration::from_secs)
+}
+
+/// Polls an asynchronous scenario operation once before reporting that it started.
+fn block_on_started<F>(future: F, started: Sender<()>) -> F::Output
+where
+    F: Future,
+{
+    let mut future = Box::pin(future);
+    let mut started = Some(started);
+    block_on(poll_fn(move |context| {
+        let result = future.as_mut().poll(context);
+        if let Some(started) = started.take() {
+            let _ = started.send(());
+        }
+        result
+    }))
 }
 
 pub(crate) fn scenario(name: impl Into<String>) -> Scenario {
@@ -1668,9 +1685,17 @@ impl ScenarioRunner {
                         let destination = TonAddressString::try_from(destination)
                             .map_err(|error| format!("invalid scenario destination: {error}"))?;
                         let request = SendPreviewRequest {
-                            destination,
-                            amount: action.amount,
-                            comment: action.comment,
+                            intent: SendIntent {
+                                expiration: SendExpiration::EngineDefault,
+                                message: SendMessage {
+                                    destination,
+                                    amount: action.amount,
+                                    body: action.comment.map_or(SendMessageBody::Empty, |text| {
+                                        SendMessageBody::Comment { text }
+                                    }),
+                                    state_init: None,
+                                },
+                            },
                         };
                         std::thread::spawn(move || {
                             let result = block_on(client.preview_send(request));
@@ -1689,9 +1714,17 @@ impl ScenarioRunner {
                                 .map_err(|error| {
                                     format!("invalid scenario operation identifier: {error}")
                                 })?,
-                            destination,
-                            amount: action.amount,
-                            comment: action.comment,
+                            intent: SendIntent {
+                                expiration: SendExpiration::EngineDefault,
+                                message: SendMessage {
+                                    destination,
+                                    amount: action.amount,
+                                    body: action.comment.map_or(SendMessageBody::Empty, |text| {
+                                        SendMessageBody::Comment { text }
+                                    }),
+                                    state_init: None,
+                                },
+                            },
                         };
                         std::thread::spawn(move || {
                             let result = block_on(client.send(request));
@@ -1722,10 +1755,19 @@ impl ScenarioRunner {
                         let result = block_on(client.cancel_load_more_activity());
                         let _ = sender.send(OperationResult::Unit(result));
                     }),
-                    UserAction::Shutdown => std::thread::spawn(move || {
-                        let result = block_on(client.shutdown());
-                        let _ = sender.send(OperationResult::Unit(result));
-                    }),
+                    UserAction::Shutdown => {
+                        let (started_sender, started_receiver) = channel();
+                        let thread = std::thread::spawn(move || {
+                            let result = block_on_started(client.shutdown(), started_sender);
+                            let _ = sender.send(OperationResult::Unit(result));
+                        });
+                        started_receiver
+                            .recv_timeout(step_timeout())
+                            .map_err(|error| {
+                                format!("shutdown operation `{name}` did not start: {error}")
+                            })?;
+                        thread
+                    }
                     UserAction::WaitForChange { after_revision } => std::thread::spawn(move || {
                         let result = block_on(client.wait_for_change(after_revision));
                         let _ = sender.send(OperationResult::Snapshot(Box::new(result)));

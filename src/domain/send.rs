@@ -30,19 +30,75 @@ impl SendAmount {
     }
 }
 
+/// The body encoded into one outgoing internal TON message.
+///
+/// Select `Empty` for a value-only transfer, `Comment` for a standard text
+/// comment, or `RawPayload` for a pre-serialized contract call.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Enum)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SendMessageBody {
+    /// Encode no body bits or references.
+    Empty,
+    /// Encode a zero opcode followed by the UTF-8 text as TON snake data.
+    Comment {
+        /// The plaintext UTF-8 comment, including an intentionally empty one.
+        text: String,
+    },
+    /// Preserve one caller-built cell as the internal-message body.
+    RawPayload {
+        /// The complete body cell encoded as a validated BOC.
+        boc: Boc,
+    },
+}
+
+/// One outgoing internal TON message before wallet-contract serialization.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct SendMessage {
+    /// A friendly or raw TON destination address.
+    pub destination: TonAddressString,
+    /// The exact-value or whole-balance transfer policy.
+    pub amount: SendAmount,
+    /// The single body representation encoded into the message.
+    pub body: SendMessageBody,
+    /// Optional destination-contract `StateInit` attached independently of the body.
+    pub state_init: Option<Boc>,
+}
+
+/// The policy used to select the wallet message expiration boundary.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Enum)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SendExpiration {
+    /// Derive expiration from fresh provider time and engine configuration.
+    EngineDefault,
+    /// Preserve a caller-selected Unix expiration timestamp.
+    Exact {
+        /// The Unix expiration timestamp in seconds.
+        unix_timestamp: u64,
+    },
+}
+
+/// The complete transfer intent shared by preview and signed-send operations.
+///
+/// Applications can preview this value and then pass the same value to a
+/// signed send after the user confirms it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct SendIntent {
+    /// The expiration policy for the wallet message.
+    pub expiration: SendExpiration,
+    /// The outgoing internal message.
+    pub message: SendMessage,
+}
+
 /// Requests one signed wallet transfer.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct SendRequest {
     /// A unique idempotency identifier chosen by the application.
     pub operation_id: NonEmptyString,
-    /// A friendly or raw TON destination address.
-    pub destination: TonAddressString,
-    /// The exact-value or whole-balance transfer policy.
-    pub amount: SendAmount,
-    /// An optional plaintext UTF-8 comment attached to the internal message.
-    #[serde(default)]
-    pub comment: Option<String>,
+    /// The immutable message and expiration choices for this operation.
+    pub intent: SendIntent,
 }
 
 /// Public transfer intent used to preview a send without unlocking its secret.
@@ -52,27 +108,19 @@ pub struct SendRequest {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct SendPreviewRequest {
-    /// A friendly or raw TON destination address.
-    pub destination: TonAddressString,
-    /// The exact-value or whole-balance transfer policy.
-    pub amount: SendAmount,
-    /// An optional plaintext UTF-8 comment attached to the emulated message.
-    #[serde(default)]
-    pub comment: Option<String>,
+    /// The same immutable intent accepted by the signed-send operation.
+    pub intent: SendIntent,
 }
 
 /// An informational transfer preview produced without unlocking the wallet secret.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct SendPreview {
-    /// The destination that was emulated.
-    pub destination: TonAddressString,
-    /// The transfer value policy used by the emulated message.
-    pub amount: SendAmount,
-    /// The optional plaintext comment encoded into the emulated message.
-    pub comment: Option<String>,
-    /// The wallet message expiration timestamp used only by this emulation.
-    /// A real send calculates a new timestamp from fresh provider state.
+    /// The complete outgoing message that was emulated.
+    pub message: SendMessage,
+    /// The resolved wallet message expiration timestamp used by this emulation.
+    /// A signed send resolves `EngineDefault` again from fresh provider time
+    /// and preserves the same timestamp for `Exact`.
     pub valid_until: u64,
     /// The complete fake-signed external message submitted for emulation.
     /// The value is a standard padded Base64-encoded BOC. Clients can pass it
@@ -211,13 +259,19 @@ pub struct SendResult {
     pub operation_id: NonEmptyString,
     /// The normalized signed external-message hash in standard padded Base64.
     pub message_hash: Base64Hash,
+    /// The exact signed external-message `BoC` submitted to the provider.
+    pub signed_boc: Boc,
     /// The terminal phase. This can be [`SendPhase::SubmissionUnknown`].
     pub phase: SendPhase,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::SendAmount;
+    use super::{
+        SendAmount, SendExpiration, SendIntent, SendMessage, SendMessageBody, SendRequest,
+    };
+    use crate::{Boc, NonEmptyString, TonAddressString};
+    use ton::ton_core::cell::TonCell;
 
     #[test]
     fn exact_amount_rejects_negative_input() {
@@ -228,5 +282,54 @@ mod tests {
     fn serde_rejects_negative_exact_amount() {
         let result = serde_json::from_str::<SendAmount>(r#"{"kind":"exact","nanograms":"-100"}"#);
         assert!(result.is_err());
+    }
+
+    /// Verifies the JSON boundary for every body and expiration variant.
+    #[test]
+    fn send_request_json_preserves_typed_intent_variants() {
+        let payload = Boc::try_from(TonCell::EMPTY_BOC.to_vec()).expect("valid payload BOC");
+        let bodies = [
+            SendMessageBody::Empty,
+            SendMessageBody::Comment {
+                text: "hello".to_owned(),
+            },
+            SendMessageBody::RawPayload { boc: payload },
+        ];
+        let expirations = [
+            SendExpiration::EngineDefault,
+            SendExpiration::Exact {
+                unix_timestamp: 1_900_000_000,
+            },
+        ];
+
+        for expiration in expirations {
+            for body in bodies.clone() {
+                let request = send_request(expiration.clone(), body);
+                let json = serde_json::to_value(&request).expect("send request serializes");
+                let decoded: SendRequest =
+                    serde_json::from_value(json).expect("send request deserializes");
+
+                assert_eq!(decoded, request);
+            }
+        }
+    }
+
+    /// Builds one public send request for serialization tests.
+    fn send_request(expiration: SendExpiration, body: SendMessageBody) -> SendRequest {
+        SendRequest {
+            operation_id: NonEmptyString::try_from("operation").expect("valid operation id"),
+            intent: SendIntent {
+                expiration,
+                message: SendMessage {
+                    destination: TonAddressString::try_from(
+                        "0:2222222222222222222222222222222222222222222222222222222222222222",
+                    )
+                    .expect("valid destination"),
+                    amount: SendAmount::exact("1").expect("valid amount"),
+                    body,
+                    state_init: None,
+                },
+            },
+        }
     }
 }

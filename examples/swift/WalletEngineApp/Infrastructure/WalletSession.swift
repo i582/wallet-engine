@@ -27,7 +27,7 @@ nonisolated struct AppleWalletEnvironment: Sendable {
         wallet: StoredWallet,
         network: Network? = nil
     ) throws -> WalletClient {
-        guard let publicKey = wallet.publicKey, publicKey.count == 32 else {
+        guard wallet.publicKey.count == 32 else {
             throw WalletSessionError.missingPublicKey
         }
 
@@ -39,7 +39,7 @@ nonisolated struct AppleWalletEnvironment: Sendable {
         return try WalletClient(
             config: config(
                 wallet: wallet,
-                publicKey: publicKey,
+                publicKey: wallet.publicKey,
                 network: network ?? wallet.network.engineValue
             ),
             httpHost: httpHost,
@@ -165,10 +165,41 @@ final class WalletSession {
         }
     }
 
+    func previewTonConnect(_ request: SendRequest) async throws -> SendPreview {
+        guard !isShutDown else { throw WalletSessionError.shutDown }
+        guard !isReplacingClient else { throw WalletSessionError.superseded }
+        let activeClient = client
+        let generation = lifecycleGeneration
+        do {
+            let preview = try await activeClient.previewTonConnect(request: request)
+            guard isCurrent(activeClient, generation: generation) else {
+                throw WalletSessionError.superseded
+            }
+            diagnostic = nil
+            return preview
+        } catch {
+            if isCurrent(activeClient, generation: generation) {
+                diagnostic = Self.sanitized(error)
+            }
+            throw error
+        }
+    }
+
+    func cancelTonConnectPreview() async {
+        await performControl { client in
+            try await client.cancelSendPreview()
+        }
+    }
+
     func cancelSend() async {
         await performControl { client in
             try await client.cancelSend()
         }
+    }
+
+    /// Clears only the presentation diagnostic and preserves the wallet state.
+    func dismissDiagnostic() {
+        diagnostic = nil
     }
 
     func replaceClient(_ replacement: WalletClient) async throws {

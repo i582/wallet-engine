@@ -74,6 +74,30 @@ final class WalletLifecycleModel {
         discardRecoveryPhrase()
     }
 
+    func tonConnectAccount(
+        for descriptor: WalletDescriptor
+    ) throws -> TonConnectAccountInfo {
+        try lifecycle.tonConnectAccount(descriptor: descriptor)
+    }
+
+    func signTonConnectProof(
+        descriptor: WalletDescriptor,
+        domain: String,
+        timestamp: UInt64,
+        payload: String
+    ) async throws -> TonConnectProofSignature {
+        try await perform {
+            try await lifecycle.signTonConnectProof(
+                request: TonConnectProofSignRequest(
+                    descriptor: descriptor,
+                    domain: domain,
+                    timestamp: timestamp,
+                    payload: payload
+                )
+            )
+        }
+    }
+
     func discardRecoveryPhrase() {
         recoveryPhrase = nil
     }

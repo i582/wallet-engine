@@ -3,15 +3,8 @@ import {WalletClient as RawWalletClient} from "../../bindings/wasm/wallet_engine
 import {BrowserHttpHost, type BrowserHttpHostOptions} from "./http-host"
 import {initializeWalletEngine} from "./initialize"
 import type {BrowserPlatformHost} from "./platform-host"
-import type {
-  SendRequest,
-  SendPreview,
-  SendPreviewRequest,
-  SendResult,
-  WalletClientConfig,
-  WalletSnapshot,
-  WalletUpdate,
-} from "./types"
+import type {SendPreview, SendPreviewRequest, SendRequest, SendResult} from "./send-types"
+import type {WalletClientConfig, WalletSnapshot, WalletUpdate} from "./types"
 
 export interface CreateClientOptions extends BrowserHttpHostOptions {
   readonly platformHost: BrowserPlatformHost
@@ -77,6 +70,12 @@ export class WalletClient {
   async previewSend(request: SendPreviewRequest): Promise<SendPreview> {
     this.assertOpen()
     return (await this.raw.previewSend(request)) as SendPreview
+  }
+
+  /** Previews the exact expiration, payload, and StateInit in a TON Connect request. */
+  async previewTonConnect(request: SendRequest): Promise<SendPreview> {
+    this.assertOpen()
+    return (await this.raw.previewTonConnect(request)) as SendPreview
   }
 
   async cancelSendPreview(): Promise<void> {

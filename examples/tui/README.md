@@ -12,6 +12,8 @@ The application can:
 - refresh the balance and activity;
 - load older activity;
 - sign and submit a testnet transfer;
+- connect to a dApp through the TON Connect HTTP bridge;
+- approve `ton_proof` login and one-message contract calls with payload/StateInit;
 - delete the local wallet.
 
 ## Run
@@ -39,10 +41,17 @@ The available keys are shown on each screen. The dashboard uses:
 - `s` to send;
 - `r` to refresh;
 - `l` to load older activity;
+- `t` to paste and open a TON Connect link;
+- `x` to stop the active TON Connect session;
 - `d` to delete the wallet;
 - `q` to quit.
 
 Press `Ctrl+C` on any screen to quit.
+
+The TON Connect flow uses `https://connect.ton.org/bridge` by default. Override
+it with `TON_CONNECT_BRIDGE_URL`. The example temporarily reports Tonkeeper's
+registered `app_name` so existing dApp SDKs can resolve wallet metadata; a real
+wallet must register and use its own identity.
 
 ## Security
 

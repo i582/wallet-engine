@@ -19,6 +19,7 @@
     "test": "bun test test"
   },
   "dependencies": {
+    "@tonconnect/protocol": "3.0.0",
     "idb": "8.0.3"
   },
   "devDependencies": {

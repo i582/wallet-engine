@@ -10,6 +10,10 @@ The application can:
 - show the balance and recent activity;
 - load older transactions;
 - send GRAM;
+- connect dApps through TON Connect;
+- sign `ton_proof` ownership challenges;
+- emulate and approve TON Connect transactions before signing;
+- restore and disconnect encrypted TON Connect sessions;
 - reveal or delete the selected wallet.
 
 The example does not use a streaming connection or a fiat-rate provider.
@@ -29,8 +33,9 @@ just example-swift-open
 ```
 
 Choose `WalletEngineApp` and run it on macOS or an iOS Simulator. Xcode builds
-the Rust static library for the selected Apple target before it compiles the
-application.
+the Rust static library in the debug profile for the selected Apple target
+before it compiles the application. The example intentionally uses debug Rust
+and Swift builds while TON Connect integration is under active development.
 
 For authenticated Toncenter requests, copy `.env.example` to `.env` in this
 directory and set `TONCENTER_API_KEY`. The same key is available to mainnet and
@@ -67,6 +72,12 @@ action.
   Keychain and implements the durable send journal.
 - `Infrastructure/WalletSession.swift` owns one `WalletClient`, observes newer
   snapshots, and guards client replacement.
+- `Infrastructure/TonConnectCoordinator.swift` binds the Rust TON Connect
+  reducer to manifest loading, transaction preview, user approval, and send.
+- `Infrastructure/TonConnectTransport.swift` performs redirect-free manifest,
+  bridge POST, and streaming SSE requests.
+- `Infrastructure/TonConnectSessionStore.swift` keeps secret-bearing session
+  keys and durable pending responses in Keychain.
 - `Infrastructure/WalletLifecycleModel.swift` wraps wallet creation, import,
   recovery-phrase access, and deletion.
 - `Model/WalletStore.swift` persists public wallet descriptors. It never stores

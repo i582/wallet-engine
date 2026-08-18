@@ -1,3 +1,4 @@
+import Foundation
 import WalletEngineFFI
 
 nonisolated extension StoredWalletNetwork {
@@ -33,7 +34,6 @@ nonisolated extension StoredWallet {
     var descriptor: WalletDescriptor? {
         guard !recordId.isEmpty,
               !secretRef.isEmpty,
-              let publicKey,
               publicKey.count == 32 else {
             return nil
         }
@@ -46,4 +46,5 @@ nonisolated extension StoredWallet {
             secretRef: ProtectedSecretRef(value: secretRef)
         )
     }
+
 }

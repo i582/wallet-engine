@@ -49,6 +49,16 @@ enum PlatformCopy {
 
 extension View {
     @ViewBuilder
+    func platformTonConnectLinkInput() -> some View {
+#if os(iOS)
+        textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+#else
+        self
+#endif
+    }
+
+    @ViewBuilder
     func desktopMinimumSize(width: CGFloat, height: CGFloat) -> some View {
 #if os(macOS)
         frame(minWidth: width, minHeight: height)

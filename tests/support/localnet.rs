@@ -200,7 +200,43 @@ impl LocalnetHttpHost {
         } else {
             "uninitialized"
         };
-        lock(&self.localnet).wait_for_state(&self.address, expected_state, expected_seqno)
+        self.assert_account(&self.address, expected_state, expected_seqno)
+    }
+
+    /// Waits for any localnet account to reach an exact state and optional wallet sequence number.
+    pub(super) fn assert_account(
+        &self,
+        address: &str,
+        expected_state: &str,
+        expected_seqno: Option<u32>,
+    ) -> Result<(), String> {
+        lock(&self.localnet).wait_for_state(address, expected_state, expected_seqno)
+    }
+
+    /// Verifies that an unfunded deployment target has not become active before submission.
+    #[allow(
+        dead_code,
+        reason = "used by the separate TON Connect integration-test target"
+    )]
+    pub(super) fn assert_account_absent(&self, address: &str) -> Result<(), String> {
+        let localnet = lock(&self.localnet);
+        let state = localnet.account_state(address)?;
+        let balance = localnet.balance(address)?;
+        if state == "active" || balance != 0 {
+            return Err(format!(
+                "deployment target must be absent before submission, got state={state}, balance={balance}"
+            ));
+        }
+        Ok(())
+    }
+
+    /// Returns one account's current localnet balance in nanograms.
+    #[allow(
+        dead_code,
+        reason = "used by the separate TON Connect integration-test target"
+    )]
+    pub(super) fn account_balance(&self, address: &str) -> Result<u128, String> {
+        lock(&self.localnet).balance(address)
     }
 
     pub(super) fn spam_transfers(&self, count: u32) -> Result<(), String> {
@@ -428,6 +464,33 @@ struct Localnet {
 }
 
 impl Localnet {
+    /// Reads one Toncenter-compatible account balance as nanograms.
+    #[allow(
+        dead_code,
+        reason = "used by the separate TON Connect integration-test target"
+    )]
+    fn balance(&self, address: &str) -> Result<u128, String> {
+        let (status, body) = request(
+            &self.client,
+            Method::GET,
+            &format!(
+                "{}/api/v2/getAddressInformation?address={address}",
+                self.base_url
+            ),
+            None,
+        )?;
+        if !(200..300).contains(&status) {
+            return Err(format!(
+                "account balance request failed with HTTP {status}: {body}"
+            ));
+        }
+        body.pointer("/result/balance")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("account response has no balance: {body}"))?
+            .parse::<u128>()
+            .map_err(|error| format!("account balance is invalid: {error}"))
+    }
+
     fn account_state(&self, address: &str) -> Result<String, String> {
         let (status, body) = request(
             &self.client,
