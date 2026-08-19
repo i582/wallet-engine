@@ -209,7 +209,7 @@ example-swift-build-macos: bindings-swift
     xcodebuild -project examples/swift/WalletEngineApp.xcodeproj -scheme WalletEngineApp -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath target/swift-example CODE_SIGNING_ALLOWED=NO build
 
 example-swift-build-ios: bindings-swift
-    xcodebuild -project examples/swift/WalletEngineApp.xcodeproj -scheme WalletEngineApp -configuration Release -destination 'generic/platform=iOS Simulator' -derivedDataPath target/swift-example-ios ARCHS=arm64 ONLY_ACTIVE_ARCH=YES build
+    xcodebuild -project examples/swift/WalletEngineApp.xcodeproj -scheme WalletEngineApp -configuration Release -destination 'generic/platform=iOS Simulator' -derivedDataPath target/swift-example-ios ARCHS=arm64 ONLY_ACTIVE_ARCH=YES ENABLE_CODE_COVERAGE=NO SWIFT_COMPILATION_MODE=wholemodule SWIFT_OPTIMIZATION_LEVEL=-Osize build
 
 example-swift-e2e-install:
     npm --prefix tests/ton-connect/dapp ci

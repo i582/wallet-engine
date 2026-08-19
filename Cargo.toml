@@ -28,6 +28,15 @@ version = "0.0.2"
 ton-connect-client = { path = "crates/ton-connect-client", version = "0.0.2" }
 ton-connect-core = { path = "crates/ton-connect-core", version = "0.0.2" }
 
+[profile.release]
+codegen-units = 1
+debug = false
+incremental = false
+lto = false
+opt-level = "z"
+panic = "abort"
+strip = "symbols"
+
 [lib]
 crate-type = ["rlib", "staticlib", "cdylib"]
 doctest = false

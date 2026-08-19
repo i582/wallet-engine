@@ -24,3 +24,12 @@ wallet-engine = { path = "../.." }
 
 [lints.clippy]
 expect_used = "deny"
+
+[profile.release]
+codegen-units = 1
+debug = false
+incremental = false
+lto = "fat"
+opt-level = "z"
+panic = "abort"
+strip = "symbols"

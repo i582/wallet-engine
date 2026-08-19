@@ -20,6 +20,23 @@ wallet-engine = { path = "../.." }
 wasm-bindgen = "=0.2.127"
 wasm-bindgen-futures = "=0.4.77"
 
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = [
+    "-Oz",
+    "--enable-bulk-memory",
+    "--enable-bulk-memory-opt",
+    "--enable-nontrapping-float-to-int",
+]
+
+[profile.release]
+codegen-units = 1
+debug = false
+incremental = false
+lto = "fat"
+opt-level = "z"
+panic = "abort"
+strip = "symbols"
+
 [lints.rust]
 unsafe_code = "deny"
 
