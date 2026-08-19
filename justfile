@@ -179,7 +179,7 @@ example-web-e2e-functional: example-web-install bindings-wasm
 web-check: web-fmt-check web-lint web-build web-test example-web-fmt-check example-web-lint example-web-build example-web-test
 
 example-cpp-bindgen-build: bindings-cpp
-    cmake -S examples/cpp-bindgen -B target/cpp-bindgen-example -DCMAKE_BUILD_TYPE=Release
+    cmake -S examples/cpp-bindgen -B target/cpp-bindgen-example -U WALLET_ENGINE_LIBRARY -DCMAKE_BUILD_TYPE=Release
     cmake --build target/cpp-bindgen-example --config Release
 
 example-cpp-bindgen-run: example-cpp-bindgen-build
