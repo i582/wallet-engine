@@ -22,11 +22,11 @@ exclude = [
 resolver = "3"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.0.1"
 
 [workspace.dependencies]
-ton-connect-client = { path = "crates/ton-connect-client", version = "0.1.0" }
-ton-connect-core = { path = "crates/ton-connect-core", version = "0.1.0" }
+ton-connect-client = { path = "crates/ton-connect-client", version = "0.0.1" }
+ton-connect-core = { path = "crates/ton-connect-core", version = "0.0.1" }
 
 [lib]
 crate-type = ["rlib", "staticlib", "cdylib"]
