@@ -37,6 +37,6 @@ nonisolated extension WalletEngineFFI.WalletSnapshot {
     }
 
     var viewTransactions: [WalletTransaction] {
-        activity.map(WalletTransaction.init(engine:))
+        activity.items.map(WalletTransaction.init(engine:))
     }
 }

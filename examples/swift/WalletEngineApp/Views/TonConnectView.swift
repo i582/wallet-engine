@@ -54,6 +54,7 @@ struct TonConnectView: View {
             }
         }
         .platformModalPresentation()
+        .accessibilityIdentifier("ton-connect-sheet")
         .interactiveDismissDisabled(coordinator.isWorking)
         .defaultFocus($isLinkFocused, true)
         .onChange(of: coordinator.approval?.id) { _, _ in
@@ -322,7 +323,9 @@ private struct TonConnectAppIdentityView: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(status?.accessibilityLabel ?? "Connect to \(manifest.name)")
+        .accessibilityLabel(
+            status == nil ? "Connect to \(manifest.name)" : "Connected to \(manifest.name)"
+        )
         .accessibilityValue(manifest.domain)
     }
 }
@@ -348,13 +351,6 @@ private enum TonConnectAppStatus {
         switch self {
         case .connected:
             .green
-        }
-    }
-
-    var accessibilityLabel: String {
-        switch self {
-        case .connected:
-            "Connected to this app"
         }
     }
 }
@@ -456,7 +452,7 @@ private struct TonConnectTransactionView: View {
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 14)
-                            .padding(.top, 14)
+                            .padding(.top, 10)
                         PreviewRow(label: "Amount", value: amount(for: message))
                         PreviewRow(label: "Recipient", value: compact(message.destination))
                         PreviewRow(label: "Body", value: bodyLabel(for: message))
@@ -600,7 +596,8 @@ private struct PreviewRow: View {
                 .lineLimit(2)
                 .textSelection(.enabled)
         }
-        .padding(14)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
         .overlay(alignment: .bottom) {
             Divider()
         }

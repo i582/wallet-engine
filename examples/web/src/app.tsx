@@ -12,6 +12,7 @@ import {RecoveryScreen} from "@/components/recovery-screen"
 import {WalletDashboard} from "@/components/wallet-dashboard"
 import {WelcomeScreen} from "@/components/welcome-screen"
 import {fetchGramUsdRate} from "@/lib/tonapi-rates"
+import {errorMessage} from "@/lib/error-message"
 import {WalletSession} from "@/lib/wallet-session"
 
 interface TonConnectConnection {
@@ -295,13 +296,6 @@ function WalletLoading(): ReactElement {
       <p className="text-sm text-muted-foreground">Opening wallet…</p>
     </main>
   )
-}
-
-function errorMessage(cause: unknown): string {
-  if (cause instanceof Error) {
-    return cause.message
-  }
-  return "The wallet operation failed"
 }
 
 function isTonConnectLink(value: string): boolean {

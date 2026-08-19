@@ -178,7 +178,7 @@ class WalletRepository(private val store: SecureWalletStore) {
                 syncUtime = it.syncUtime.toLong(),
             )
         },
-        transactions = activity.map {
+        transactions = activity.items.map {
             WalletTransaction(
                 id = it.id,
                 transactionHash = it.transactionHash,
@@ -193,11 +193,11 @@ class WalletRepository(private val store: SecureWalletStore) {
             )
         },
         nextCursor = activityCursor?.let { TransactionCursor(it.logicalTime, it.hash) },
-        canLoadMore = activityHasMore,
+        canLoadMore = activity.hasMore,
         canForceRetry = send.resolution?.canForceRetry == true,
         accountError = accountResource.takeIf { it.phase == ResourcePhase.FAILED }
             ?.error?.developerMessage,
-        activityError = activityResource.takeIf { it.phase == ResourcePhase.FAILED }
+        activityError = activity.resource.takeIf { it.phase == ResourcePhase.FAILED }
             ?.error?.developerMessage,
     )
 

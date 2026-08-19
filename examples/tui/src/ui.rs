@@ -375,8 +375,8 @@ fn render_account_pane(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 Line::from(format!("revision  {}", snapshot.revision)),
                 Line::from(format!(
                     "history   {} item{}",
-                    snapshot.activity.len(),
-                    if snapshot.activity.len() == 1 {
+                    snapshot.activity.items.len(),
+                    if snapshot.activity.items.len() == 1 {
                         ""
                     } else {
                         "s"
@@ -384,7 +384,7 @@ fn render_account_pane(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 )),
                 Line::from(format!(
                     "more      {}",
-                    if snapshot.activity_has_more {
+                    if snapshot.activity.has_more {
                         "yes"
                     } else {
                         "no"
@@ -407,7 +407,7 @@ fn render_activity_pane(frame: &mut Frame<'_>, area: Rect, snapshot: Option<&Wal
         .bottom_margin(1);
 
     let rows = snapshot.into_iter().flat_map(|snapshot| {
-        snapshot.activity.iter().map(|item| {
+        snapshot.activity.items.iter().map(|item| {
             let (direction, sign, color) = match item.direction {
                 ActivityDirection::Received => ("IN", "+", SUCCESS),
                 ActivityDirection::Sent => ("OUT", "−", WARNING),
@@ -434,7 +434,7 @@ fn render_activity_pane(frame: &mut Frame<'_>, area: Rect, snapshot: Option<&Wal
         |snapshot| {
             format!(
                 " Activity · {} ",
-                resource_phase_label(snapshot.activity_resource.phase)
+                resource_phase_label(snapshot.activity.resource.phase)
             )
         },
     );
@@ -459,10 +459,10 @@ fn render_activity_pane(frame: &mut Frame<'_>, area: Rect, snapshot: Option<&Wal
     );
     frame.render_widget(table, area);
 
-    let empty = snapshot.is_none_or(|snapshot| snapshot.activity.is_empty());
+    let empty = snapshot.is_none_or(|snapshot| snapshot.activity.items.is_empty());
     if empty && area.height > 6 {
         let message = snapshot.map_or("No wallet snapshot", |snapshot| {
-            match snapshot.activity_resource.phase {
+            match snapshot.activity.resource.phase {
                 ResourcePhase::Failed => "Activity request failed",
                 ResourcePhase::Loading => "Loading activity…",
                 _ => "No transactions",

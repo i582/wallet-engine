@@ -162,7 +162,7 @@ private struct WalletDashboard: View {
 
     private var isLoadingHistory: Bool {
         guard !hasTerminalWalletFailure, activeWallet != nil else { return false }
-        return walletSnapshot == nil || walletSnapshot?.activityResource.phase == .loading
+        return walletSnapshot == nil || walletSnapshot?.activity.resource.phase == .loading
     }
 
     private var isRefreshing: Bool {
@@ -171,18 +171,18 @@ private struct WalletDashboard: View {
             return activeWallet != nil
         }
         return snapshot.accountResource.phase == .loading
-            || snapshot.activityResource.phase == .loading
+            || snapshot.activity.resource.phase == .loading
     }
 
     private var isLoadingMoreHistory: Bool {
         !hasTerminalWalletFailure
-            && walletSnapshot?.activityPaginationResource.phase == .loading
+            && walletSnapshot?.activity.paginationResource.phase == .loading
     }
 
     private var canLoadMoreHistory: Bool {
         !hasTerminalWalletFailure
-            && walletSnapshot?.activityHasMore == true
-            && walletSnapshot?.activityResource.phase != .loading
+            && walletSnapshot?.activity.hasMore == true
+            && walletSnapshot?.activity.resource.phase != .loading
     }
 
     private var hasTerminalWalletFailure: Bool {
@@ -190,7 +190,7 @@ private struct WalletDashboard: View {
     }
 
     private var historyError: String? {
-        hasTerminalWalletFailure || walletSnapshot?.activityResource.phase == .failed
+        hasTerminalWalletFailure || walletSnapshot?.activity.resource.phase == .failed
             ? "Could not load activity"
             : nil
     }
@@ -198,7 +198,7 @@ private struct WalletDashboard: View {
     private var hasRefreshNotice: Bool {
         hasTerminalWalletFailure
             || walletSnapshot?.accountResource.phase == .failed
-            || walletSnapshot?.activityResource.phase == .failed
+            || walletSnapshot?.activity.resource.phase == .failed
     }
 
     private var refreshDiagnostic: String? {
@@ -206,7 +206,7 @@ private struct WalletDashboard: View {
     }
 
     private var loadMoreHistoryError: String? {
-        walletSnapshot?.activityPaginationResource.phase == .failed
+        walletSnapshot?.activity.paginationResource.phase == .failed
             ? "Could not load more activity"
             : nil
     }
@@ -1041,6 +1041,7 @@ private struct RecentActivity: View {
                 if isLoading, !transactions.isEmpty {
                     ProgressView()
                         .controlSize(.small)
+                        .accessibilityIdentifier("activity-refreshing")
                 }
             }
 
@@ -1075,6 +1076,7 @@ private struct RecentActivity: View {
                             } label: {
                                 ActivityRow(transaction: transaction)
                             }
+                            .accessibilityIdentifier("activity-\(transaction.id)")
                             .buttonStyle(.plain)
                             if index < transactions.count - 1 {
                                 Divider()

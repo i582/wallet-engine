@@ -148,6 +148,38 @@ export interface SendEmulation {
   readonly isIncomplete: boolean
 }
 
+export interface ActivityList {
+  readonly items: ActivityItem[]
+  readonly resource: ResourceState
+  readonly paginationResource: ResourceState
+  readonly hasMore: boolean
+}
+
+export interface NftItem {
+  readonly address: string
+  readonly collectionAddress?: string
+  readonly ownerAddress?: string
+  readonly realOwner?: string
+  readonly saleContractAddress?: string
+  readonly auctionContractAddress?: string
+  readonly index: string
+  readonly lastTransactionLt: string
+  readonly initialized: boolean
+  readonly onSale: boolean
+  readonly codeHash: string
+  readonly dataHash: string
+  readonly content: Readonly<Record<string, string>>
+  readonly isNsfw?: boolean
+  readonly isScam?: boolean
+}
+
+export interface NftList {
+  readonly items: NftItem[]
+  readonly resource: ResourceState
+  readonly paginationResource: ResourceState
+  readonly hasMore: boolean
+}
+
 export interface WalletSnapshot {
   readonly revision: number
   readonly recordId: string
@@ -155,11 +187,9 @@ export interface WalletSnapshot {
   readonly network: Network
   readonly account?: AccountSnapshot
   readonly accountResource: ResourceState
-  readonly activity: ActivityItem[]
-  readonly activityResource: ResourceState
-  readonly activityPaginationResource: ResourceState
+  readonly activity: ActivityList
   readonly activityCursor?: ActivityCursor
-  readonly activityHasMore: boolean
+  readonly nfts: NftList
   readonly send: SendSnapshot
 }
 
@@ -172,6 +202,7 @@ export interface WalletUpdate {
     | "superseded"
     | "skipped"
   readonly activityItemsAdded: number
+  readonly nftItemsAdded: number
   readonly snapshot: WalletSnapshot
 }
 

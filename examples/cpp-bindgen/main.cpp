@@ -1083,8 +1083,8 @@ QString describe_update_errors(
         );
     }
     const auto &activity_resource = loading_more ?
-        update.snapshot.activity_pagination_resource :
-        update.snapshot.activity_resource;
+        update.snapshot.activity.pagination_resource :
+        update.snapshot.activity.resource;
     if (
         activity_resource.phase == ResourcePhase::kFailed &&
         activity_resource.error.has_value()
@@ -2410,7 +2410,7 @@ private:
                                 QStringLiteral("refresh"),
                 update_outcome_text(result.update->outcome)
             ).arg(
-                static_cast<qulonglong>(result.update->snapshot.activity.size())
+                static_cast<qulonglong>(result.update->snapshot.activity.items.size())
             ).arg(result.update->activity_items_added)
              .arg(result.update->snapshot.account.has_value() ?
                 QStringLiteral("available") : QStringLiteral("unavailable"))
@@ -2427,7 +2427,7 @@ private:
                     QStringLiteral("%1 older loaded · %2 total")
                         .arg(result.update->activity_items_added)
                         .arg(static_cast<qulonglong>(
-                            result.update->snapshot.activity.size()
+                            result.update->snapshot.activity.items.size()
                         ))
                 );
             }
@@ -2484,9 +2484,9 @@ private:
             );
             balance_hint_->setToolTip(account_error);
         }
-        render_activity(snapshot.activity);
+        render_activity(snapshot.activity.items);
         const auto &activity_resource = loading_more_ ?
-            snapshot.activity_pagination_resource : snapshot.activity_resource;
+            snapshot.activity.pagination_resource : snapshot.activity.resource;
         if (
             activity_resource.phase == ResourcePhase::kFailed &&
             activity_resource.error.has_value()
@@ -2497,17 +2497,17 @@ private:
             );
         } else {
             activity_status_->setText(
-                snapshot.activity.empty() ? QStringLiteral("No transactions") :
+                snapshot.activity.items.empty() ? QStringLiteral("No transactions") :
                     QStringLiteral("%1 transactions")
-                        .arg(static_cast<qulonglong>(snapshot.activity.size()))
+                        .arg(static_cast<qulonglong>(snapshot.activity.items.size()))
             );
             activity_status_->setToolTip({});
         }
         load_more_button_->setText(
-            snapshot.activity_has_more ? QStringLiteral("Load older") :
+            snapshot.activity.has_more ? QStringLiteral("Load older") :
                                          QStringLiteral("All loaded")
         );
-        load_more_button_->setEnabled(snapshot.activity_has_more);
+        load_more_button_->setEnabled(snapshot.activity.has_more);
     }
 
     void render_activity(const std::vector<ActivityItem> &activity) {

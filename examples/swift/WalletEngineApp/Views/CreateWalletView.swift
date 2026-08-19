@@ -375,10 +375,12 @@ private struct RecoveryPhraseView: View {
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .accessibilityLabel("Wallet address \(descriptor.address)")
+                    .accessibilityIdentifier("recovery-wallet-address")
 
                 if words.count == 24 {
                     RecoveryWordsGrid(words: words)
                         .privacySensitive()
+                        .accessibilityIdentifier("recovery-words")
                 } else {
                     ContentUnavailableView(
                         "Recovery phrase unavailable",
