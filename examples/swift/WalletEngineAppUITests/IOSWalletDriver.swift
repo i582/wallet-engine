@@ -331,7 +331,48 @@ final class IOSWalletDriver {
                 }
             }
         }
-        return SnapshotCapture(screenshot: element.screenshot(), masks: masks)
+        return SnapshotCapture(
+            screenshot: element.screenshot(),
+            masks: masks,
+            ignoredComparisonRegions: ignoredComparisonRegions(in: element, target: target)
+        )
+    }
+
+    /// Finds system chrome and dynamic transaction timestamps that are not snapshot state.
+    private func ignoredComparisonRegions(
+        in element: XCUIElement,
+        target: ScreenshotTarget
+    ) -> [CGRect] {
+        let origin = element.frame.origin
+        let navigationBar = app.navigationBars.firstMatch
+        let statusBarHeight = navigationBar.exists
+            ? max(0, navigationBar.frame.minY - element.frame.minY)
+            : 62
+        var regions = [CGRect(
+            x: 0,
+            y: 0,
+            width: element.frame.width,
+            height: statusBarHeight
+        )]
+        guard target == .page else {
+            return regions
+        }
+        let activityRows = app.buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "activity-")
+        )
+        for row in activityRows.allElementsBoundByIndex {
+            let timestamps = row.staticTexts.matching(
+                NSPredicate(format: "label CONTAINS %@", " at ")
+            )
+            for timestamp in timestamps.allElementsBoundByIndex {
+                regions.append(
+                    timestamp.frame
+                        .offsetBy(dx: -origin.x, dy: -origin.y)
+                        .insetBy(dx: -2, dy: -2)
+                )
+            }
+        }
+        return regions
     }
 
     /// Waits for one required accessibility element and reports a semantic name on failure.

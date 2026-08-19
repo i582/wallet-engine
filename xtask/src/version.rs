@@ -10,6 +10,7 @@ const ROOT_MANIFEST: &str = "Cargo.toml";
 const WASM_MANIFEST: &str = "bindgen/wasm/Cargo.toml";
 const WEB_MANIFEST: &str = "web/package.json";
 const CHANGELOG: &str = "CHANGELOG.md";
+const INTERNAL_CRATES: [&str; 2] = ["ton-connect-client", "ton-connect-core"];
 
 /// Identifies one release version and its canonical Git tag.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -53,6 +54,17 @@ pub(crate) fn verify_release_tag(root: &Path, tag: &str) -> Result<ReleaseVersio
     let release = ReleaseVersion::from_tag(tag)?;
     let expected = &release.version;
     verify_version(ROOT_MANIFEST, &project_version(root)?, expected)?;
+    for crate_name in INTERNAL_CRATES {
+        verify_version(
+            &format!("{ROOT_MANIFEST} workspace dependency `{crate_name}`"),
+            &read_toml_version(
+                root,
+                ROOT_MANIFEST,
+                &["workspace", "dependencies", crate_name, "version"],
+            )?,
+            expected,
+        )?;
+    }
     verify_version(
         WASM_MANIFEST,
         &read_toml_version(root, WASM_MANIFEST, &["package", "version"])?,
@@ -75,6 +87,14 @@ pub(crate) fn write_project_versions(root: &Path, version: &Version) -> Result<(
         &["workspace", "package", "version"],
         version,
     )?;
+    for crate_name in INTERNAL_CRATES {
+        update_toml_version(
+            root,
+            ROOT_MANIFEST,
+            &["workspace", "dependencies", crate_name, "version"],
+            version,
+        )?;
+    }
     update_toml_version(root, WASM_MANIFEST, &["package", "version"], version)?;
     update_json_version(root, WEB_MANIFEST, version)
 }

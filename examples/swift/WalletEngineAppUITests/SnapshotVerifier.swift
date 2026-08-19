@@ -4,7 +4,10 @@ import XCTest
 
 struct SnapshotCapture {
     let screenshot: XCUIScreenshot
+    /// Screen-point rectangles replaced before a screenshot is stored or attached.
     let masks: [CGRect]
+    /// Screen-point rectangles excluded from visual comparison.
+    let ignoredComparisonRegions: [CGRect]
 }
 
 enum SnapshotVerifierError: LocalizedError {
@@ -79,7 +82,21 @@ final class SnapshotVerifier {
         }
         let expected = try Data(contentsOf: baselineURL)
         do {
-            try compare(expected: expected, actual: actual)
+            let comparisonMasks = capture.masks.map { mask in
+                let minimumX = max(0, mask.minX - 4)
+                return CGRect(
+                    x: minimumX,
+                    y: max(0, mask.minY - 4),
+                    width: max(0, capture.screenshot.image.size.width - minimumX),
+                    height: mask.height + 8
+                )
+            }
+            try compare(
+                expected: expected,
+                actual: actual,
+                ignoring: comparisonMasks + capture.ignoredComparisonRegions,
+                pointSize: capture.screenshot.image.size
+            )
         } catch {
             attach(expected, name: "\(name)-expected")
             throw error
@@ -161,7 +178,12 @@ final class SnapshotVerifier {
     }
 
     /// Compares decoded RGBA pixels with a small anti-aliasing tolerance.
-    private func compare(expected: Data, actual: Data) throws {
+    private func compare(
+        expected: Data,
+        actual: Data,
+        ignoring regions: [CGRect],
+        pointSize: CGSize
+    ) throws {
         guard let expectedImage = UIImage(data: expected)?.cgImage else {
             throw SnapshotVerifierError.invalidImage("expected")
         }
@@ -175,8 +197,23 @@ final class SnapshotVerifier {
         }
         let expectedPixels = try rgbaPixels(expectedImage)
         let actualPixels = try rgbaPixels(actualImage)
+        let ignoredPixelRegions = scaledRegions(
+            regions,
+            from: pointSize,
+            to: expectedSize
+        )
         var differentPixels = 0
+        var comparedPixels = 0
         for pixel in stride(from: 0, to: expectedPixels.count, by: 4) {
+            let pixelIndex = pixel / 4
+            let coordinate = CGPoint(
+                x: pixelIndex % expectedImage.width,
+                y: pixelIndex / expectedImage.width
+            )
+            if ignoredPixelRegions.contains(where: { $0.contains(coordinate) }) {
+                continue
+            }
+            comparedPixels += 1
             let differs = (0..<4).contains { channel in
                 abs(
                     Int(expectedPixels[pixel + channel])
@@ -187,10 +224,30 @@ final class SnapshotVerifier {
                 differentPixels += 1
             }
         }
-        let pixelCount = expectedPixels.count / 4
-        let ratio = pixelCount == 0 ? 0 : Double(differentPixels) / Double(pixelCount)
+        let ratio = comparedPixels == 0 ? 0 : Double(differentPixels) / Double(comparedPixels)
         guard ratio <= Self.maximumDifferentPixelRatio else {
             throw SnapshotVerifierError.visualDifference(ratio: ratio)
+        }
+    }
+
+    /// Converts screen-point rectangles into the decoded image coordinate space.
+    private func scaledRegions(
+        _ regions: [CGRect],
+        from pointSize: CGSize,
+        to pixelSize: CGSize
+    ) -> [CGRect] {
+        guard pointSize.width > 0, pointSize.height > 0 else {
+            return []
+        }
+        let scaleX = pixelSize.width / pointSize.width
+        let scaleY = pixelSize.height / pointSize.height
+        return regions.map { region in
+            CGRect(
+                x: region.minX * scaleX,
+                y: region.minY * scaleY,
+                width: region.width * scaleX,
+                height: region.height * scaleY
+            )
         }
     }
 
