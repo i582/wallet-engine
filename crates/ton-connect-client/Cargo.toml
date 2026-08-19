@@ -1,6 +1,6 @@
 [package]
 name = "ton-connect-client"
-version = "0.1.0"
+version.workspace = true
 authors = ["TON Core"]
 edition = "2024"
 rust-version = "1.96.1"
@@ -12,7 +12,7 @@ readme = "README.md"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 thiserror = "=2.0.17"
-ton-connect-core = { path = "../ton-connect-core", version = "=0.1.0" }
+ton-connect-core = { path = "../ton-connect-core" }
 url = "=2.5.7"
 
 [dev-dependencies]

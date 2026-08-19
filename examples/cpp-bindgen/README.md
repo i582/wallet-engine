@@ -80,3 +80,7 @@ just example-cpp-bindgen-run
 
 Use `just example-cpp-bindgen-build` when you only need to build it. Both
 commands regenerate `bindings/cpp-experimental` first.
+
+Tagged releases also contain native archives for Linux and macOS. Each archive
+has the static library, shared library, generated C++20 wrapper, and a `CMake`
+package file.

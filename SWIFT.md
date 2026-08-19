@@ -28,6 +28,17 @@ matching `libwallet_engine.a` for its target. The generated `WalletHttpHost`
 and `WalletPlatformHost` protocols use Swift `async` methods. The generator
 adds the annotations required by Swift 6 strict concurrency.
 
+## Use a release package
+
+Each tagged release contains `wallet-engine-swift-VERSION.zip`. This archive is
+a local Swift package with the generated wrapper and a static `XCFramework`.
+
+Extract the archive. Then add its top-level directory as a local package in
+Xcode or `Package.swift`.
+
+The `XCFramework` contains macOS, iOS, and iOS Simulator slices. The minimum
+versions are macOS 15 and iOS 18.
+
 ## TON Connect
 
 The generated Swift module includes `TonConnectSession`, manifest parsing,

@@ -1,14 +1,19 @@
 mod android;
 mod bindings;
+mod dist;
 mod files;
 mod paths;
 mod process;
+mod release;
+mod version;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 use crate::android::{AndroidAbi, build_android};
 use crate::bindings::{generate_cpp, generate_kotlin, generate_swift, generate_wasm};
+use crate::dist::{DistArgs, run_dist};
+use crate::release::{ReleaseArgs, run_release};
 
 #[derive(Parser)]
 #[command(about = "Wallet Engine repository tasks")]
@@ -29,6 +34,10 @@ enum Command {
         #[arg(long, value_enum, default_value_t = AndroidAbi::All)]
         abi: AndroidAbi,
     },
+    /// Build and verify distributable release artifacts.
+    Dist(DistArgs),
+    /// Prepare and push one tag-driven release.
+    Release(ReleaseArgs),
 }
 
 #[derive(Subcommand)]
@@ -74,5 +83,7 @@ fn run() -> Result<()> {
             language: BindingLanguage::Wasm { check },
         } => generate_wasm(check),
         Command::Android { abi } => build_android(abi),
+        Command::Dist(args) => run_dist(&args),
+        Command::Release(args) => run_release(&args),
     }
 }

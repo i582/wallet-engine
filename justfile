@@ -245,6 +245,18 @@ kotlin-check: example-android-check
 
 bindings-check: kotlin-check swift-check web-check
 
+# Print the version shared by all public release packages.
+dist-version:
+    cargo xtask dist version
+
+# Make sure that a release tag matches all public package versions.
+dist-verify tag:
+    cargo xtask dist verify-tag --tag {{tag}}
+
+# Create and push an explicit tag-driven release.
+release version:
+    cargo xtask release --version {{version}}
+
 check-deny:
     cargo deny check
 

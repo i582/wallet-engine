@@ -11,16 +11,21 @@ use crate::paths::repository_root;
 use crate::process::{cargo_command, run_command};
 
 #[derive(Clone, Copy, Default, ValueEnum)]
+/// Selects the Android ABI libraries produced by one build.
 pub(crate) enum AndroidAbi {
+    /// Build every ABI supported by Wallet Engine.
     #[default]
     All,
+    /// Build the `arm64-v8a` library.
     #[value(name = "arm64-v8a")]
     Arm64,
+    /// Build the `x86_64` library.
     #[value(name = "x86_64")]
     X86_64,
 }
 
 impl AndroidAbi {
+    /// Returns the native targets represented by this CLI value.
     fn targets(self) -> &'static [AndroidTarget] {
         match self {
             Self::All => &ANDROID_TARGETS,
@@ -31,6 +36,7 @@ impl AndroidAbi {
 }
 
 #[derive(Clone, Copy)]
+/// Maps one Android ABI directory to its Rust target and NDK compiler prefix.
 struct AndroidTarget {
     abi: &'static str,
     rust_target: &'static str,
@@ -50,6 +56,7 @@ const ANDROID_TARGETS: [AndroidTarget; 2] = [
     },
 ];
 
+/// Builds Wallet Engine shared libraries for the selected Android ABIs.
 pub(crate) fn build_android(abi: AndroidAbi) -> Result<()> {
     let root = repository_root()?;
     let sdk = android_sdk()?;
@@ -63,7 +70,8 @@ pub(crate) fn build_android(abi: AndroidAbi) -> Result<()> {
     Ok(())
 }
 
-fn android_sdk() -> Result<PathBuf> {
+/// Returns the Android SDK used by native and Gradle release builds.
+pub(crate) fn android_sdk() -> Result<PathBuf> {
     env::var_os("ANDROID_SDK_ROOT")
         .or_else(|| env::var_os("ANDROID_HOME"))
         .map(PathBuf::from)
@@ -71,6 +79,7 @@ fn android_sdk() -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("ANDROID_SDK_ROOT or ANDROID_HOME must be configured"))
 }
 
+/// Compiles and stages one Android shared library in the standard JNI directory.
 fn build_target(
     root: &Path,
     target_dir: &Path,
@@ -104,6 +113,7 @@ fn build_target(
     )
 }
 
+/// Selects the newest numerically versioned NDK installed in the Android SDK.
 fn latest_ndk(ndk_root: &Path) -> Result<PathBuf> {
     let entries = fs::read_dir(ndk_root).context("failed to read Android NDK directory")?;
     let mut versions = entries
@@ -117,6 +127,7 @@ fn latest_ndk(ndk_root: &Path) -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("Android NDK is required under {}", ndk_root.display()))
 }
 
+/// Converts an NDK directory name to components that sort numerically.
 fn version_key(path: &Path) -> Vec<u64> {
     path.file_name()
         .and_then(OsStr::to_str)
@@ -126,6 +137,7 @@ fn version_key(path: &Path) -> Vec<u64> {
         .collect()
 }
 
+/// Finds the NDK compiler directory for the current host operating system.
 fn android_toolchain(ndk: &Path) -> Result<PathBuf> {
     let prebuilt = ndk.join("toolchains/llvm/prebuilt");
     let candidates: &[&str] = match env::consts::OS {
@@ -146,6 +158,7 @@ fn android_toolchain(ndk: &Path) -> Result<PathBuf> {
         })
 }
 
+/// Finds the API 28 Clang linker for one Android target.
 fn android_linker(toolchain: &Path, prefix: &str) -> Result<PathBuf> {
     let base = toolchain.join(format!("{prefix}28-clang"));
     let candidates = [

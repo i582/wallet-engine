@@ -28,12 +28,23 @@ The Android module needs these runtime dependencies:
 ```kotlin
 implementation("androidx.annotation:annotation:1.9.1")
 implementation("net.java.dev.jna:jna:5.12.0@aar")
-implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
+implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
 ```
 
 The generated `WalletHttpHost` and `WalletPlatformHost` callbacks and the
 exported engine methods use Kotlin `suspend` functions. No handwritten JNI
 adapter is required.
+
+## Use a release package
+
+Each tagged release contains `wallet-engine-android-VERSION.aar` and matching
+Maven metadata. The AAR contains the Kotlin wrapper and native libraries for
+`arm64-v8a` and `x86_64`.
+
+Add the AAR to the application as a local dependency. Add the runtime
+dependencies from this document to the application module.
+
+The release AAR requires Android API level 28 or newer.
 
 ## TON Connect
 

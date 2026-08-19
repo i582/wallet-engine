@@ -6,6 +6,15 @@ The local TypeScript package is named `@ton/wallet-engine`.
 This repository does not publish the package to npm. Link the `web` directory
 as a workspace package while you develop an application.
 
+Each tagged release contains `ton-wallet-engine-VERSION.tgz`. The archive has
+the TypeScript API, declarations, JavaScript module, and WebAssembly runtime.
+
+Install the downloaded archive with your package manager. For example:
+
+```shell
+npm install ./ton-wallet-engine-0.1.0.tgz
+```
+
 The package contains no user interface. Your application owns its screens,
 routing, wallet metadata, and stream connections.
 

@@ -5,6 +5,9 @@ bindgen/kotlin/target/
 bindgen/wasm/target/
 bindgen/cpp/target/
 xtask/target/
+/packaging/android/.gradle/
+/packaging/android/build/
+/packaging/android/local.properties
 
 # Generated foreign-language bindings
 /bindings/

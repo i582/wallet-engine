@@ -1,0 +1,253 @@
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use anyhow::{Context, Result, bail};
+use clap::Args;
+use serde::Serialize;
+
+use crate::dist::{output_directory, prepare_output_directory, sha256, write_checksum};
+use crate::process::command_output;
+use crate::version::{project_version, release_notes};
+
+/// Selects directories used to validate and describe release assets.
+#[derive(Args)]
+pub(crate) struct ManifestArgs {
+    /// Directory containing artifacts downloaded from platform jobs.
+    #[arg(long)]
+    input: Option<PathBuf>,
+    /// Directory that receives global release metadata.
+    #[arg(long)]
+    output: Option<PathBuf>,
+}
+
+/// Describes one complete GitHub Release build.
+#[derive(Serialize)]
+struct ReleaseManifest {
+    version: String,
+    tag: String,
+    commit: String,
+    prerelease: bool,
+    artifacts: Vec<ReleaseArtifact>,
+}
+
+/// Describes one downloadable package and its integrity digest.
+#[derive(Serialize)]
+struct ReleaseArtifact {
+    name: String,
+    kind: &'static str,
+    target: Option<&'static str>,
+    size: u64,
+    sha256: String,
+}
+
+/// Validates the artifact set and writes release manifest, notes, and global checksums.
+pub(crate) fn run(root: &Path, args: &ManifestArgs) -> Result<()> {
+    let version = project_version(root)?;
+    let input = output_directory(root, args.input.as_deref());
+    let output = prepare_output_directory(root, args.output.as_deref().or(args.input.as_deref()))?;
+    let expected = expected_artifacts(&version.to_string());
+    let actual = release_assets(&input)?;
+    if actual != expected {
+        let missing = expected.difference(&actual).cloned().collect::<Vec<_>>();
+        let unexpected = actual.difference(&expected).cloned().collect::<Vec<_>>();
+        bail!(
+            "release asset set is incomplete; missing: [{}]; unexpected: [{}]",
+            missing.join(", "),
+            unexpected.join(", ")
+        );
+    }
+
+    let mut artifacts = Vec::new();
+    for name in &expected {
+        let path = input.join(name);
+        let digest = sha256(&path)?;
+        verify_sidecar(&path, &digest)?;
+        let metadata =
+            fs::metadata(&path).with_context(|| format!("failed to inspect {}", path.display()))?;
+        let (kind, target) = classify(name);
+        artifacts.push(ReleaseArtifact {
+            name: name.clone(),
+            kind,
+            target,
+            size: metadata.len(),
+            sha256: digest,
+        });
+    }
+
+    let commit = command_output(
+        Command::new("git")
+            .current_dir(root)
+            .args(["rev-parse", "HEAD"]),
+    )?;
+    let manifest = ReleaseManifest {
+        version: version.to_string(),
+        tag: format!("v{version}"),
+        commit: commit.trim().to_owned(),
+        prerelease: !version.pre.is_empty(),
+        artifacts,
+    };
+    let manifest_path = output.join("release-manifest.json");
+    fs::write(
+        &manifest_path,
+        format!("{}\n", serde_json::to_string_pretty(&manifest)?),
+    )?;
+    let _manifest_checksum = write_checksum(&manifest_path)?;
+    fs::write(
+        output.join("release-notes.md"),
+        release_notes(root, &version)?,
+    )?;
+    write_global_checksums(&input, &output, &expected, &manifest_path)?;
+    println!("{}", manifest_path.display());
+    Ok(())
+}
+
+/// Returns the exact downloadable asset names required for one release.
+fn expected_artifacts(version: &str) -> BTreeSet<String> {
+    [
+        format!("wallet-engine-{version}-x86_64-unknown-linux-gnu.tar.gz"),
+        format!("wallet-engine-{version}-aarch64-unknown-linux-gnu.tar.gz"),
+        format!("wallet-engine-{version}-x86_64-apple-darwin.tar.gz"),
+        format!("wallet-engine-{version}-aarch64-apple-darwin.tar.gz"),
+        format!("wallet-engine-swift-{version}.zip"),
+        format!("wallet-engine-android-{version}.aar"),
+        format!("wallet-engine-android-{version}.pom"),
+        format!("ton-wallet-engine-{version}.tgz"),
+    ]
+    .into_iter()
+    .collect()
+}
+
+/// Finds release assets while excluding checksums and generated global metadata.
+fn release_assets(input: &Path) -> Result<BTreeSet<String>> {
+    let mut assets = BTreeSet::new();
+    for entry in fs::read_dir(input)
+        .with_context(|| format!("failed to read release directory {}", input.display()))?
+    {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.ends_with(".sha256")
+            || matches!(
+                name.as_str(),
+                "release-manifest.json" | "release-notes.md" | "SHA256SUMS"
+            )
+        {
+            continue;
+        }
+        assets.insert(name);
+    }
+    Ok(assets)
+}
+
+/// Verifies the checksum generated by the platform packaging job.
+fn verify_sidecar(asset: &Path, expected: &str) -> Result<()> {
+    let name = asset
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("release asset name is not valid UTF-8")?;
+    let sidecar = asset.with_file_name(format!("{name}.sha256"));
+    let source = fs::read_to_string(&sidecar)
+        .with_context(|| format!("missing checksum sidecar {}", sidecar.display()))?;
+    let actual = source.split_whitespace().next().unwrap_or_default();
+    if actual == expected {
+        Ok(())
+    } else {
+        bail!("checksum mismatch for {name}: sidecar has `{actual}`, computed `{expected}`")
+    }
+}
+
+/// Assigns a stable artifact kind and target for release tooling consumers.
+fn classify(name: &str) -> (&'static str, Option<&'static str>) {
+    for target in [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-apple-darwin",
+        "aarch64-apple-darwin",
+    ] {
+        if name.contains(target) {
+            return ("native", Some(target));
+        }
+    }
+    if name.contains("swift") {
+        ("swift", None)
+    } else if name.contains("android") {
+        ("android", None)
+    } else {
+        ("web", None)
+    }
+}
+
+/// Writes one sorted checksum list for assets and the release manifest.
+fn write_global_checksums(
+    input: &Path,
+    output: &Path,
+    assets: &BTreeSet<String>,
+    manifest: &Path,
+) -> Result<()> {
+    let mut lines = Vec::new();
+    for name in assets {
+        lines.push(format!("{}  {name}", sha256(&input.join(name))?));
+    }
+    lines.push(format!("{}  release-manifest.json", sha256(manifest)?));
+    lines.sort();
+    fs::write(output.join("SHA256SUMS"), format!("{}\n", lines.join("\n")))?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::{
+        classify, expected_artifacts, release_assets, verify_sidecar, write_global_checksums,
+    };
+    use crate::dist::{sha256, write_checksum};
+
+    #[test]
+    fn expects_every_release_package() {
+        let names = expected_artifacts("1.2.3");
+        assert_eq!(names.len(), 8);
+        assert!(names.contains("wallet-engine-swift-1.2.3.zip"));
+        assert!(names.contains("wallet-engine-android-1.2.3.aar"));
+        assert!(names.contains("ton-wallet-engine-1.2.3.tgz"));
+    }
+
+    #[test]
+    fn classifies_native_target_and_language_packages() {
+        assert_eq!(
+            classify("wallet-engine-1.2.3-aarch64-unknown-linux-gnu.tar.gz"),
+            ("native", Some("aarch64-unknown-linux-gnu"))
+        );
+        assert_eq!(classify("wallet-engine-swift-1.2.3.zip"), ("swift", None));
+        assert_eq!(
+            classify("wallet-engine-android-1.2.3.aar"),
+            ("android", None)
+        );
+        assert_eq!(classify("ton-wallet-engine-1.2.3.tgz"), ("web", None));
+    }
+
+    #[test]
+    fn validates_complete_assets_and_writes_global_checksums() -> anyhow::Result<()> {
+        let temporary = tempfile::tempdir()?;
+        let expected = expected_artifacts("1.2.3");
+        for name in &expected {
+            let path = temporary.path().join(name);
+            fs::write(&path, name.as_bytes())?;
+            write_checksum(&path)?;
+            verify_sidecar(&path, &sha256(&path)?)?;
+        }
+        assert_eq!(release_assets(temporary.path())?, expected);
+
+        let manifest = temporary.path().join("release-manifest.json");
+        fs::write(&manifest, b"{}\n")?;
+        write_global_checksums(temporary.path(), temporary.path(), &expected, &manifest)?;
+        let checksums = fs::read_to_string(temporary.path().join("SHA256SUMS"))?;
+        assert_eq!(checksums.lines().count(), expected.len() + 1);
+        assert!(checksums.contains("release-manifest.json"));
+        Ok(())
+    }
+}
