@@ -8,11 +8,14 @@ import type {
 import {parseTonConnectLink} from "@ton/wallet-engine"
 import {type ReactElement, useEffect, useState} from "react"
 
+import {CollectiblesPage} from "@/components/collectibles-page"
+import {NftDetailPage} from "@/components/nft-detail-page"
 import {RecoveryScreen} from "@/components/recovery-screen"
 import {WalletDashboard} from "@/components/wallet-dashboard"
 import {WelcomeScreen} from "@/components/welcome-screen"
-import {fetchGramUsdRate} from "@/lib/tonapi-rates"
 import {errorMessage} from "@/lib/error-message"
+import {type NftRoute, parseNftRoute} from "@/lib/nft-route"
+import {fetchGramUsdRate} from "@/lib/tonapi-rates"
 import {WalletSession} from "@/lib/wallet-session"
 
 interface TonConnectConnection {
@@ -27,13 +30,22 @@ export function App(): ReactElement {
   const [creating, setCreating] = useState<boolean>(false)
   const [refreshing, setRefreshing] = useState<boolean>(false)
   const [loadingMore, setLoadingMore] = useState<boolean>(false)
+  const [loadingMoreNfts, setLoadingMoreNfts] = useState<boolean>(false)
   const [error, setError] = useState<string>()
   const [restoring, setRestoring] = useState<boolean>(true)
   const [gramUsdRate, setGramUsdRate] = useState<number>()
   const [tonConnectInteraction, setTonConnectInteraction] = useState<TonConnectInteraction>()
   const [tonConnectConnection, setTonConnectConnection] = useState<TonConnectConnection>()
+  const [nftRoute, setNftRoute] = useState<NftRoute>(() => parseNftRoute(globalThis.location.hash))
   const connectedDappName: string | undefined =
     tonConnectConnection?.kind === "connected" ? tonConnectConnection.dappName : undefined
+
+  useEffect(() => {
+    // biome-ignore lint/correctness/useQwikValidLexicalScope: this is a React hashchange subscription.
+    const syncNftRoute = (): void => setNftRoute(parseNftRoute(globalThis.location.hash))
+    globalThis.addEventListener("hashchange", syncNftRoute)
+    return () => globalThis.removeEventListener("hashchange", syncNftRoute)
+  }, [])
 
   useEffect(() => {
     let active: boolean = true
@@ -59,7 +71,8 @@ export function App(): ReactElement {
         setSession(restored)
         setSnapshot(restored.snapshot())
         try {
-          setSnapshot(await restored.refresh())
+          await Promise.all([restored.refresh(), restored.refreshNfts()])
+          setSnapshot(restored.snapshot())
         } catch (cause) {
           setError(errorMessage(cause))
         }
@@ -172,7 +185,8 @@ export function App(): ReactElement {
       .then((rate: number) => setGramUsdRate(rate))
       .catch(() => undefined)
     try {
-      setSnapshot(await session.refresh())
+      await Promise.all([session.refresh(), session.refreshNfts()])
+      setSnapshot(session.snapshot())
     } catch (cause) {
       setError(errorMessage(cause))
     } finally {
@@ -193,6 +207,21 @@ export function App(): ReactElement {
       setError(errorMessage(cause))
     } finally {
       setLoadingMore(false)
+    }
+  }
+
+  async function loadMoreNfts(): Promise<void> {
+    if (!session || loadingMoreNfts || refreshing) {
+      return
+    }
+    setLoadingMoreNfts(true)
+    setError(undefined)
+    try {
+      setSnapshot(await session.loadMoreNfts())
+    } catch (cause) {
+      setError(errorMessage(cause))
+    } finally {
+      setLoadingMoreNfts(false)
     }
   }
 
@@ -264,11 +293,33 @@ export function App(): ReactElement {
   }
 
   if (session && snapshot) {
+    if (nftRoute.kind === "collection") {
+      return (
+        <CollectiblesPage
+          loadingMore={loadingMoreNfts}
+          nfts={snapshot.nfts}
+          refreshing={refreshing}
+          onLoadMore={loadMoreNfts}
+          onRefresh={refreshWallet}
+        />
+      )
+    }
+    if (nftRoute.kind === "detail") {
+      return (
+        <NftDetailPage
+          hasMore={snapshot.nfts.hasMore}
+          item={snapshot.nfts.items.find(item => item.address === nftRoute.address)}
+          loadingMore={loadingMoreNfts}
+          onLoadMore={loadMoreNfts}
+        />
+      )
+    }
     return (
       <WalletDashboard
         error={error}
         gramUsdRate={gramUsdRate}
         loadingMore={loadingMore}
+        loadingMoreNfts={loadingMoreNfts}
         refreshing={refreshing}
         snapshot={snapshot}
         connectedDappName={connectedDappName}
@@ -276,6 +327,7 @@ export function App(): ReactElement {
         onDismissError={() => setError(undefined)}
         onForget={forgetWallet}
         onLoadMore={loadMoreActivity}
+        onLoadMoreNfts={loadMoreNfts}
         onCancelSendPreview={cancelTransferPreview}
         onPreviewSend={previewTransfer}
         onRefresh={refreshWallet}

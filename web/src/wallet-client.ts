@@ -70,6 +70,26 @@ export class WalletClient {
     await this.raw.cancelLoadMoreActivity()
   }
 
+  async refreshNfts(): Promise<WalletUpdate> {
+    this.assertOpen()
+    return (await this.raw.refreshNfts()) as WalletUpdate
+  }
+
+  async cancelRefreshNfts(): Promise<void> {
+    this.assertOpen()
+    await this.raw.cancelRefreshNfts()
+  }
+
+  async loadMoreNfts(): Promise<WalletUpdate> {
+    this.assertOpen()
+    return (await this.raw.loadMoreNfts()) as WalletUpdate
+  }
+
+  async cancelLoadMoreNfts(): Promise<void> {
+    this.assertOpen()
+    await this.raw.cancelLoadMoreNfts()
+  }
+
   async send(request: SendRequest): Promise<SendResult> {
     this.assertOpen()
     return (await this.raw.send(request)) as SendResult

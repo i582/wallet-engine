@@ -90,6 +90,42 @@ impl WalletClient {
             .map_err(|error| engine_error(&error))
     }
 
+    #[wasm_bindgen(js_name = refreshNfts)]
+    pub async fn refresh_nfts(&self) -> Result<JsValue, JsValue> {
+        let update = self
+            .inner
+            .refresh_nfts()
+            .await
+            .map_err(|error| engine_error(&error))?;
+        to_value(&update)
+    }
+
+    #[wasm_bindgen(js_name = cancelRefreshNfts)]
+    pub async fn cancel_refresh_nfts(&self) -> Result<(), JsValue> {
+        self.inner
+            .cancel_refresh_nfts()
+            .await
+            .map_err(|error| engine_error(&error))
+    }
+
+    #[wasm_bindgen(js_name = loadMoreNfts)]
+    pub async fn load_more_nfts(&self) -> Result<JsValue, JsValue> {
+        let update = self
+            .inner
+            .load_more_nfts()
+            .await
+            .map_err(|error| engine_error(&error))?;
+        to_value(&update)
+    }
+
+    #[wasm_bindgen(js_name = cancelLoadMoreNfts)]
+    pub async fn cancel_load_more_nfts(&self) -> Result<(), JsValue> {
+        self.inner
+            .cancel_load_more_nfts()
+            .await
+            .map_err(|error| engine_error(&error))
+    }
+
     pub async fn send(&self, request: JsValue) -> Result<JsValue, JsValue> {
         let request = from_value(request)?;
         let result = self

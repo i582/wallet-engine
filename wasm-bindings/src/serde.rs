@@ -9,5 +9,8 @@ pub(crate) fn from_value<T: DeserializeOwned>(value: JsValue) -> Result<T, JsVal
 }
 
 pub(crate) fn to_value<T: Serialize>(value: &T) -> Result<JsValue, JsValue> {
-    serde_wasm_bindgen::to_value(value).map_err(|error| binding_error(&error.to_string()))
+    // Public TypeScript records use plain objects; the default serializer emits JavaScript Map.
+    value
+        .serialize(&serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true))
+        .map_err(|error| binding_error(&error.to_string()))
 }

@@ -162,6 +162,53 @@ describe("high-level WASM API", () => {
     expect(update.snapshot.accountResource.error?.hostKind).toBe("connectionLost")
   })
 
+  test("preserves indexed NFT names and inline SVG artwork at the WASM boundary", async () => {
+    const lifecycle = await WalletLifecycle.create(platform)
+    lifecycles.push(lifecycle)
+    const created = await lifecycle.createWallet({
+      recordId: "inline-nft-wallet",
+      network: "testnet",
+    })
+    const itemAddress = `0:${"2B".repeat(32)}`
+    const inlineSvg = "data:image/svg+xml,%3Csvg%2F%3E"
+    const client = await WalletClient.create(walletConfig(created.descriptor), {
+      platformHost: platform,
+      fetch: mockFetch(async input => {
+        expect(String(input)).toContain("/api/v3/nft/items?")
+        return Response.json({
+          nft_items: [
+            {
+              address: itemAddress,
+              code_hash: "code",
+              collection_address: null,
+              content: {
+                description: "Few have witnessed such magnificence.",
+                image: inlineSvg,
+                name: "Shadow Reaper",
+              },
+              data_hash: "data",
+              index: "0",
+              init: true,
+              last_transaction_lt: "90751083000003",
+              on_sale: false,
+              owner_address: created.descriptor.address,
+              real_owner: created.descriptor.address,
+            },
+          ],
+        })
+      }),
+    })
+    clients.push(client)
+
+    const update = await client.refreshNfts()
+    const [item] = update.snapshot.nfts.items
+
+    expect(update.outcome).toBe("completed")
+    expect(item?.content.name).toBe("Shadow Reaper")
+    expect(item?.content.description).toBe("Few have witnessed such magnificence.")
+    expect(item?.content.image).toBe(inlineSvg)
+  })
+
   test("accepts the camel-case exact expiration field at the WASM boundary", async () => {
     const lifecycle = await WalletLifecycle.create(platform)
     lifecycles.push(lifecycle)

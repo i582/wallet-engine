@@ -119,6 +119,16 @@ export class WalletSession {
     return (await this.client.loadMoreActivity()).snapshot
   }
 
+  async refreshNfts(): Promise<WalletSnapshot> {
+    this.assertOpen()
+    return (await this.client.refreshNfts()).snapshot
+  }
+
+  async loadMoreNfts(): Promise<WalletSnapshot> {
+    this.assertOpen()
+    return (await this.client.loadMoreNfts()).snapshot
+  }
+
   async previewSend(destination: string, amountNanograms: string): Promise<SendPreview> {
     this.assertOpen()
     return await this.client.previewSend({

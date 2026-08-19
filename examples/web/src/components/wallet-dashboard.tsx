@@ -22,6 +22,7 @@ import type {
 import {type ReactElement, useEffect, useId, useState} from "react"
 
 import {SendForm} from "@/components/send-form"
+import {NftShelf} from "@/components/nft-shelf"
 import {TonConnectDialog} from "@/components/ton-connect-dialog"
 import {TransactionView} from "@/components/transaction-view"
 import {Alert, AlertDescription, AlertTitle} from "@/components/ui/alert"
@@ -41,12 +42,14 @@ export interface WalletDashboardProps {
   readonly gramUsdRate?: number
   readonly refreshing: boolean
   readonly loadingMore: boolean
+  readonly loadingMoreNfts: boolean
   readonly error?: string
   readonly connectedDappName?: string
   readonly tonConnectInteraction?: TonConnectInteraction
   readonly onDismissError: () => void
   readonly onRefresh: () => Promise<void>
   readonly onLoadMore: () => Promise<void>
+  readonly onLoadMoreNfts: () => Promise<void>
   readonly onForget: () => Promise<void>
   readonly onPreviewSend: (destination: string, amountNanograms: string) => Promise<SendPreview>
   readonly onCancelSendPreview: () => Promise<void>
@@ -65,12 +68,14 @@ export function WalletDashboard({
   gramUsdRate,
   refreshing,
   loadingMore,
+  loadingMoreNfts,
   error,
   connectedDappName,
   tonConnectInteraction,
   onDismissError,
   onRefresh,
   onLoadMore,
+  onLoadMoreNfts,
   onForget,
   onPreviewSend,
   onCancelSendPreview,
@@ -227,7 +232,19 @@ export function WalletDashboard({
           <ResourceError label="Account data is unavailable." onRetry={onRefresh} />
         ) : null}
 
-        <section className={error ? "mt-7" : "mt-2"}>
+        <div
+          className={`${error ? "mt-7" : "mt-2"} rounded-[1.65rem] border border-border bg-card px-5 py-5`}
+        >
+          <NftShelf
+            loadingMore={loadingMoreNfts}
+            nfts={snapshot.nfts}
+            refreshing={refreshing}
+            onLoadMore={onLoadMoreNfts}
+            onRetry={onRefresh}
+          />
+        </div>
+
+        <section className="mt-4 rounded-[1.65rem] border border-border bg-card px-5 py-5">
           <div className="flex items-end justify-between gap-4">
             <h2 className="text-xl font-semibold tracking-[-0.03em]">Recent activity</h2>
           </div>

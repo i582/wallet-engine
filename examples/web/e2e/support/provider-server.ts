@@ -12,6 +12,10 @@ import {ActonLocalnet} from "./acton-localnet"
 
 const DEFAULT_PORT: number = 5198
 const WALLET_BALANCE_NANOGRAMS: string = "10000000000"
+const SCRIPTED_NFT_OWNER: string =
+  "0:1111111111111111111111111111111111111111111111111111111111111111"
+const SCRIPTED_NFT_COLLECTION: string =
+  "0:4444444444444444444444444444444444444444444444444444444444444444"
 const REPOSITORY_ROOT: string = path.resolve(import.meta.dirname, "../../../..")
 const TLS_FIXTURES: string = path.join(REPOSITORY_ROOT, "tests/ton-connect/dapp/fixtures")
 
@@ -66,6 +70,16 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     return
   }
 
+  if (request.method === "GET" && requestUrl.pathname === "/e2e/nft-art.svg") {
+    sendBytes(
+      response,
+      200,
+      Buffer.from(scriptedNftArtwork(requestUrl.searchParams.get("variant"))),
+      "image/svg+xml; charset=utf-8",
+    )
+    return
+  }
+
   if (providerMode === "localnet") {
     await proxyLocalnetRequest(request, requestUrl, response)
     return
@@ -104,6 +118,15 @@ function scriptedResponse(
 
   if (requestUrl.pathname.endsWith("/api/v2/getTransactions")) {
     sendJson(response, 200, {ok: true, result: []})
+    return
+  }
+
+  if (requestUrl.pathname.endsWith("/api/v3/nft/items")) {
+    sendJson(
+      response,
+      200,
+      scriptedNftItems(requestUrl.searchParams.get("owner_address") ?? SCRIPTED_NFT_OWNER),
+    )
     return
   }
 
@@ -299,6 +322,76 @@ function corsHeaders(): Record<string, string> {
     "access-control-allow-methods": "GET, POST, OPTIONS",
     "access-control-allow-origin": "*",
   }
+}
+
+/** Returns collectible fixtures so screenshots exercise real metadata and artwork rendering. */
+function scriptedNftItems(ownerAddress: string): unknown {
+  return {
+    nft_items: [
+      {
+        address: "0:2222222222222222222222222222222222222222222222222222222222222222",
+        code_hash: "scripted-code-aurora",
+        collection: {
+          address: SCRIPTED_NFT_COLLECTION,
+          collection_content: {name: "Acton Originals"},
+        },
+        content: {
+          description: "A deterministic collectible used by the wallet example.",
+          image: scriptedNftDataUri("aurora"),
+          name: "Aurora Relay",
+        },
+        data_hash: "scripted-data-aurora",
+        index: "1",
+        init: true,
+        last_transaction_lt: "200",
+        on_sale: true,
+        owner_address: ownerAddress,
+      },
+      {
+        address: "0:3333333333333333333333333333333333333333333333333333333333333333",
+        code_hash: "scripted-code-signal",
+        collection: {
+          address: SCRIPTED_NFT_COLLECTION,
+          collection_content: {name: "Acton Originals"},
+        },
+        content: {
+          description: "A second fixture that verifies horizontal collection layout.",
+          image_url: scriptedNftArtworkUrl("signal"),
+          name: "Signal Bloom",
+        },
+        data_hash: "scripted-data-signal",
+        index: "2",
+        init: true,
+        last_transaction_lt: "100",
+        on_sale: false,
+        owner_address: ownerAddress,
+      },
+    ],
+  }
+}
+
+function scriptedNftArtworkUrl(variant: string): string {
+  const protocol: string = servesInsecureHttp ? "http" : "https"
+  return `${protocol}://127.0.0.1:${port}/e2e/nft-art.svg?variant=${variant}`
+}
+
+function scriptedNftDataUri(variant: string): string {
+  return `data:image/svg+xml,${encodeURIComponent(scriptedNftArtwork(variant))}`
+}
+
+/** Produces local flat artwork without relying on third-party image hosts. */
+function scriptedNftArtwork(variant: string | null): string {
+  const signal: boolean = variant === "signal"
+  const background: string = signal ? "#182119" : "#181c2b"
+  const accent: string = signal ? "#9dd49a" : "#b9b5ff"
+  const secondary: string = signal ? "#f1c68a" : "#87d7d0"
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 640" role="img">
+  <rect width="640" height="640" fill="${background}"/>
+  <circle cx="180" cy="170" r="112" fill="${accent}"/>
+  <circle cx="465" cy="430" r="150" fill="${secondary}"/>
+  <path d="M92 510 327 98l221 414Z" fill="none" stroke="#f7f5ef" stroke-width="26"/>
+  <circle cx="320" cy="320" r="54" fill="${background}" stroke="#f7f5ef" stroke-width="18"/>
+</svg>`
 }
 
 /** Returns a successful trace rooted at the wallet most recently loaded by the engine. */
