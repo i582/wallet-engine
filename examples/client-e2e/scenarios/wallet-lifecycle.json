@@ -1,0 +1,85 @@
+{
+  "name": "create and restore a wallet",
+  "steps": [
+    {
+      "action": {
+        "kind": "wallet.open"
+      },
+      "phase": "given"
+    },
+    {
+      "action": {
+        "kind": "expect.ui.welcome"
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "kind": "expect.screenshot",
+        "name": "wallet-welcome",
+        "target": "page"
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "kind": "wallet.create"
+      },
+      "phase": "when"
+    },
+    {
+      "action": {
+        "kind": "expect.ui.recovery"
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "kind": "expect.screenshot",
+        "name": "wallet-recovery",
+        "target": "recovery"
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "kind": "wallet.acceptRecovery"
+      },
+      "phase": "when"
+    },
+    {
+      "action": {
+        "kind": "expect.ui.dashboard"
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "kind": "expect.screenshot",
+        "name": "wallet-dashboard",
+        "target": "page"
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "kind": "wallet.reloadDashboard"
+      },
+      "phase": "when"
+    },
+    {
+      "action": {
+        "kind": "expect.ui.dashboard"
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "kind": "expect.screenshot",
+        "name": "wallet-restored-dashboard",
+        "target": "page"
+      },
+      "phase": "then"
+    }
+  ]
+}

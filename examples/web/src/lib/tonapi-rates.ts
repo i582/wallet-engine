@@ -1,4 +1,5 @@
-const TONAPI_RATE_URL: string = "https://tonapi.io/v2/rates?tokens=ton&currencies=usd"
+const TONAPI_RATE_URL: string =
+  import.meta.env.VITE_TONAPI_RATE_URL ?? "https://tonapi.io/v2/rates?tokens=ton&currencies=usd"
 
 export async function fetchGramUsdRate(
   fetcher: typeof globalThis.fetch = globalThis.fetch,

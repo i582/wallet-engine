@@ -1,0 +1,175 @@
+{
+  "name": "connect and reject a two-message TON Connect transaction",
+  "steps": [
+    {
+      "action": {
+        "config": {
+          "inNetwork": "-3",
+          "manifest": {
+            "iconUrl": "{actor_origin}/icon.png",
+            "name": "Wallet Engine client E2E dApp",
+            "url": "https://app.example"
+          },
+          "manifestUrl": "{actor_origin}/tonconnect-manifest.json",
+          "universalLink": "tc://"
+        },
+        "kind": "dapp.start"
+      },
+      "phase": "given"
+    },
+    {
+      "action": {
+        "kind": "wallet.open"
+      },
+      "phase": "given"
+    },
+    {
+      "action": {
+        "kind": "wallet.create"
+      },
+      "phase": "when"
+    },
+    {
+      "action": {
+        "kind": "wallet.acceptRecovery"
+      },
+      "phase": "when"
+    },
+    {
+      "action": {
+        "kind": "expect.ui.dashboard"
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "kind": "dapp.createConnectLink"
+      },
+      "phase": "when"
+    },
+    {
+      "action": {
+        "kind": "wallet.handleConnectLink"
+      },
+      "phase": "when"
+    },
+    {
+      "action": {
+        "dappName": "Wallet Engine client E2E dApp",
+        "kind": "expect.ui.connectApproval"
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "kind": "expect.screenshot",
+        "name": "ton-connect-approval",
+        "target": "dialog"
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "kind": "wallet.approveConnect"
+      },
+      "phase": "when"
+    },
+    {
+      "action": {
+        "kind": "expect.dapp.connected",
+        "network": "-3"
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "kind": "wallet.reloadDashboard"
+      },
+      "phase": "when"
+    },
+    {
+      "action": {
+        "kind": "wallet.openTonConnect"
+      },
+      "phase": "when"
+    },
+    {
+      "action": {
+        "dappName": "Wallet Engine client E2E dApp",
+        "kind": "expect.ui.connectedDapp"
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "kind": "expect.screenshot",
+        "name": "ton-connect-connected",
+        "target": "dialog"
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "kind": "wallet.closeDialog"
+      },
+      "phase": "when"
+    },
+    {
+      "action": {
+        "config": {
+          "fromConnectedWallet": true,
+          "messages": [
+            {
+              "address": "0QAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACkT",
+              "amount": "1000000000"
+            },
+            {
+              "address": "0QAREREREREREREREREREREREREREREREREREREREREREQBc",
+              "amount": "2000000000"
+            }
+          ],
+          "network": "-3",
+          "validUntil": 4102444800
+        },
+        "kind": "dapp.requestTransaction"
+      },
+      "phase": "when"
+    },
+    {
+      "action": {
+        "kind": "expect.ui.transaction",
+        "messages": [
+          {
+            "address": "0QAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACkT",
+            "amount": "1000000000"
+          },
+          {
+            "address": "0QAREREREREREREREREREREREREREREREREREREREREREQBc",
+            "amount": "2000000000"
+          }
+        ]
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "kind": "expect.screenshot",
+        "name": "ton-connect-two-message-review",
+        "target": "dialog"
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "kind": "wallet.rejectRequest"
+      },
+      "phase": "when"
+    },
+    {
+      "action": {
+        "kind": "expect.dapp.transactionRejected"
+      },
+      "phase": "then"
+    }
+  ]
+}

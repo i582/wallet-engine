@@ -2,6 +2,31 @@ import Foundation
 import WalletEngineFFI
 
 nonisolated final class TonConnectRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let allowSelfSignedLoopback: Bool
+
+    /// Creates a delegate that can trust the local E2E certificate when explicitly enabled.
+    init(allowSelfSignedLoopback: Bool) {
+        self.allowSelfSignedLoopback = allowSelfSignedLoopback
+    }
+
+    /// Accepts only the local E2E server trust and uses system validation elsewhere.
+    func urlSession(
+        _ session: URLSession,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        guard allowSelfSignedLoopback,
+              challenge.protectionSpace.authenticationMethod
+                == NSURLAuthenticationMethodServerTrust,
+              AppleRuntimeConfiguration.isLoopback(challenge.protectionSpace.host),
+              let serverTrust = challenge.protectionSpace.serverTrust else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+        completionHandler(.useCredential, URLCredential(trust: serverTrust))
+    }
+
+    /// Rejects redirects so the engine receives data only from the requested endpoint.
     func urlSession(
         _ session: URLSession,
         task: URLSessionTask,
@@ -18,8 +43,13 @@ actor TonConnectTransport {
     private static let maximumManifestBytes = 256 * 1024
 
     private let session: URLSession
+    private let allowInsecureLoopback: Bool
 
-    init(configuration: URLSessionConfiguration = .ephemeral) {
+    init(
+        configuration: URLSessionConfiguration = .ephemeral,
+        allowInsecureLoopback: Bool = AppleRuntimeConfiguration.current.allowsInsecureLoopback
+    ) {
+        self.allowInsecureLoopback = allowInsecureLoopback
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.urlCache = nil
         configuration.httpCookieStorage = nil
@@ -30,7 +60,9 @@ actor TonConnectTransport {
         configuration.timeoutIntervalForResource = 24 * 60 * 60
         session = URLSession(
             configuration: configuration,
-            delegate: TonConnectRedirectDelegate(),
+            delegate: TonConnectRedirectDelegate(
+                allowSelfSignedLoopback: allowInsecureLoopback
+            ),
             delegateQueue: nil
         )
     }
@@ -83,7 +115,11 @@ actor TonConnectTransport {
 
     private func request(url value: String, method: String) throws -> URLRequest {
         guard let url = URL(string: value),
-              url.scheme?.lowercased() == "https",
+              let scheme = url.scheme?.lowercased(),
+              scheme == "https"
+                || (allowInsecureLoopback
+                    && scheme == "http"
+                    && AppleRuntimeConfiguration.isLoopback(url.host)),
               url.host != nil,
               url.user == nil,
               url.password == nil,

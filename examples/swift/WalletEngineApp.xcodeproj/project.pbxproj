@@ -7,14 +7,38 @@
 
 /* Begin PBXBuildFile section */
 		A10000000000000000000001 /* WalletEngineFFI in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000020 /* WalletEngineFFI */; };
+		B2000000000000000000000D /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B2000000000000000000000C /* XCTest.framework */; };
+		B20000000000000000000010 /* wallet-lifecycle.json in Resources */ = {isa = PBXBuildFile; fileRef = B2000000000000000000000E /* wallet-lifecycle.json */; };
+		B20000000000000000000011 /* ton-connect.json in Resources */ = {isa = PBXBuildFile; fileRef = B2000000000000000000000F /* ton-connect.json */; };
+		B20000000000000000000013 /* ton-connect-ten-messages.json in Resources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000014 /* ton-connect-ten-messages.json */; };
+		B20000000000000000000015 /* ton-connect-rejected.json in Resources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000016 /* ton-connect-rejected.json */; };
+		B20000000000000000000017 /* localnet-activity.json in Resources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000018 /* localnet-activity.json */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		B2000000000000000000000B /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A1000000000000000000000C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A10000000000000000000007;
+			remoteInfo = WalletEngineApp;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		A10000000000000000000002 /* WalletEngineApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WalletEngineApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B20000000000000000000001 /* WalletEngineAppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WalletEngineAppUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B2000000000000000000000C /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
+		B2000000000000000000000E /* wallet-lifecycle.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = wallet-lifecycle.json; path = ../client-e2e/scenarios/wallet-lifecycle.json; sourceTree = SOURCE_ROOT; };
+		B2000000000000000000000F /* ton-connect.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = ton-connect.json; path = ../client-e2e/scenarios/ton-connect.json; sourceTree = SOURCE_ROOT; };
+		B20000000000000000000014 /* ton-connect-ten-messages.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = ton-connect-ten-messages.json; path = ../client-e2e/scenarios/ton-connect-ten-messages.json; sourceTree = SOURCE_ROOT; };
+		B20000000000000000000016 /* ton-connect-rejected.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = ton-connect-rejected.json; path = ../client-e2e/scenarios/ton-connect-rejected.json; sourceTree = SOURCE_ROOT; };
+		B20000000000000000000018 /* localnet-activity.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = localnet-activity.json; path = ../client-e2e/scenarios/localnet-activity.json; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		A10000000000000000000003 /* WalletEngineApp */ = {isa = PBXFileSystemSynchronizedRootGroup; path = WalletEngineApp; sourceTree = "<group>"; };
+		B20000000000000000000002 /* WalletEngineAppUITests */ = {isa = PBXFileSystemSynchronizedRootGroup; path = WalletEngineAppUITests; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -24,18 +48,30 @@
 			files = (A10000000000000000000001 /* WalletEngineFFI in Frameworks */,);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B20000000000000000000005 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (B2000000000000000000000D /* XCTest.framework in Frameworks */,);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		A10000000000000000000005 = {
 			isa = PBXGroup;
-			children = (A10000000000000000000003 /* WalletEngineApp */, A10000000000000000000006 /* Products */,);
+			children = (A10000000000000000000003 /* WalletEngineApp */, B20000000000000000000002 /* WalletEngineAppUITests */, B20000000000000000000012 /* Client Scenarios */, A10000000000000000000006 /* Products */,);
 			sourceTree = "<group>";
 		};
 		A10000000000000000000006 /* Products */ = {
 			isa = PBXGroup;
-			children = (A10000000000000000000002 /* WalletEngineApp.app */,);
+			children = (A10000000000000000000002 /* WalletEngineApp.app */, B20000000000000000000001 /* WalletEngineAppUITests.xctest */,);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		B20000000000000000000012 /* Client Scenarios */ = {
+			isa = PBXGroup;
+			children = (B2000000000000000000000E /* wallet-lifecycle.json */, B2000000000000000000000F /* ton-connect.json */, B20000000000000000000014 /* ton-connect-ten-messages.json */, B20000000000000000000016 /* ton-connect-rejected.json */, B20000000000000000000018 /* localnet-activity.json */,);
+			name = "Client Scenarios";
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -54,12 +90,32 @@
 			productReference = A10000000000000000000002 /* WalletEngineApp.app */;
 			productType = "com.apple.product-type.application";
 		};
+		B20000000000000000000003 /* WalletEngineAppUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B20000000000000000000007 /* Build configuration list for PBXNativeTarget "WalletEngineAppUITests" */;
+			buildPhases = (B20000000000000000000004 /* Sources */, B20000000000000000000005 /* Frameworks */, B20000000000000000000006 /* Resources */,);
+			buildRules = ();
+			dependencies = (B2000000000000000000000A /* PBXTargetDependency */,);
+			fileSystemSynchronizedGroups = (B20000000000000000000002 /* WalletEngineAppUITests */,);
+			name = WalletEngineAppUITests;
+			packageProductDependencies = ();
+			productName = WalletEngineAppUITests;
+			productReference = B20000000000000000000001 /* WalletEngineAppUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
 		A1000000000000000000000C /* Project object */ = {
 			isa = PBXProject;
-			attributes = {BuildIndependentTargetsInParallel = 1; LastSwiftUpdateCheck = 2660; LastUpgradeCheck = 2660;};
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2660;
+				LastUpgradeCheck = 2660;
+				TargetAttributes = {
+					B20000000000000000000003 = {CreatedOnToolsVersion = 26.0; TestTargetID = A10000000000000000000007;};
+				};
+			};
 			buildConfigurationList = A1000000000000000000000D /* Build configuration list for PBXProject "WalletEngineApp" */;
 			compatibilityVersion = "Xcode 16.0";
 			developmentRegion = en;
@@ -71,12 +127,13 @@
 			productRefGroup = A10000000000000000000006 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
-			targets = (A10000000000000000000007 /* WalletEngineApp */,);
+			targets = (A10000000000000000000007 /* WalletEngineApp */, B20000000000000000000003 /* WalletEngineAppUITests */,);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		A1000000000000000000000B /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0;};
+		B20000000000000000000006 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (B20000000000000000000010 /* wallet-lifecycle.json in Resources */, B20000000000000000000011 /* ton-connect.json in Resources */, B20000000000000000000013 /* ton-connect-ten-messages.json in Resources */, B20000000000000000000015 /* ton-connect-rejected.json in Resources */, B20000000000000000000017 /* localnet-activity.json in Resources */,); runOnlyForDeploymentPostprocessing = 0;};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
@@ -108,7 +165,12 @@
 
 /* Begin PBXSourcesBuildPhase section */
 		A1000000000000000000000A /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0;};
+		B20000000000000000000004 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0;};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		B2000000000000000000000A /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = A10000000000000000000007 /* WalletEngineApp */; targetProxy = B2000000000000000000000B /* PBXContainerItemProxy */; };
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		A1000000000000000000000E /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; SWIFT_VERSION = 6.0;}; name = Debug;};
@@ -124,6 +186,7 @@
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -175,11 +238,50 @@
 			};
 			name = Release;
 		};
+		B20000000000000000000008 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = WalletEngineAppUITests-Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @loader_path/Frameworks";
+				PRODUCT_BUNDLE_IDENTIFIER = org.ton.wallet-engine.example.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = WalletEngineApp;
+			};
+			name = Debug;
+		};
+		B20000000000000000000009 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = WalletEngineAppUITests-Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @loader_path/Frameworks";
+				PRODUCT_BUNDLE_IDENTIFIER = org.ton.wallet-engine.example.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = WalletEngineApp;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
 		A10000000000000000000008 /* Build configuration list for PBXNativeTarget "WalletEngineApp" */ = {isa = XCConfigurationList; buildConfigurations = (A10000000000000000000010 /* Debug */, A10000000000000000000011 /* Release */,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug;};
 		A1000000000000000000000D /* Build configuration list for PBXProject "WalletEngineApp" */ = {isa = XCConfigurationList; buildConfigurations = (A1000000000000000000000E /* Debug */, A1000000000000000000000F /* Release */,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug;};
+		B20000000000000000000007 /* Build configuration list for PBXNativeTarget "WalletEngineAppUITests" */ = {isa = XCConfigurationList; buildConfigurations = (B20000000000000000000008 /* Debug */, B20000000000000000000009 /* Release */,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug;};
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */

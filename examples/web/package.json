@@ -8,6 +8,13 @@
   "scripts": {
     "build": "tsc --noEmit && vite build",
     "dev": "vite --port 4999",
+    "e2e": "bun run e2e:prepare && playwright test --project=chromium",
+    "e2e:export-scenarios": "bun e2e/export-scenarios.ts",
+    "e2e:functional": "bun run e2e:prepare && playwright test --project=chromium-functional",
+    "e2e:install": "npm --prefix ../../tests/ton-connect/dapp ci && playwright install chromium",
+    "e2e:install:ci": "npm --prefix ../../tests/ton-connect/dapp ci && playwright install --with-deps chromium",
+    "e2e:prepare": "bun run e2e:export-scenarios && bun run build && npm --prefix ../../tests/ton-connect/dapp run build",
+    "e2e:update-snapshots": "bun run e2e:prepare && playwright test --project=chromium --update-snapshots",
     "fmt": "biome format --write .",
     "fmt:check": "biome format .",
     "lint": "biome check --formatter-enabled=false .",
@@ -30,6 +37,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.0",
+    "@playwright/test": "1.62.1",
     "@tailwindcss/vite": "4.3.3",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",

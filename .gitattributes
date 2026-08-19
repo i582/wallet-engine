@@ -5,3 +5,7 @@
 *.code linguist-generated text=auto eol=lf
 *.h linguist-generated text=auto eol=lf
 *.modulemap linguist-generated text=auto eol=lf
+
+# Visual test baselines are binary review artifacts and must not bloat Git history.
+examples/web/e2e/scenarios/snapshots/**/*.png filter=lfs diff=lfs merge=lfs -text
+examples/swift/WalletEngineAppUITests/Snapshots/**/*.png filter=lfs diff=lfs merge=lfs -text

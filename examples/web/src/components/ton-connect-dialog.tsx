@@ -51,11 +51,15 @@ export function TonConnectDialog({
     }
   }
 
+  /** Resolves the current prompt and removes a rejected one-time connection link. */
   function respond(approved: boolean): void {
     if (!interaction) {
       return
     }
     onRespond(interaction.id, approved, approved && force)
+    if (!approved && interaction.kind === "connect") {
+      setLink("")
+    }
   }
 
   async function disconnect(): Promise<void> {

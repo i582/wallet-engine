@@ -23,6 +23,11 @@ struct TonConnectView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(coordinator.approval == nil ? "Close" : rejectionTitle, action: close)
+                        .accessibilityIdentifier(
+                            coordinator.approval == nil
+                                ? "ton-connect-close-action"
+                                : "ton-connect-rejection-action"
+                        )
                         .disabled(coordinator.isWorking)
                 }
                 if coordinator.approval != nil {
@@ -36,6 +41,7 @@ struct TonConnectView: View {
                             }
                         }
                         .buttonStyle(.borderedProminent)
+                        .accessibilityIdentifier("ton-connect-approval-action")
                         .disabled(
                             coordinator.isWorking
                                 || (isTransactionApproval && coordinator.canForceRetry && !force)
@@ -45,6 +51,7 @@ struct TonConnectView: View {
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Continue", action: connect)
                             .buttonStyle(.borderedProminent)
+                            .accessibilityIdentifier("ton-connect-continue-action")
                             .disabled(
                                 coordinator.isWorking
                                     || link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

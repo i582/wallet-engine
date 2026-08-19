@@ -68,6 +68,54 @@ recipe remains a compile-only unsigned build. To run the application on a
 physical device, select your development team in Xcode and use the normal Run
 action.
 
+## iOS client E2E tests
+
+The iOS suite runs the shared client scenarios in an iPhone 16 Pro Simulator.
+It starts the official Go bridge and the official TypeScript TON Connect dApp
+SDK. Most scenarios use deterministic provider responses. The transaction-history
+scenario starts an isolated Acton localnet. The test target drives the real
+SwiftUI application through accessibility identifiers.
+
+Install the dApp dependencies. Then run the suite:
+
+```shell
+just example-swift-e2e-install
+TON_CONNECT_BRIDGE_BIN=/absolute/path/to/bridge3 just example-swift-e2e
+```
+
+Install Acton before you run the localnet scenario. Set
+`WALLET_ENGINE_ACTON_BIN` if the Acton binary is not at
+`$HOME/.acton/bin/acton` or on `PATH`.
+
+The runner generates Swift bindings and shared scenario JSON files. It also
+builds the TypeScript dApp actor before it starts `xcodebuild`.
+
+Set `IOS_E2E_DESTINATION` to use a different simulator destination. The value
+must include an explicit simulator `id`. Set `IOS_SNAPSHOT_VARIANT` when that
+destination requires a separate baseline.
+
+Set `IOS_E2E_DERIVED_DATA_PATH` to use a separate Xcode build directory.
+
+Set `IOS_E2E_ONLY_TESTING` to an Xcode test identifier to run one scenario.
+For example:
+
+```shell
+IOS_E2E_ONLY_TESTING=WalletEngineAppUITests/WalletEngineAppUITests/testRejectedTonConnectScenario \
+  TON_CONNECT_BRIDGE_BIN=/absolute/path/to/bridge3 just example-swift-e2e
+```
+
+The suite records screenshots in dark appearance. The runner fixes the
+simulator status bar during each run so that system time and indicators do not
+change the baselines. To replace the baselines, run:
+
+```shell
+TON_CONNECT_BRIDGE_BIN=/absolute/path/to/bridge3 just example-swift-e2e-update-snapshots
+```
+
+Review every changed image before commit. Git stores the PNG files in Git LFS.
+The recovery screenshot masks the wallet address and recovery words before it
+writes the image.
+
 ## Integration map
 
 - `Infrastructure/AppleWalletHTTPHost.swift` performs bounded HTTPS requests,
@@ -83,6 +131,8 @@ action.
   bridge POST, and streaming SSE requests.
 - `Infrastructure/TonConnectSessionStore.swift` keeps secret-bearing session
   keys and durable pending responses in Keychain.
+- `WalletEngineAppUITests` interprets the shared scenarios and compares dark
+  UI screenshots on an iOS Simulator.
 - `Infrastructure/WalletLifecycleModel.swift` wraps wallet creation, import,
   recovery-phrase access, and deletion.
 - `Model/WalletStore.swift` persists public wallet descriptors. It never stores

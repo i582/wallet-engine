@@ -115,6 +115,7 @@ export function WalletDashboard({
             </Button>
           </div>
           <button
+            aria-label="Copy wallet address"
             className="mt-0.5 block text-xs leading-4 text-muted-foreground hover:text-foreground"
             type="button"
             onClick={copyAddress}
@@ -168,7 +169,7 @@ export function WalletDashboard({
         />
         <WalletAction
           icon={<PlugsConnected aria-hidden="true" size={21} />}
-          label="Connect"
+          label={connectedDappName ? "Connected" : "Connect"}
           onClick={() => setTonConnectOpen(true)}
         />
       </div>
@@ -237,10 +238,10 @@ export function WalletDashboard({
             onSelect={setSelectedActivity}
           />
 
-          {snapshot.activityHasMore ? (
+          {snapshot.activity.hasMore ? (
             <Button
               className="mt-5 w-full"
-              disabled={loadingMore || snapshot.activityPaginationResource.phase === "loading"}
+              disabled={loadingMore || snapshot.activity.paginationResource.phase === "loading"}
               variant="outline"
               onClick={onLoadMore}
             >
@@ -335,7 +336,7 @@ function ActivityList({
   readonly refreshing: boolean
   readonly onSelect: (item: ActivityItem) => void
 }): ReactElement {
-  if (refreshing && snapshot.activity.length === 0) {
+  if (refreshing && snapshot.activity.items.length === 0) {
     return (
       <div className="mt-4 divide-y divide-border">
         {[0, 1, 2].map(index => (
@@ -352,11 +353,11 @@ function ActivityList({
     )
   }
 
-  if (snapshot.activityResource.phase === "failed" && snapshot.activity.length === 0) {
+  if (snapshot.activity.resource.phase === "failed" && snapshot.activity.items.length === 0) {
     return <ResourceError label="Activity is unavailable." />
   }
 
-  if (snapshot.activity.length === 0) {
+  if (snapshot.activity.items.length === 0) {
     return (
       <div className="mt-4 rounded-2xl border border-border bg-card py-10 text-center">
         <Receipt aria-hidden="true" className="mx-auto text-muted-foreground" size={27} />
@@ -368,7 +369,7 @@ function ActivityList({
 
   return (
     <div className="mt-4 divide-y divide-border">
-      {snapshot.activity.map((item: ActivityItem) => (
+      {snapshot.activity.items.map((item: ActivityItem) => (
         <ActivityRow gramUsdRate={gramUsdRate} item={item} key={item.id} onSelect={onSelect} />
       ))}
     </div>
@@ -389,6 +390,9 @@ function ActivityRow({
   return (
     <button
       className="flex w-full items-center gap-4 py-4 text-left"
+      data-activity-amount={item.amountNanograms}
+      data-activity-direction={item.direction}
+      data-activity-id={item.id}
       type="button"
       onClick={() => onSelect(item)}
     >

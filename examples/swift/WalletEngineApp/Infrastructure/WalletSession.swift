@@ -6,19 +6,29 @@ import WalletEngineFFI
 nonisolated struct AppleWalletEnvironment: Sendable {
     let platformHost: AppleWalletPlatformHost
     private let httpPolicy: AppleWalletHTTPPolicy
+    private let runtime: AppleRuntimeConfiguration
 
     @MainActor
-    init(bundle: Bundle = .main) {
+    init(
+        bundle: Bundle = .main,
+        runtime: AppleRuntimeConfiguration = .current
+    ) {
         let credential = Self.loadToncenterCredential(bundle: bundle)
+        var allowedOrigins = [
+            "https://toncenter.com:443",
+            "https://testnet.toncenter.com:443",
+        ]
+        if let toncenterBaseURL = runtime.toncenterBaseURL {
+            allowedOrigins.append(toncenterBaseURL)
+        }
         let policy = AppleWalletHTTPPolicy(
-            allowedOrigins: [
-                "https://toncenter.com:443",
-                "https://testnet.toncenter.com:443",
-            ],
+            allowedOrigins: allowedOrigins,
+            allowInsecureLoopback: runtime.allowsInsecureLoopback,
             toncenterAPIKey: credential
         )
 
         httpPolicy = policy
+        self.runtime = runtime
         platformHost = AppleWalletPlatformHost()
     }
 
@@ -63,9 +73,8 @@ nonisolated struct AppleWalletEnvironment: Sendable {
             sendValiditySeconds: 300,
             resolutionMarginSeconds: 60,
             providers: ProviderConfig(
-                toncenterBaseUrl: isMainnet
-                    ? "https://toncenter.com"
-                    : "https://testnet.toncenter.com",
+                toncenterBaseUrl: runtime.toncenterBaseURL
+                    ?? (isMainnet ? "https://toncenter.com" : "https://testnet.toncenter.com"),
                 requestTimeoutMs: 15_000
             )
         )

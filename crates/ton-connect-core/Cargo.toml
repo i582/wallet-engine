@@ -55,3 +55,6 @@ wildcard_enum_match_arm = "deny"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 module_name_repetitions = "allow"
+
+[lib]
+doctest = false

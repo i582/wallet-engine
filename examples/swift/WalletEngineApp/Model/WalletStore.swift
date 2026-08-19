@@ -27,12 +27,15 @@ enum WalletStore {
                 Bundle.main.bundleIdentifier ?? "TON-Wallet",
                 isDirectory: true
             )
+            let namespacedDirectory = AppleRuntimeConfiguration.current.storageNamespace.map {
+                directory.appendingPathComponent($0, isDirectory: true)
+            } ?? directory
             try FileManager.default.createDirectory(
-                at: directory,
+                at: namespacedDirectory,
                 withIntermediateDirectories: true,
                 attributes: [.posixPermissions: 0o700]
             )
-            return directory.appendingPathComponent("wallets.json")
+            return namespacedDirectory.appendingPathComponent("wallets.json")
         }
     }
 

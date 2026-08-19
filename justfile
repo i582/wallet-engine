@@ -164,6 +164,15 @@ example-web-build: example-web-install bindings-wasm
 example-web-test: example-web-install bindings-wasm
     bun --cwd examples/web test
 
+example-web-e2e-install: example-web-install
+    bun --cwd examples/web e2e:install
+
+example-web-e2e: example-web-install bindings-wasm
+    bun --cwd examples/web e2e
+
+example-web-e2e-functional: example-web-install bindings-wasm
+    bun --cwd examples/web e2e:functional
+
 web-check: web-fmt-check web-lint web-build web-test example-web-fmt-check example-web-lint example-web-build example-web-test
 
 example-cpp-bindgen-build: bindings-cpp
@@ -198,6 +207,19 @@ example-swift-build-macos: bindings-swift
 
 example-swift-build-ios: bindings-swift
     xcodebuild -project examples/swift/WalletEngineApp.xcodeproj -scheme WalletEngineApp -configuration Debug -destination 'generic/platform=iOS Simulator' -derivedDataPath target/swift-example-ios ARCHS=arm64 ONLY_ACTIVE_ARCH=YES build
+
+example-swift-e2e-install:
+    npm --prefix tests/ton-connect/dapp ci
+
+example-swift-e2e-prepare: bindings-swift
+    bun --cwd examples/web e2e:export-scenarios
+    npm --prefix tests/ton-connect/dapp run build
+
+example-swift-e2e:
+    bun examples/swift/e2e/run-ios-e2e.ts
+
+example-swift-e2e-update-snapshots:
+    UPDATE_IOS_SNAPSHOTS=1 bun examples/swift/e2e/run-ios-e2e.ts
 
 swift-check: example-swift-build-macos example-swift-build-ios
 

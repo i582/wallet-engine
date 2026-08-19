@@ -1,0 +1,102 @@
+{
+  "name": "reject a TON Connect connection",
+  "steps": [
+    {
+      "action": {
+        "config": {
+          "inNetwork": "-3",
+          "manifest": {
+            "iconUrl": "{actor_origin}/icon.png",
+            "name": "Wallet Engine client E2E dApp",
+            "url": "https://app.example"
+          },
+          "manifestUrl": "{actor_origin}/tonconnect-manifest.json",
+          "universalLink": "tc://"
+        },
+        "kind": "dapp.start"
+      },
+      "phase": "given"
+    },
+    {
+      "action": {
+        "kind": "wallet.open"
+      },
+      "phase": "given"
+    },
+    {
+      "action": {
+        "kind": "wallet.create"
+      },
+      "phase": "when"
+    },
+    {
+      "action": {
+        "kind": "wallet.acceptRecovery"
+      },
+      "phase": "when"
+    },
+    {
+      "action": {
+        "kind": "expect.ui.dashboard"
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "kind": "dapp.createConnectLink"
+      },
+      "phase": "when"
+    },
+    {
+      "action": {
+        "kind": "wallet.handleConnectLink"
+      },
+      "phase": "when"
+    },
+    {
+      "action": {
+        "dappName": "Wallet Engine client E2E dApp",
+        "kind": "expect.ui.connectApproval"
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "kind": "wallet.rejectConnect"
+      },
+      "phase": "when"
+    },
+    {
+      "action": {
+        "kind": "expect.dapp.connectionRejected"
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "kind": "wallet.openTonConnect"
+      },
+      "phase": "when"
+    },
+    {
+      "action": {
+        "kind": "expect.ui.tonConnectEntry"
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "kind": "expect.screenshot",
+        "name": "ton-connect-rejected",
+        "target": "dialog"
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "kind": "wallet.closeDialog"
+      },
+      "phase": "when"
+    }
+  ]
+}

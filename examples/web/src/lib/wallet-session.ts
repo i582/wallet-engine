@@ -13,8 +13,10 @@ import {
 } from "@ton/wallet-engine"
 
 import {BrowserWalletStore} from "@/lib/browser-wallet-store"
+import {tonConnectBridgeUrl} from "@/lib/runtime-config"
 
-const TESTNET_BASE_URL: string = "https://testnet.toncenter.com"
+const TESTNET_BASE_URL: string =
+  import.meta.env.VITE_TONCENTER_BASE_URL ?? "https://testnet.toncenter.com"
 const JOURNAL_DATABASE_NAME: string = "wallet-engine-example-journal"
 
 export interface CreatedWalletSession {
@@ -49,6 +51,7 @@ export class WalletSession {
         appName: "tonkeeper",
         appVersion: "0.1.0",
       },
+      bridgeUrl: tonConnectBridgeUrl(),
       storage: store,
     })
   }

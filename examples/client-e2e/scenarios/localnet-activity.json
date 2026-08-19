@@ -1,0 +1,286 @@
+{
+  "name": "refresh transaction history from Acton localnet",
+  "steps": [
+    {
+      "action": {
+        "kind": "network.localnet"
+      },
+      "phase": "given"
+    },
+    {
+      "action": {
+        "config": {
+          "inNetwork": "-3",
+          "manifest": {
+            "iconUrl": "{actor_origin}/icon.png",
+            "name": "Wallet Engine client E2E dApp",
+            "url": "https://app.example"
+          },
+          "manifestUrl": "{actor_origin}/tonconnect-manifest.json",
+          "universalLink": "tc://"
+        },
+        "kind": "dapp.start"
+      },
+      "phase": "given"
+    },
+    {
+      "action": {
+        "kind": "wallet.open"
+      },
+      "phase": "given"
+    },
+    {
+      "action": {
+        "kind": "wallet.create"
+      },
+      "phase": "when"
+    },
+    {
+      "action": {
+        "kind": "wallet.acceptRecovery"
+      },
+      "phase": "when"
+    },
+    {
+      "action": {
+        "kind": "expect.ui.dashboard"
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "expectation": {
+          "amounts": [
+            "10000000000"
+          ],
+          "count": 1,
+          "directions": [
+            "received"
+          ],
+          "rememberAs": "funded"
+        },
+        "kind": "expect.ui.activity"
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "kind": "dapp.createConnectLink"
+      },
+      "phase": "when"
+    },
+    {
+      "action": {
+        "kind": "wallet.handleConnectLink"
+      },
+      "phase": "when"
+    },
+    {
+      "action": {
+        "kind": "wallet.approveConnect"
+      },
+      "phase": "when"
+    },
+    {
+      "action": {
+        "kind": "expect.dapp.connected",
+        "network": "-3"
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "config": {
+          "fromConnectedWallet": true,
+          "messages": [
+            {
+              "address": "0QAREREREREREREREREREREREREREREREREREREREREREQBc",
+              "amount": "100000000"
+            }
+          ],
+          "network": "-3",
+          "validUntil": 4102444800
+        },
+        "kind": "dapp.requestTransaction"
+      },
+      "phase": "when"
+    },
+    {
+      "action": {
+        "kind": "expect.ui.transaction",
+        "messages": [
+          {
+            "address": "0QAREREREREREREREREREREREREREREREREREREREREREQBc",
+            "amount": "100000000"
+          }
+        ]
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "kind": "wallet.approveRequest"
+      },
+      "phase": "when"
+    },
+    {
+      "action": {
+        "kind": "expect.dapp.transactionApproved"
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "expectation": {
+          "count": 1,
+          "sameAs": "funded"
+        },
+        "kind": "expect.ui.activity"
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "kind": "wallet.refresh"
+      },
+      "phase": "when"
+    },
+    {
+      "action": {
+        "expectation": {
+          "amounts": [
+            "100000000",
+            "10000000000"
+          ],
+          "count": 2,
+          "directions": [
+            "sent",
+            "received"
+          ],
+          "extends": "funded",
+          "rememberAs": "first-send"
+        },
+        "kind": "expect.ui.activity"
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "kind": "wallet.refresh"
+      },
+      "phase": "when"
+    },
+    {
+      "action": {
+        "expectation": {
+          "count": 2,
+          "sameAs": "first-send"
+        },
+        "kind": "expect.ui.activity"
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "config": {
+          "fromConnectedWallet": true,
+          "messages": [
+            {
+              "address": "0QAREREREREREREREREREREREREREREREREREREREREREQBc",
+              "amount": "200000000"
+            }
+          ],
+          "network": "-3",
+          "validUntil": 4102444800
+        },
+        "kind": "dapp.requestTransaction"
+      },
+      "phase": "when"
+    },
+    {
+      "action": {
+        "kind": "expect.ui.transaction",
+        "messages": [
+          {
+            "address": "0QAREREREREREREREREREREREREREREREREREREREREREQBc",
+            "amount": "200000000"
+          }
+        ]
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "kind": "wallet.approveRequest"
+      },
+      "phase": "when"
+    },
+    {
+      "action": {
+        "kind": "expect.dapp.transactionApproved"
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "expectation": {
+          "count": 2,
+          "sameAs": "first-send"
+        },
+        "kind": "expect.ui.activity"
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "kind": "wallet.refresh"
+      },
+      "phase": "when"
+    },
+    {
+      "action": {
+        "expectation": {
+          "amounts": [
+            "200000000",
+            "100000000",
+            "10000000000"
+          ],
+          "count": 3,
+          "directions": [
+            "sent",
+            "sent",
+            "received"
+          ],
+          "extends": "first-send",
+          "rememberAs": "second-send"
+        },
+        "kind": "expect.ui.activity"
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "kind": "expect.screenshot",
+        "name": "localnet-activity",
+        "target": "page"
+      },
+      "phase": "then"
+    },
+    {
+      "action": {
+        "kind": "wallet.reloadDashboard"
+      },
+      "phase": "when"
+    },
+    {
+      "action": {
+        "expectation": {
+          "count": 3,
+          "sameAs": "second-send"
+        },
+        "kind": "expect.ui.activity"
+      },
+      "phase": "then"
+    }
+  ]
+}

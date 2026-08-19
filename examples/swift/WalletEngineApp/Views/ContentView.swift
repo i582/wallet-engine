@@ -833,6 +833,7 @@ private struct BalancePanel: View {
                     .platformCompactIconButtonFrame()
                     .buttonStyle(.plain)
                     .disabled(isLoading)
+                    .accessibilityIdentifier("wallet-refresh-action")
                     .accessibilityLabel(isLoading ? "Refreshing balance" : "Refresh balance")
                     .desktopHelp("Refresh account")
 

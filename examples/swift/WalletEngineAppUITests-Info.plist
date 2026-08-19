@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
+	<key>IOS_DAPP_ORIGIN</key>
+	<string>$(IOS_DAPP_ORIGIN)</string>
+	<key>IOS_SNAPSHOT_SOURCE_DIR</key>
+	<string>$(IOS_SNAPSHOT_SOURCE_DIR)</string>
+	<key>IOS_SNAPSHOT_VARIANT</key>
+	<string>$(IOS_SNAPSHOT_VARIANT)</string>
+	<key>TONCENTER_BASE_URL</key>
+	<string>$(TONCENTER_BASE_URL)</string>
+	<key>TON_CONNECT_BRIDGE_URL</key>
+	<string>$(TON_CONNECT_BRIDGE_URL)</string>
+	<key>UPDATE_IOS_SNAPSHOTS</key>
+	<string>$(UPDATE_IOS_SNAPSHOTS)</string>
+</dict>
+</plist>

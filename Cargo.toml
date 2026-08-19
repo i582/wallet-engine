@@ -22,6 +22,7 @@ resolver = "3"
 
 [lib]
 crate-type = ["rlib", "staticlib", "cdylib"]
+doctest = false
 
 [dependencies]
 async-trait = "=0.1.89"

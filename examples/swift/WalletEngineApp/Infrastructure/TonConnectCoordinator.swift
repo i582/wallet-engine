@@ -527,7 +527,7 @@ final class TonConnectCoordinator {
 
     private static var config: TonConnectSessionConfig {
         TonConnectSessionConfig(
-            bridgeUrl: "https://connect.ton.org/bridge",
+            bridgeUrl: AppleRuntimeConfiguration.current.tonConnectBridgeURL,
             maxEventBytes: 1_048_576,
             messageTtlSeconds: 300
         )

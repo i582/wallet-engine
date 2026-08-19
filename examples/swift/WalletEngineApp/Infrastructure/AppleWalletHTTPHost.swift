@@ -32,14 +32,22 @@ nonisolated struct AppleWalletHTTPPolicy: Sendable {
     ]
 
     private let allowedOrigins: Set<String>
+    private let allowInsecureLoopback: Bool
     private let toncenterAPIKey: String?
 
     init(
         allowedOrigins: [String],
+        allowInsecureLoopback: Bool = false,
         toncenterAPIKey: String? = nil
     ) {
+        self.allowInsecureLoopback = allowInsecureLoopback
         self.allowedOrigins = Set(
-            allowedOrigins.compactMap(Self.normalizedHTTPSOrigin(forOrigin:))
+            allowedOrigins.compactMap {
+                Self.normalizedOrigin(
+                    forOrigin: $0,
+                    allowInsecureLoopback: allowInsecureLoopback
+                )
+            }
         )
         self.toncenterAPIKey = toncenterAPIKey
     }
@@ -56,12 +64,15 @@ nonisolated struct AppleWalletHTTPPolicy: Sendable {
             throw Self.failure(.policyViolation, "Invalid request timeout")
         }
         guard let url = URL(string: request.url),
-              let origin = Self.normalizedHTTPSOrigin(for: url),
+              let origin = Self.normalizedOrigin(
+                  for: url,
+                  allowInsecureLoopback: allowInsecureLoopback
+              ),
               allowedOrigins.contains(origin),
               url.user == nil,
               url.password == nil,
               url.fragment == nil else {
-            throw Self.failure(.policyViolation, "Request URL is not an allowed HTTPS URL")
+            throw Self.failure(.policyViolation, "Request URL is not an allowed provider URL")
         }
 
         var urlRequest = URLRequest(url: url)
@@ -165,16 +176,29 @@ nonisolated struct AppleWalletHTTPPolicy: Sendable {
         }
     }
 
-    static func normalizedHTTPSOrigin(for url: URL) -> String? {
-        guard url.scheme?.lowercased() == "https",
+    /// Normalizes an HTTPS origin and optionally permits HTTP on loopback.
+    static func normalizedOrigin(
+        for url: URL,
+        allowInsecureLoopback: Bool
+    ) -> String? {
+        guard let scheme = url.scheme?.lowercased(),
               let host = url.host?.lowercased(),
-              !host.isEmpty else {
+              !host.isEmpty,
+              scheme == "https"
+                || (allowInsecureLoopback
+                    && scheme == "http"
+                    && AppleRuntimeConfiguration.isLoopback(host)) else {
             return nil
         }
-        return "https://\(host):\(url.port ?? 443)"
+        let defaultPort = scheme == "https" ? 443 : 80
+        return "\(scheme)://\(host):\(url.port ?? defaultPort)"
     }
 
-    static func normalizedHTTPSOrigin(forOrigin value: String) -> String? {
+    /// Normalizes one configured origin without accepting paths or credentials.
+    static func normalizedOrigin(
+        forOrigin value: String,
+        allowInsecureLoopback: Bool
+    ) -> String? {
         guard let url = URL(string: value),
               url.path.isEmpty || url.path == "/",
               url.query == nil,
@@ -183,7 +207,10 @@ nonisolated struct AppleWalletHTTPPolicy: Sendable {
               url.password == nil else {
             return nil
         }
-        return normalizedHTTPSOrigin(for: url)
+        return normalizedOrigin(
+            for: url,
+            allowInsecureLoopback: allowInsecureLoopback
+        )
     }
 
     private static func failure(
