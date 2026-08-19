@@ -1709,6 +1709,7 @@ impl ScenarioRunner {
                                     body: action.comment.map_or(SendMessageBody::Empty, |text| {
                                         SendMessageBody::Comment { text }
                                     }),
+                                    bounce: false,
                                     state_init: None,
                                 }],
                             },
@@ -1739,6 +1740,7 @@ impl ScenarioRunner {
                                     body: action.comment.map_or(SendMessageBody::Empty, |text| {
                                         SendMessageBody::Comment { text }
                                     }),
+                                    bounce: false,
                                     state_init: None,
                                 }],
                             },

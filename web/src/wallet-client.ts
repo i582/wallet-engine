@@ -4,6 +4,8 @@ import {BrowserHttpHost, type BrowserHttpHostOptions} from "./http-host"
 import {initializeWalletEngine} from "./initialize"
 import type {BrowserPlatformHost} from "./platform-host"
 import type {
+  NftTransferPreviewRequest,
+  NftTransferRequest,
   SendPreview,
   SendPreviewRequest,
   SendRequest,
@@ -95,6 +97,12 @@ export class WalletClient {
     return (await this.raw.send(request)) as SendResult
   }
 
+  /** Revalidates ownership and signs/submits one TEP-62 NFT transfer. */
+  async sendNftTransfer(request: NftTransferRequest): Promise<SendResult> {
+    this.assertOpen()
+    return (await this.raw.sendNftTransfer(request)) as SendResult
+  }
+
   /** Signs a complete internal Wallet V5 message and leaves submission to the caller. */
   async signMessage(request: SignMessageRequest): Promise<SignMessageResult> {
     this.assertOpen()
@@ -104,6 +112,12 @@ export class WalletClient {
   async previewSend(request: SendPreviewRequest): Promise<SendPreview> {
     this.assertOpen()
     return (await this.raw.previewSend(request)) as SendPreview
+  }
+
+  /** Loads fresh NFT state and requires a complete successful emulated transfer action. */
+  async previewNftTransfer(request: NftTransferPreviewRequest): Promise<SendPreview> {
+    this.assertOpen()
+    return (await this.raw.previewNftTransfer(request)) as SendPreview
   }
 
   /** Previews the exact expiration, payload, and StateInit in a TON Connect request. */

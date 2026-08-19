@@ -265,6 +265,33 @@ export function App(): ReactElement {
     }
   }
 
+  async function previewNftTransfer(
+    operationId: string,
+    nftAddress: string,
+    recipient: string,
+  ): Promise<SendPreview> {
+    if (!session) {
+      throw new Error("The wallet is not open")
+    }
+    return await session.previewNftTransfer(operationId, nftAddress, recipient)
+  }
+
+  async function sendNftTransfer(
+    operationId: string,
+    nftAddress: string,
+    recipient: string,
+    force: boolean,
+  ): Promise<SendResult> {
+    if (!session) {
+      throw new Error("The wallet is not open")
+    }
+    try {
+      return await session.sendNftTransfer(operationId, nftAddress, recipient, force)
+    } finally {
+      setSnapshot(session.snapshot())
+    }
+  }
+
   async function startTonConnect(link: string): Promise<void> {
     if (!session) {
       throw new Error("The wallet is not open")
@@ -307,10 +334,14 @@ export function App(): ReactElement {
     if (nftRoute.kind === "detail") {
       return (
         <NftDetailPage
+          canForceRetry={snapshot.send.resolution?.canForceRetry === true}
           hasMore={snapshot.nfts.hasMore}
           item={snapshot.nfts.items.find(item => item.address === nftRoute.address)}
           loadingMore={loadingMoreNfts}
+          onCancelPreview={cancelTransferPreview}
           onLoadMore={loadMoreNfts}
+          onPreviewTransfer={previewNftTransfer}
+          onSendTransfer={sendNftTransfer}
         />
       )
     }

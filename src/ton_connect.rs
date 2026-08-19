@@ -820,6 +820,7 @@ fn decode_transaction_request(
             body: payload_boc.map_or(SendMessageBody::Empty, |boc| SendMessageBody::RawPayload {
                 boc,
             }),
+            bounce: false,
             state_init,
         });
     }

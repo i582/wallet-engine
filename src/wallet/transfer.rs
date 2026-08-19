@@ -267,9 +267,7 @@ fn build_internal_message(send_message: &SendMessage) -> Result<(TonCell, u8), T
         TLBCoins::new(amount_nanograms),
     );
 
-    // Use one conservative policy until destination metadata is preserved by
-    // the address type. This also lets uninitialized recipients accept funds.
-    info.bounce = false;
+    info.bounce = send_message.bounce;
 
     let body = match &send_message.body {
         SendMessageBody::Empty => TonCell::empty().to_owned(),
@@ -290,7 +288,7 @@ fn build_internal_message(send_message: &SendMessage) -> Result<(TonCell, u8), T
 }
 
 /// Encodes one plaintext comment as zero-opcode TON snake data.
-fn build_comment_body(comment: &str) -> Result<TonCell, TransferError> {
+pub(super) fn build_comment_body(comment: &str) -> Result<TonCell, TransferError> {
     let mut body = TonCell::builder();
     body.write_bits([0_u8; 4], 32)
         .map_err(TransferError::InternalMessage)?;
@@ -339,6 +337,24 @@ mod tests {
         assert_eq!(info.dst, destination.to_msg_address());
         assert_eq!(info.value.coins, TLBCoins::new(1));
         assert_eq!(mode, EXACT_AMOUNT_SEND_MODE);
+    }
+
+    #[test]
+    fn contract_call_can_be_serialized_as_bounceable() {
+        let mut message = send_message(
+            SendAmount::exact("1").expect("valid exact amount"),
+            SendMessageBody::Empty,
+            None,
+        );
+        message.bounce = true;
+        let (cell, _) = build_internal_message(&message).expect("internal message");
+        let message = Msg::<TonCell>::from_cell(&cell).expect("decode internal message");
+        let CommonMsgInfo::Int(info) = message.info else {
+            panic!("transfer must contain an internal message");
+        };
+
+        assert!(info.bounce);
+        assert!(!info.bounced);
     }
 
     #[test]
@@ -650,6 +666,7 @@ mod tests {
                 .expect("valid preview destination"),
             amount,
             body,
+            bounce: false,
             state_init,
         }
     }

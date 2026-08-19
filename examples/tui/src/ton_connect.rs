@@ -762,6 +762,7 @@ fn engine_transaction_intent(
             body: body.map_or(SendMessageBody::Empty, |boc| SendMessageBody::RawPayload {
                 boc,
             }),
+            bounce: false,
             state_init,
         });
     }

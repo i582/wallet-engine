@@ -13,6 +13,7 @@ import {
 } from "@ton/wallet-engine"
 
 import {BrowserWalletStore} from "@/lib/browser-wallet-store"
+import {NFT_TRANSFER_FUNDING} from "@/lib/nft-transfer-policy"
 import {tonConnectBridgeUrl} from "@/lib/runtime-config"
 
 const TESTNET_BASE_URL: string =
@@ -150,6 +151,40 @@ export class WalletSession {
     await this.client.cancelSendPreview()
   }
 
+  async previewNftTransfer(
+    operationId: string,
+    nftAddress: string,
+    recipient: string,
+  ): Promise<SendPreview> {
+    this.assertOpen()
+    return await this.client.previewNftTransfer({
+      operationId,
+      intent: nftTransferIntent(nftAddress, recipient),
+    })
+  }
+
+  async sendNftTransfer(
+    operationId: string,
+    nftAddress: string,
+    recipient: string,
+    force: boolean = false,
+  ): Promise<SendResult> {
+    this.assertOpen()
+    try {
+      return await this.client.sendNftTransfer({
+        operationId,
+        force,
+        intent: nftTransferIntent(nftAddress, recipient),
+      })
+    } catch (cause) {
+      const diagnostic: string | undefined = this.client.snapshot().send.errorMessage
+      if (diagnostic) {
+        throw new Error(diagnostic, {cause})
+      }
+      throw cause
+    }
+  }
+
   async send(
     destination: string,
     amountNanograms: string,
@@ -231,6 +266,20 @@ export class WalletSession {
     if (this.closed) {
       throw new Error("The wallet session is closed")
     }
+  }
+}
+
+function nftTransferIntent(nftAddress: string, recipient: string) {
+  return {
+    nftAddress,
+    recipient,
+    funding: {
+      kind: "exact" as const,
+      attachedNanograms: NFT_TRANSFER_FUNDING.attachedNanograms,
+      forwardNanograms: NFT_TRANSFER_FUNDING.forwardNanograms,
+    },
+    payload: {kind: "empty" as const},
+    expiration: {kind: "engineDefault" as const},
   }
 }
 

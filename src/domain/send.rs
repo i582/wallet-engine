@@ -63,6 +63,12 @@ pub struct SendMessage {
     pub amount: SendAmount,
     /// The single body representation encoded into the message.
     pub body: SendMessageBody,
+    /// Whether a failed destination-contract call returns the remaining value.
+    ///
+    /// Ordinary account transfers normally keep this false. Contract calls,
+    /// including NFT item transfers, must enable it.
+    #[serde(default)]
+    pub bounce: bool,
     /// Optional destination-contract `StateInit` attached independently of the body.
     pub state_init: Option<Boc>,
 }
@@ -322,6 +328,12 @@ pub struct SendEmulation {
     pub transaction_count: u64,
     /// High-level actions recognized by Toncenter in the emulated trace.
     pub actions: Vec<SendEmulationAction>,
+    /// Per-account transaction outcomes observed before optional action parsing.
+    ///
+    /// This evidence lets typed contract flows validate execution even when a
+    /// Toncenter deployment does not recognize the corresponding high-level action.
+    #[serde(default)]
+    pub transactions: Vec<SendEmulationTransaction>,
     /// Whether every returned transaction completed without an observed phase failure.
     ///
     /// A false value does not by itself block submission. A recipient can
@@ -329,6 +341,18 @@ pub struct SendEmulation {
     pub trace_succeeded: bool,
     /// Whether Toncenter reports that the trace still has unresolved messages.
     pub is_incomplete: bool,
+}
+
+/// One account transaction observed in an emulated message trace.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct SendEmulationTransaction {
+    /// Account whose contract executed this transaction.
+    pub account: TonAddressString,
+    /// Whether the observed compute and action phases contain no explicit failure.
+    pub succeeded: bool,
+    /// Whether this is the source wallet transaction at the root of the trace.
+    pub is_root: bool,
 }
 
 /// One high-level action recognized by Toncenter during emulation.
@@ -447,6 +471,22 @@ mod tests {
         assert!(!decoded.force);
     }
 
+    #[test]
+    fn legacy_send_message_defaults_bounce_to_false() {
+        let mut json = serde_json::to_value(send_request(
+            SendExpiration::EngineDefault,
+            SendMessageBody::Empty,
+        ))
+        .expect("send request serializes");
+        json["intent"]["messages"][0]
+            .as_object_mut()
+            .expect("message is an object")
+            .remove("bounce");
+
+        let decoded = serde_json::from_value::<SendRequest>(json).expect("request deserializes");
+        assert!(!decoded.intent.messages[0].bounce);
+    }
+
     /// Builds one public send request for serialization tests.
     fn send_request(expiration: SendExpiration, body: SendMessageBody) -> SendRequest {
         SendRequest {
@@ -461,6 +501,7 @@ mod tests {
                     .expect("valid destination"),
                     amount: SendAmount::exact("1").expect("valid amount"),
                     body,
+                    bounce: false,
                     state_init: None,
                 }],
             },

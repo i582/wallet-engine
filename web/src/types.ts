@@ -138,12 +138,19 @@ export interface SendEmulationAction {
   readonly detailsJson: string
 }
 
+export interface SendEmulationTransaction {
+  readonly account: string
+  readonly succeeded: boolean
+  readonly isRoot: boolean
+}
+
 export interface SendEmulation {
   readonly mcBlockSeqno: number
   readonly walletFeesNanograms: string
   readonly traceFeesNanograms: string
   readonly transactionCount: number
   readonly actions: SendEmulationAction[]
+  readonly transactions: SendEmulationTransaction[]
   readonly traceSucceeded: boolean
   readonly isIncomplete: boolean
 }

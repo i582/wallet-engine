@@ -34,8 +34,48 @@ export interface SendMessage {
   readonly destination: string
   readonly amount: SendAmount
   readonly body: SendMessageBody
+  /** Return the remaining value when a destination-contract call fails. */
+  readonly bounce?: boolean
   /** Destination-contract StateInit encoded as a Base64 BOC. */
   readonly stateInit?: string | null
+}
+
+/** Explicit TON values used to execute a TEP-62 NFT transfer. */
+export type NftTransferFunding = {
+  readonly kind: "exact"
+  /** Value attached to the NFT item contract call. */
+  readonly attachedNanograms: string
+  /** Value forwarded to the new owner with ownership_assigned. */
+  readonly forwardNanograms: string
+}
+
+/** Optional payload forwarded to the new NFT owner. */
+export type NftTransferPayload =
+  | {readonly kind: "empty"}
+  | {readonly kind: "comment"; readonly text: string}
+  | {readonly kind: "rawPayload"; readonly boc: string}
+
+/** Immutable choices for one TEP-62 NFT transfer. */
+export interface NftTransferIntent {
+  readonly nftAddress: string
+  readonly recipient: string
+  readonly funding: NftTransferFunding
+  readonly payload: NftTransferPayload
+  readonly expiration: SendExpiration
+}
+
+/** Requests fresh ownership validation and NFT transfer emulation. */
+export interface NftTransferPreviewRequest {
+  /** Reuse this ID for the signed request to preserve the TEP-62 query ID. */
+  readonly operationId: string
+  readonly intent: NftTransferIntent
+}
+
+/** Requests a signed TEP-62 NFT transfer. */
+export interface NftTransferRequest {
+  readonly operationId: string
+  readonly force?: boolean
+  readonly intent: NftTransferIntent
 }
 
 /** The policy used to select the wallet message expiration boundary. */

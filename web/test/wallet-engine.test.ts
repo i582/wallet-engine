@@ -7,6 +7,7 @@ import {
   WalletLifecycle,
   initializeWalletEngine,
   type HttpRequest,
+  type NftTransferPreviewRequest,
   type WalletClientConfig,
 } from "../src"
 import {MemoryJournal} from "./memory-journal"
@@ -244,6 +245,45 @@ describe("high-level WASM API", () => {
     }
 
     expect(diagnostic).not.toContain("missing field `unix_timestamp`")
+  })
+
+  test("requires both exact NFT funding values at the WASM boundary", async () => {
+    const lifecycle = await WalletLifecycle.create(platform)
+    lifecycles.push(lifecycle)
+    const created = await lifecycle.createWallet({
+      recordId: "nft-funding-wallet",
+      network: "testnet",
+    })
+    let fetchCount: number = 0
+    const client = await WalletClient.create(walletConfig(created.descriptor), {
+      platformHost: platform,
+      fetch: mockFetch(async () => {
+        fetchCount += 1
+        throw new TypeError("request must not reach HTTP")
+      }),
+    })
+    clients.push(client)
+
+    const malformed = {
+      operationId: "nft-funding-preview",
+      intent: {
+        nftAddress: created.descriptor.address,
+        recipient: created.descriptor.address,
+        funding: {kind: "exact", attachedNanograms: "50000000"},
+        payload: {kind: "empty"},
+        expiration: {kind: "engineDefault"},
+      },
+    } as unknown as NftTransferPreviewRequest
+
+    let diagnostic: string = ""
+    try {
+      await client.previewNftTransfer(malformed)
+    } catch (cause) {
+      diagnostic = cause instanceof Error ? cause.message : String(cause)
+    }
+
+    expect(diagnostic).toContain("forwardNanograms")
+    expect(fetchCount).toBe(0)
   })
 
   test("creates, reveals, and deletes a wallet through the platform host", async () => {

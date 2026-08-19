@@ -12,7 +12,7 @@ use crate::types::Boc;
 use crate::{
     Base64Hash, DomainError, ErrorCategory, ErrorCode, HttpHeader, HttpMethod, HttpRequest,
     HttpRequestId, NonEmptyString, RetryAdvice, SendEmulation, SendEmulationAction,
-    TonAddressString, WalletClientConfig, WalletClientError,
+    SendEmulationTransaction, TonAddressString, WalletClientConfig, WalletClientError,
 };
 
 use super::http::build_toncenter_url;
@@ -109,6 +109,29 @@ pub(super) fn parse_emulation(
         .map(parse_action)
         .collect::<Result<Vec<_>, _>>()?;
 
+    let mut transactions = response
+        .transactions
+        .iter()
+        .map(|(hash, transaction)| {
+            let account =
+                TonAddressString::try_from(transaction.account.clone()).map_err(|error| {
+                    invalid_response(format!("invalid emulated transaction account: {error}"))
+                })?;
+            let is_root = hash == &response.trace.tx_hash;
+            Ok(SendEmulationTransaction {
+                account,
+                succeeded: transaction_succeeded(transaction, is_root),
+                is_root,
+            })
+        })
+        .collect::<Result<Vec<_>, DomainError>>()?;
+    transactions.sort_by(|left, right| {
+        right
+            .is_root
+            .cmp(&left.is_root)
+            .then_with(|| left.account.as_str().cmp(right.account.as_str()))
+    });
+
     let wallet_succeeded = transaction_succeeded(wallet, true);
 
     let trace_succeeded = response
@@ -124,6 +147,7 @@ pub(super) fn parse_emulation(
             trace_fees_nanograms: trace_fees.into(),
             transaction_count,
             actions,
+            transactions,
             trace_succeeded,
             is_incomplete: response.is_incomplete,
         },
@@ -308,13 +332,14 @@ mod tests {
     #[test]
     fn parses_fees_and_detects_a_failed_child_transaction() {
         let source = TonAddressString::try_from(ADDRESS).expect("test address must parse");
+        let child = "0:2222222222222222222222222222222222222222222222222222222222222222";
         let parsed = parse_emulation(
             serde_json::to_vec(&serde_json::json!({
                 "mc_block_seqno": 17,
                 "trace": { "tx_hash": "root", "children": [] },
                 "transactions": {
                     "root": transaction(ADDRESS, "11", false, true, true, 0, 0),
-                    "child": transaction(ADDRESS, "7", true, false, false, 32, 37),
+                    "child": transaction(child, "7", true, false, false, 32, 37),
                 },
                 "rand_seed": "seed",
                 "is_incomplete": true,
@@ -336,6 +361,13 @@ mod tests {
             UnsignedDecimalString::from(18_u64)
         );
         assert_eq!(parsed.summary.transaction_count, 2);
+        assert_eq!(parsed.summary.transactions.len(), 2);
+        assert!(parsed.summary.transactions[0].is_root);
+        assert!(parsed.summary.transactions[0].succeeded);
+        assert_eq!(parsed.summary.transactions[0].account, source);
+        assert!(!parsed.summary.transactions[1].is_root);
+        assert!(!parsed.summary.transactions[1].succeeded);
+        assert_eq!(parsed.summary.transactions[1].account.as_str(), child);
         assert!(!parsed.summary.trace_succeeded);
         assert!(parsed.summary.is_incomplete);
     }

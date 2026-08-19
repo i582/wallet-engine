@@ -1,8 +1,9 @@
-import {ArrowLeft, ShoppingBagOpen, WarningCircle} from "@phosphor-icons/react"
-import type {NftItem} from "@ton/wallet-engine"
-import type {ReactElement} from "react"
+import {ArrowLeft, PaperPlaneTilt, ShoppingBagOpen, WarningCircle} from "@phosphor-icons/react"
+import type {NftItem, SendPreview, SendResult} from "@ton/wallet-engine"
+import {type ReactElement, type ReactNode, useState} from "react"
 
 import {NftArtwork} from "@/components/nft-card"
+import {NftSendForm} from "@/components/nft-send-form"
 import {Button} from "@/components/ui/button"
 import {compactAddress} from "@/lib/format"
 import {nftCollectionName, nftDisplayName} from "@/lib/nft-display"
@@ -11,7 +12,20 @@ export interface NftDetailPageProps {
   readonly item?: NftItem
   readonly hasMore: boolean
   readonly loadingMore: boolean
+  readonly canForceRetry: boolean
   readonly onLoadMore: () => Promise<void>
+  readonly onCancelPreview: () => Promise<void>
+  readonly onPreviewTransfer: (
+    operationId: string,
+    nftAddress: string,
+    recipient: string,
+  ) => Promise<SendPreview>
+  readonly onSendTransfer: (
+    operationId: string,
+    nftAddress: string,
+    recipient: string,
+    force: boolean,
+  ) => Promise<SendResult>
 }
 
 /** Dedicated page for one loaded collectible and its indexed ownership metadata. */
@@ -19,8 +33,13 @@ export function NftDetailPage({
   item,
   hasMore,
   loadingMore,
+  canForceRetry,
   onLoadMore,
+  onCancelPreview,
+  onPreviewTransfer,
+  onSendTransfer,
 }: NftDetailPageProps): ReactElement {
+  const [sending, setSending] = useState<boolean>(false)
   if (!item) {
     return (
       <NftPageFrame title="Collectible">
@@ -64,6 +83,16 @@ export function NftDetailPage({
           <p className="mt-4 text-sm leading-6 text-muted-foreground">{description}</p>
         ) : null}
 
+        <Button
+          className="mt-6 w-full"
+          disabled={!item.initialized || item.onSale}
+          type="button"
+          onClick={() => setSending(true)}
+        >
+          <PaperPlaneTilt aria-hidden="true" size={18} />
+          {item.onSale ? "Unavailable while on sale" : "Send collectible"}
+        </Button>
+
         <dl className="mt-8 divide-y divide-border border-y border-border">
           <MetadataRow label="NFT address" value={item.address} />
           {item.collectionAddress ? (
@@ -75,6 +104,16 @@ export function NftDetailPage({
           <MetadataRow label="Initialized" value={item.initialized ? "Yes" : "No"} />
         </dl>
       </div>
+      {sending ? (
+        <NftSendForm
+          canForceRetry={canForceRetry}
+          item={item}
+          onCancelPreview={onCancelPreview}
+          onClose={() => setSending(false)}
+          onPreview={onPreviewTransfer}
+          onSend={onSendTransfer}
+        />
+      ) : null}
     </NftPageFrame>
   )
 }
@@ -83,7 +122,7 @@ function NftPageFrame({
   children,
   title,
 }: {
-  readonly children: ReactElement | readonly ReactElement[]
+  readonly children: ReactNode
   readonly title: string
 }): ReactElement {
   return (

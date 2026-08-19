@@ -176,6 +176,18 @@ pub enum WalletClientError {
     /// The transfer request has an invalid operation ID, destination, or amount.
     #[error("invalid send request")]
     InvalidSendRequest,
+    /// NFT transfer validation or TEP-62 message construction failed before signing.
+    #[error("NFT transfer is unavailable: {diagnostic}")]
+    NftTransferUnavailable {
+        /// Bounded developer-facing reason that contains no secret material.
+        diagnostic: String,
+    },
+    /// Emulation did not prove a complete successful NFT ownership transfer.
+    #[error("NFT transfer emulation was rejected: {diagnostic}")]
+    NftTransferEmulationRejected {
+        /// Bounded provider or validation diagnostic.
+        diagnostic: String,
+    },
     /// The wallet has public identity but no protected secret configured for local signing.
     #[error("the wallet is not configured for local signing")]
     LocalSigningUnavailable,

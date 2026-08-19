@@ -27,4 +27,14 @@ test("opens the collectible inventory and NFT detail pages", async ({page}, test
   await expect(
     page.getByText("A deterministic collectible used by the wallet example."),
   ).toBeVisible()
+  await expect(page.getByRole("button", {name: "Unavailable while on sale"})).toBeDisabled()
+
+  await page.getByRole("link", {name: "Back to collectibles"}).click()
+  await page.getByRole("link", {name: "Open Signal Bloom"}).click()
+  await page.getByRole("button", {name: "Send collectible"}).click()
+  await expect(page.getByRole("heading", {name: "Send collectible"})).toBeVisible()
+  await expect(page.getByLabel("New owner")).toBeVisible()
+  if (testInfo.project.metadata.compareScreenshots === true) {
+    await expect(page).toHaveScreenshot("nft-send-form.png")
+  }
 })

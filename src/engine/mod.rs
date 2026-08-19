@@ -11,6 +11,7 @@ mod expiration;
 mod host;
 mod http;
 mod nft;
+mod nft_transfer;
 mod preview;
 mod provider;
 mod refresh;

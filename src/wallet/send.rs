@@ -1042,7 +1042,7 @@ impl SendWorkflow {
         SendDirective::ReadProtectedSecret(ProtectedSecretRead {
             secret_ref: self.local_secret_ref.clone(),
             reason: SecretAccessReason::SignTransfer,
-            prompt: "Authenticate to sign this GRAM transfer".to_owned(),
+            prompt: "Authenticate to sign this wallet transaction".to_owned(),
         })
     }
 
@@ -1800,6 +1800,7 @@ mod tests {
                         .expect("valid destination address"),
                     amount: SendAmount::exact("1").expect("valid exact amount"),
                     body: SendMessageBody::Empty,
+                    bounce: false,
                     state_init: None,
                 }],
             },
@@ -1841,6 +1842,7 @@ mod tests {
                 destination: destination(),
                 amount: SendAmount::exact("1").expect("valid exact amount"),
                 body: SendMessageBody::Empty,
+                bounce: false,
                 state_init: None,
             }],
             seqno: 7,

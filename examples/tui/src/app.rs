@@ -627,6 +627,7 @@ impl App {
                 destination,
                 amount,
                 body: SendMessageBody::Empty,
+                bounce: false,
                 state_init: None,
             }],
         };

@@ -285,6 +285,48 @@ fn build_nft_page_request(
     )
 }
 
+pub(super) fn build_nft_item_request(
+    config: &WalletClientConfig,
+    id: HttpRequestId,
+    address: &TonAddressString,
+) -> Result<HttpRequest, WalletClientError> {
+    build_toncenter_v3_request(
+        config,
+        id,
+        "nft/items",
+        &[
+            ("address", address.as_str()),
+            ("limit", "2"),
+            ("offset", "0"),
+        ],
+    )
+}
+
+pub(super) fn parse_single_nft_item(
+    body: &[u8],
+    expected_address: &TonAddressString,
+    network: Network,
+) -> Result<NftItem, DomainError> {
+    let response: RawNftItemsResponse =
+        serde_json::from_slice(body).map_err(|error| invalid_response(error.to_string()))?;
+    if response.nft_items.len() != 1 {
+        return Err(invalid_response(format!(
+            "expected exactly one NFT item, provider returned {}",
+            response.nft_items.len()
+        )));
+    }
+    let raw = response
+        .nft_items
+        .into_iter()
+        .next()
+        .ok_or_else(|| invalid_response("provider returned no NFT item"))?;
+    let item = parse_nft_item(raw, &response.metadata, network)?;
+    if item.address != *expected_address {
+        return Err(invalid_response("provider returned a different NFT item"));
+    }
+    Ok(item)
+}
+
 fn parse_nft_page(body: &[u8], page_size: u32, network: Network) -> Result<NftPage, DomainError> {
     let response: RawNftItemsResponse =
         serde_json::from_slice(body).map_err(|error| invalid_response(error.to_string()))?;
@@ -533,6 +575,38 @@ mod tests {
     }
 
     #[test]
+    fn transfer_preflight_queries_one_exact_item() {
+        let state = state();
+        let item = TonAddressString::try_from(ITEM).expect("item address");
+        let request = build_nft_item_request(&state.config, HttpRequestId { value: 8 }, &item)
+            .expect("the provider URL is valid");
+
+        assert_eq!(
+            request.url,
+            format!(
+                "https://testnet.toncenter.com/api/v3/nft/items?address={}&limit=2&offset=0",
+                ITEM.replace(':', "%3A")
+            )
+        );
+    }
+
+    #[test]
+    fn transfer_preflight_rejects_missing_duplicate_and_wrong_items() {
+        let expected = TonAddressString::try_from(ITEM).expect("item address");
+        for items in [
+            json!([]),
+            json!([raw_nft(ITEM), raw_nft(ITEM)]),
+            json!([raw_nft(ITEM_TWO)]),
+        ] {
+            let body =
+                serde_json::to_vec(&json!({"nft_items": items})).expect("fixture serializes");
+            let error = parse_single_nft_item(&body, &expected, Network::Testnet)
+                .expect_err("ambiguous or wrong item must fail");
+            assert_eq!(error.code, ErrorCode::InvalidProviderResponse);
+        }
+    }
+
+    #[test]
     fn parses_items_and_enriches_content_from_metadata() {
         let body = json!({
             "nft_items": [{
@@ -603,6 +677,20 @@ mod tests {
         assert_eq!(item.is_nsfw, Some(false));
         assert_eq!(item.is_scam, Some(true));
         assert!(!page.has_more);
+    }
+
+    fn raw_nft(address: &str) -> Value {
+        json!({
+            "address": address,
+            "code_hash": "code",
+            "content": {},
+            "data_hash": "data",
+            "index": "0",
+            "init": true,
+            "last_transaction_lt": "1",
+            "on_sale": false,
+            "owner_address": OWNER,
+        })
     }
 
     #[test]

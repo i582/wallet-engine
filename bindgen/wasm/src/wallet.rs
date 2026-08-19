@@ -136,6 +136,17 @@ impl WalletClient {
         to_value(&result)
     }
 
+    #[wasm_bindgen(js_name = sendNftTransfer)]
+    pub async fn send_nft_transfer(&self, request: JsValue) -> Result<JsValue, JsValue> {
+        let request = from_value(request)?;
+        let result = self
+            .inner
+            .send_nft_transfer(request)
+            .await
+            .map_err(|error| engine_error(&error))?;
+        to_value(&result)
+    }
+
     /// Signs an internal Wallet V5 message and returns it without submission.
     #[wasm_bindgen(js_name = signMessage)]
     pub async fn sign_message(&self, request: JsValue) -> Result<JsValue, JsValue> {
@@ -154,6 +165,17 @@ impl WalletClient {
         let preview = self
             .inner
             .preview_send(request)
+            .await
+            .map_err(|error| engine_error(&error))?;
+        to_value(&preview)
+    }
+
+    #[wasm_bindgen(js_name = previewNftTransfer)]
+    pub async fn preview_nft_transfer(&self, request: JsValue) -> Result<JsValue, JsValue> {
+        let request = from_value(request)?;
+        let preview = self
+            .inner
+            .preview_nft_transfer(request)
             .await
             .map_err(|error| engine_error(&error))?;
         to_value(&preview)

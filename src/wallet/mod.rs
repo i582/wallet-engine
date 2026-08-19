@@ -4,6 +4,7 @@
 //! words. Private submodules derive wallet keys and build signed transfers.
 
 pub(crate) mod crypto;
+pub(crate) mod nft_transfer;
 pub(crate) mod send;
 pub(crate) mod transfer;
 
