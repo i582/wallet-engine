@@ -942,6 +942,7 @@ SendIntent transfer_intent(const TransferDraft &draft) {
                 draft.destination,
                 SendAmount(SendAmount::kExact {draft.amount_nanograms}),
                 body,
+                false,
                 std::nullopt,
             },
         },

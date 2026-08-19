@@ -1758,6 +1758,7 @@ private struct SendWalletView: View {
                                 destination: normalizedDestination,
                                 amount: .exact(nanograms: nanograms),
                                 body: .empty,
+                                bounce: false,
                                 stateInit: nil
                             )]
                         )

@@ -106,6 +106,7 @@ class WalletRepository(private val store: SecureWalletStore) {
                         destination = destination.trim(),
                         amount = SendAmount.Exact(nanograms = amountNanograms),
                         body = SendMessageBody.Empty,
+                        bounce = false,
                         stateInit = null,
                     )),
                 ),
