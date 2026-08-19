@@ -24,7 +24,7 @@ pub(crate) fn generate_wasm(check: bool) -> Result<()> {
         .current_dir(&root)
         .env("CARGO_TARGET_DIR", root.join("target/wasm-bindings"))
         .arg("build")
-        .arg(root.join("wasm-bindings"))
+        .arg(root.join("bindgen/wasm"))
         .arg("--target")
         .arg("web")
         .arg("--release")

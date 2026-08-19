@@ -1,8 +1,9 @@
 # Rust build artifacts
 target/
-apple-bindgen/target/
-kotlin-bindgen/target/
-wasm-bindings/target/
+bindgen/apple/target/
+bindgen/kotlin/target/
+bindgen/wasm/target/
+bindgen/cpp/target/
 xtask/target/
 
 # Generated foreign-language bindings
