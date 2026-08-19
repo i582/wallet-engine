@@ -19,7 +19,7 @@ find_package(Qt6 REQUIRED COMPONENTS Concurrent Network Widgets)
 find_library(
     WALLET_ENGINE_LIBRARY
     NAMES wallet_engine
-    PATHS "${WALLET_ENGINE_ROOT}/target/bindings-host/debug"
+    PATHS "${WALLET_ENGINE_ROOT}/target/bindings-host/release"
     NO_DEFAULT_PATH
     REQUIRED
 )

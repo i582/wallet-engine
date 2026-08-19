@@ -29,19 +29,19 @@ fmt-check:
     cargo fmt --manifest-path xtask/Cargo.toml -- --check
 
 check-build:
-    cargo check --locked --all-targets
-    cargo check --locked --manifest-path bindgen/apple/Cargo.toml --all-targets
-    cargo check --locked --manifest-path bindgen/cpp/Cargo.toml --workspace --all-targets
-    cargo check --locked --manifest-path bindgen/kotlin/Cargo.toml --all-targets
-    cargo check --locked --manifest-path bindgen/wasm/Cargo.toml --target wasm32-unknown-unknown
-    cargo check --locked --manifest-path xtask/Cargo.toml --all-targets
+    cargo check --release --locked --all-targets
+    cargo check --release --locked --manifest-path bindgen/apple/Cargo.toml --all-targets
+    cargo check --release --locked --manifest-path bindgen/cpp/Cargo.toml --workspace --all-targets
+    cargo check --release --locked --manifest-path bindgen/kotlin/Cargo.toml --all-targets
+    cargo check --release --locked --manifest-path bindgen/wasm/Cargo.toml --target wasm32-unknown-unknown
+    cargo check --release --locked --manifest-path xtask/Cargo.toml --all-targets
 
 clippy:
-    cargo clippy --locked --all-targets -- -D warnings
-    cargo clippy --locked --manifest-path bindgen/apple/Cargo.toml --all-targets -- -D warnings
-    cargo clippy --locked --manifest-path bindgen/kotlin/Cargo.toml --all-targets -- -D warnings
-    cargo clippy --locked --manifest-path bindgen/wasm/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
-    cargo clippy --locked --manifest-path xtask/Cargo.toml --all-targets -- -D warnings
+    cargo clippy --release --locked --all-targets -- -D warnings
+    cargo clippy --release --locked --manifest-path bindgen/apple/Cargo.toml --all-targets -- -D warnings
+    cargo clippy --release --locked --manifest-path bindgen/kotlin/Cargo.toml --all-targets -- -D warnings
+    cargo clippy --release --locked --manifest-path bindgen/wasm/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
+    cargo clippy --release --locked --manifest-path xtask/Cargo.toml --all-targets -- -D warnings
 
 test-rust:
     cargo nextest run --locked {{ NEXTEST_PROFILE_ARGS }}
@@ -179,8 +179,8 @@ example-web-e2e-functional: example-web-install bindings-wasm
 web-check: web-fmt-check web-lint web-build web-test example-web-fmt-check example-web-lint example-web-build example-web-test
 
 example-cpp-bindgen-build: bindings-cpp
-    cmake -S examples/cpp-bindgen -B target/cpp-bindgen-example
-    cmake --build target/cpp-bindgen-example
+    cmake -S examples/cpp-bindgen -B target/cpp-bindgen-example -DCMAKE_BUILD_TYPE=Release
+    cmake --build target/cpp-bindgen-example --config Release
 
 example-cpp-bindgen-run: example-cpp-bindgen-build
     ./target/cpp-bindgen-example/wallet_engine_cpp_bindgen_example
@@ -206,10 +206,10 @@ example-tui-test:
 tui-check: example-tui-fmt-check example-tui-check example-tui-clippy example-tui-test
 
 example-swift-build-macos: bindings-swift
-    xcodebuild -project examples/swift/WalletEngineApp.xcodeproj -scheme WalletEngineApp -configuration Debug -destination 'platform=macOS,arch=arm64' -derivedDataPath target/swift-example CODE_SIGNING_ALLOWED=NO build
+    xcodebuild -project examples/swift/WalletEngineApp.xcodeproj -scheme WalletEngineApp -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath target/swift-example CODE_SIGNING_ALLOWED=NO build
 
 example-swift-build-ios: bindings-swift
-    xcodebuild -project examples/swift/WalletEngineApp.xcodeproj -scheme WalletEngineApp -configuration Debug -destination 'generic/platform=iOS Simulator' -derivedDataPath target/swift-example-ios ARCHS=arm64 ONLY_ACTIVE_ARCH=YES build
+    xcodebuild -project examples/swift/WalletEngineApp.xcodeproj -scheme WalletEngineApp -configuration Release -destination 'generic/platform=iOS Simulator' -derivedDataPath target/swift-example-ios ARCHS=arm64 ONLY_ACTIVE_ARCH=YES build
 
 example-swift-e2e-install:
     npm --prefix tests/ton-connect/dapp ci
@@ -233,10 +233,10 @@ build-android abi="all":
     cargo xtask android --abi {{abi}}
 
 example-android-build: bindings-kotlin build-android
-    examples/android/gradlew -p examples/android :app:assembleDebug --no-configuration-cache
+    examples/android/gradlew -p examples/android :app:assembleRelease --no-configuration-cache
 
 example-android-check: bindings-kotlin build-android
-    examples/android/gradlew -p examples/android :app:assembleDebug :app:testInstrumentedTestUnitTest :app:lintDebug --no-configuration-cache
+    examples/android/gradlew -p examples/android :app:assembleRelease :app:testInstrumentedTestUnitTest :app:lintRelease --no-configuration-cache
 
 example-android-install: example-android-build
     examples/android/gradlew -p examples/android :app:installDebug --no-configuration-cache

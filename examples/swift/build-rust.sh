@@ -6,6 +6,11 @@ target_root="${DERIVED_FILE_DIR}/wallet-engine-rust"
 output_root="${DERIVED_FILE_DIR}/wallet-engine-universal"
 mkdir -p "${output_root}"
 
+case "${CONFIGURATION:-Debug}" in
+    Release*) rust_profile="release" ;;
+    *) rust_profile="debug" ;;
+esac
+
 libraries=""
 for architecture in ${ARCHS}; do
     case "${PLATFORM_NAME}:${architecture}" in
@@ -20,12 +25,21 @@ for architecture in ${ARCHS}; do
             ;;
     esac
 
-    CARGO_TARGET_DIR="${target_root}" \
-        cargo build \
-        --manifest-path "${repository_root}/Cargo.toml" \
-        --locked \
-        --target "${rust_target}"
-    library="${target_root}/${rust_target}/debug/libwallet_engine.a"
+    if [ "${rust_profile}" = "release" ]; then
+        CARGO_TARGET_DIR="${target_root}" \
+            cargo build \
+            --manifest-path "${repository_root}/Cargo.toml" \
+            --release \
+            --locked \
+            --target "${rust_target}"
+    else
+        CARGO_TARGET_DIR="${target_root}" \
+            cargo build \
+            --manifest-path "${repository_root}/Cargo.toml" \
+            --locked \
+            --target "${rust_target}"
+    fi
+    library="${target_root}/${rust_target}/${rust_profile}/libwallet_engine.a"
     libraries="${libraries} ${library}"
 done
 
