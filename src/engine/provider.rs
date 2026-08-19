@@ -415,7 +415,7 @@ fn value_message(value: &Value) -> Option<String> {
         .or_else(|| value.as_i64().map(|value| value.to_string()))
 }
 
-fn invalid_response(message: impl Into<String>) -> DomainError {
+pub(crate) fn invalid_response(message: impl Into<String>) -> DomainError {
     DomainError {
         code: ErrorCode::InvalidProviderResponse,
         category: ErrorCategory::ProviderProtocol,

@@ -46,14 +46,20 @@ impl WalletClient {
                 activity: Vec::new(),
                 activity_cursor: None,
                 activity_has_more: false,
+                nft_offset: 0,
+                nfts_has_more: false,
                 next_id: 1,
                 refresh_generation: 0,
                 pagination_generation: 0,
+                nft_refresh_generation: 0,
+                nft_pagination_generation: 0,
                 preview_generation: 0,
                 send_generation: 0,
                 resolution_generation: 0,
                 active_refresh: None,
                 active_pagination: None,
+                active_nft_refresh: None,
+                active_nft_pagination: None,
                 active_preview: None,
                 active_send: None,
                 active_resolution: None,
@@ -166,6 +172,8 @@ fn prepare_shutdown(
 ) -> Result<(Vec<crate::HttpRequestId>, Vec<SnapshotWaiter>), WalletClientError> {
     let has_active_work = state.active_refresh.is_some()
         || state.active_pagination.is_some()
+        || state.active_nft_refresh.is_some()
+        || state.active_nft_pagination.is_some()
         || state.active_preview.is_some()
         || state.active_send.is_some();
     let has_active_work = has_active_work || state.active_resolution.is_some();
@@ -180,12 +188,22 @@ fn prepare_shutdown(
         .unwrap_or_default();
     if active_refresh.is_some() {
         mark_loading_cancelled(&mut state.snapshot.account_resource);
-        mark_loading_cancelled(&mut state.snapshot.activity_resource);
+        mark_loading_cancelled(&mut state.snapshot.activity.resource);
     }
 
     if let Some((_, request_id)) = state.active_pagination.take() {
         request_ids.push(request_id);
-        state.snapshot.activity_pagination_resource = ResourceState::idle();
+        state.snapshot.activity.pagination_resource = ResourceState::idle();
+    }
+
+    if let Some((_, request_id)) = state.active_nft_refresh.take() {
+        request_ids.push(request_id);
+        mark_loading_cancelled(&mut state.snapshot.nfts.resource);
+    }
+
+    if let Some((_, request_id)) = state.active_nft_pagination.take() {
+        request_ids.push(request_id);
+        state.snapshot.nfts.pagination_resource = ResourceState::idle();
     }
 
     if let Some((_, preview_request_ids)) = state.active_preview.take() {
@@ -235,6 +253,8 @@ mod tests {
     fn shutdown_detects_revision_exhaustion_for_each_active_operation_family() {
         for activate in [
             activate_refresh as fn(&mut State),
+            activate_nft_refresh,
+            activate_nft_pagination,
             activate_preview,
             activate_send,
             activate_resolution,
@@ -269,6 +289,14 @@ mod tests {
         state.active_preview = Some((1, vec![request_id()]));
     }
 
+    fn activate_nft_refresh(state: &mut State) {
+        state.active_nft_refresh = Some((1, request_id()));
+    }
+
+    fn activate_nft_pagination(state: &mut State) {
+        state.active_nft_pagination = Some((1, request_id()));
+    }
+
     fn activate_send(state: &mut State) {
         state.active_send = Some((1, vec![request_id()]));
     }
@@ -298,14 +326,20 @@ mod tests {
             activity: Vec::new(),
             activity_cursor: None,
             activity_has_more: false,
+            nft_offset: 0,
+            nfts_has_more: false,
             next_id: 1,
             refresh_generation: 0,
             pagination_generation: 0,
+            nft_refresh_generation: 0,
+            nft_pagination_generation: 0,
             preview_generation: 0,
             send_generation: 0,
             resolution_generation: 0,
             active_refresh: None,
             active_pagination: None,
+            active_nft_refresh: None,
+            active_nft_pagination: None,
             active_preview: None,
             active_send: None,
             active_resolution: None,

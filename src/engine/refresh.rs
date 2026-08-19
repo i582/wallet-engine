@@ -54,8 +54,8 @@ impl WalletClient {
             }
 
             state.snapshot.account_resource = ResourceState::loading();
-            state.snapshot.activity_resource = ResourceState::loading();
-            state.snapshot.activity_pagination_resource = ResourceState::idle();
+            state.snapshot.activity.resource = ResourceState::loading();
+            state.snapshot.activity.pagination_resource = ResourceState::idle();
             state.next_revision()?;
 
             (generation, requests, previous_request_ids)
@@ -87,7 +87,7 @@ impl WalletClient {
 
         let failed = [
             &state.snapshot.account_resource,
-            &state.snapshot.activity_resource,
+            &state.snapshot.activity.resource,
         ]
         .into_iter()
         .filter(|resource| resource.phase == ResourcePhase::Failed)
@@ -115,7 +115,7 @@ impl WalletClient {
                 .unwrap_or_default();
             if !request_ids.is_empty() {
                 mark_loading_cancelled(&mut state.snapshot.account_resource);
-                mark_loading_cancelled(&mut state.snapshot.activity_resource);
+                mark_loading_cancelled(&mut state.snapshot.activity.resource);
                 state.next_revision()?;
             }
 
@@ -152,9 +152,9 @@ impl WalletClient {
             RefreshValue::Activity(result) => match result {
                 Ok(page) => {
                     apply_refreshed_activity_page(&mut state, page);
-                    state.snapshot.activity_resource = ResourceState::ready();
+                    state.snapshot.activity.resource = ResourceState::ready();
                 }
-                Err(error) => state.snapshot.activity_resource = ResourceState::failed(error),
+                Err(error) => state.snapshot.activity.resource = ResourceState::failed(error),
             },
         }
 

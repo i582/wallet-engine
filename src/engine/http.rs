@@ -70,11 +70,12 @@ pub(super) fn build_toncenter_v3_request(
     path: &str,
     query: &[(&str, &str)],
 ) -> Result<HttpRequest, WalletClientError> {
-    let path = ["api", "v3", path];
+    let mut path_segments = vec!["api", "v3"];
+    path_segments.extend(path.split('/').filter(|segment| !segment.is_empty()));
     Ok(HttpRequest {
         id,
         method: HttpMethod::Get,
-        url: build_toncenter_url(config, &path, query)?,
+        url: build_toncenter_url(config, &path_segments, query)?,
         headers: vec![HttpHeader {
             name: "Accept".to_owned(),
             value: "application/json".to_owned(),

@@ -10,6 +10,7 @@ mod emulation;
 mod expiration;
 mod host;
 mod http;
+mod nft;
 mod preview;
 mod provider;
 mod refresh;

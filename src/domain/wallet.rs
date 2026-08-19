@@ -1,10 +1,38 @@
 //! Immutable wallet snapshots and operation results.
 
 use super::{
-    AccountSnapshot, ActivityCursor, ActivityItem, Network, ResourceState, SendPhase, SendSnapshot,
-    WalletClientConfig,
+    AccountSnapshot, ActivityCursor, ActivityItem, Network, NftItem, ResourceState, SendPhase,
+    SendSnapshot, WalletClientConfig,
 };
 use crate::{NonEmptyString, TonAddressString};
+
+/// Paginated wallet activity and its independent load states.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityList {
+    /// Activity in descending logical-time order with duplicate items removed.
+    pub items: Vec<ActivityItem>,
+    /// The load state for the first activity page.
+    pub resource: ResourceState,
+    /// The load state for an additional activity page.
+    pub pagination_resource: ResourceState,
+    /// Whether the provider can have another activity page.
+    pub has_more: bool,
+}
+
+/// Paginated NFT items owned by the wallet and their independent load states.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct NftList {
+    /// NFT items in descending last-transaction order.
+    pub items: Vec<NftItem>,
+    /// The load state for the first NFT page.
+    pub resource: ResourceState,
+    /// The load state for an additional NFT page.
+    pub pagination_resource: ResourceState,
+    /// Whether the provider can have another NFT page.
+    pub has_more: bool,
+}
 
 /// An immutable view of all observable state in one wallet client.
 ///
@@ -25,16 +53,12 @@ pub struct WalletSnapshot {
     pub account: Option<AccountSnapshot>,
     /// The load state for `account`.
     pub account_resource: ResourceState,
-    /// Activity in descending logical-time order with duplicate items removed.
-    pub activity: Vec<ActivityItem>,
-    /// The load state for the first activity page.
-    pub activity_resource: ResourceState,
-    /// The load state for an additional activity page.
-    pub activity_pagination_resource: ResourceState,
+    /// Paginated wallet activity.
+    pub activity: ActivityList,
     /// The cursor for the next older activity page.
     pub activity_cursor: Option<ActivityCursor>,
-    /// Whether the provider can have another activity page.
-    pub activity_has_more: bool,
+    /// Paginated NFT items owned by the wallet.
+    pub nfts: NftList,
     /// The current transfer workflow state.
     pub send: SendSnapshot,
 }
@@ -48,11 +72,19 @@ impl WalletSnapshot {
             network: config.network,
             account: None,
             account_resource: ResourceState::idle(),
-            activity: Vec::new(),
-            activity_resource: ResourceState::idle(),
-            activity_pagination_resource: ResourceState::idle(),
+            activity: ActivityList {
+                items: Vec::new(),
+                resource: ResourceState::idle(),
+                pagination_resource: ResourceState::idle(),
+                has_more: false,
+            },
             activity_cursor: None,
-            activity_has_more: false,
+            nfts: NftList {
+                items: Vec::new(),
+                resource: ResourceState::idle(),
+                pagination_resource: ResourceState::idle(),
+                has_more: false,
+            },
             send: SendSnapshot {
                 operation_id: None,
                 phase: SendPhase::Idle,
@@ -89,6 +121,8 @@ pub struct WalletUpdate {
     pub outcome: WalletOperationOutcome,
     /// The number of new unique activity items added by pagination.
     pub activity_items_added: u64,
+    /// The number of new unique NFT items added by pagination.
+    pub nft_items_added: u64,
     /// The immutable snapshot after the operation.
     pub snapshot: WalletSnapshot,
 }

@@ -45,7 +45,7 @@ impl WalletClient {
                 .ok_or(WalletClientError::IdentifierExhausted)?;
             let generation = state.pagination_generation;
             state.active_pagination = Some((generation, id));
-            state.snapshot.activity_pagination_resource = ResourceState::loading();
+            state.snapshot.activity.pagination_resource = ResourceState::loading();
             state.next_revision()?;
 
             (generation, request)
@@ -64,15 +64,15 @@ impl WalletClient {
         let (outcome, added) = match result {
             Ok(page) => {
                 let added = apply_activity_page(&mut state, page);
-                state.snapshot.activity_pagination_resource = ResourceState::ready();
+                state.snapshot.activity.pagination_resource = ResourceState::ready();
                 (WalletOperationOutcome::Completed, added)
             }
             Err(error) if error.code == ErrorCode::HostCancelled => {
-                state.snapshot.activity_pagination_resource = ResourceState::idle();
+                state.snapshot.activity.pagination_resource = ResourceState::idle();
                 (WalletOperationOutcome::Cancelled, 0)
             }
             Err(error) => {
-                state.snapshot.activity_pagination_resource = ResourceState::failed(error);
+                state.snapshot.activity.pagination_resource = ResourceState::failed(error);
                 (WalletOperationOutcome::Failed, 0)
             }
         };
@@ -90,7 +90,7 @@ impl WalletClient {
             let mut state = self.lock()?;
             let request_id = state.active_pagination.take().map(|active| active.1);
             if request_id.is_some() {
-                state.snapshot.activity_pagination_resource = ResourceState::idle();
+                state.snapshot.activity.pagination_resource = ResourceState::idle();
                 state.next_revision()?;
             }
 
@@ -222,8 +222,8 @@ mod tests {
     use super::*;
     use crate::engine::provider::ActivityRecord;
     use crate::{
-        ActivityDirection, Base64Hash, Network, ProviderConfig, SendPhase, SendSnapshot,
-        WalletSnapshot,
+        ActivityDirection, ActivityList, Base64Hash, Network, NftList, ProviderConfig, SendPhase,
+        SendSnapshot, WalletSnapshot,
     };
 
     const ADDRESS: &str = "0:1111111111111111111111111111111111111111111111111111111111111111";
@@ -235,7 +235,7 @@ mod tests {
         state.activity_cursor = Some(cursor(10, 1));
         state.activity_has_more = true;
         state.sync_activity_snapshot();
-        let before = state.snapshot.activity.clone();
+        let before = state.snapshot.activity.items.clone();
 
         let added = apply_activity_page(
             &mut state,
@@ -247,13 +247,13 @@ mod tests {
         );
 
         assert_eq!(added, 0);
-        assert_eq!(state.snapshot.activity, before);
+        assert_eq!(state.snapshot.activity.items, before);
         assert_eq!(
             state.activity_cursor.as_ref().map(|value| &value.hash),
             Some(&hash(1))
         );
         assert!(!state.activity_has_more);
-        assert!(!state.snapshot.activity_has_more);
+        assert!(!state.snapshot.activity.has_more);
     }
 
     #[test]
@@ -286,7 +286,7 @@ mod tests {
         state.activity_cursor = None;
         state.activity_has_more = true;
         state.sync_activity_snapshot();
-        let before = state.snapshot.activity.clone();
+        let before = state.snapshot.activity.items.clone();
 
         let added = apply_activity_page(
             &mut state,
@@ -298,10 +298,10 @@ mod tests {
         );
 
         assert_eq!(added, 0);
-        assert_eq!(state.snapshot.activity, before);
+        assert_eq!(state.snapshot.activity.items, before);
         assert!(state.activity_cursor.is_none());
         assert!(!state.activity_has_more);
-        assert!(!state.snapshot.activity_has_more);
+        assert!(!state.snapshot.activity.has_more);
     }
 
     #[test]
@@ -319,13 +319,13 @@ mod tests {
         );
 
         assert_eq!(state.activity.len(), 1);
-        assert_eq!(state.snapshot.activity[0].id, "first");
+        assert_eq!(state.snapshot.activity.items[0].id, "first");
         assert_eq!(
             state.activity_cursor.as_ref().map(|value| &value.hash),
             Some(&expected_cursor.hash)
         );
         assert!(state.activity_has_more);
-        assert!(state.snapshot.activity_has_more);
+        assert!(state.snapshot.activity.has_more);
     }
 
     #[test]
@@ -359,11 +359,19 @@ mod tests {
                 network: config.network,
                 account: None,
                 account_resource: ResourceState::idle(),
-                activity: Vec::new(),
-                activity_resource: ResourceState::idle(),
-                activity_pagination_resource: ResourceState::idle(),
+                activity: ActivityList {
+                    items: Vec::new(),
+                    resource: ResourceState::idle(),
+                    pagination_resource: ResourceState::idle(),
+                    has_more: false,
+                },
                 activity_cursor: None,
-                activity_has_more: false,
+                nfts: NftList {
+                    items: Vec::new(),
+                    resource: ResourceState::idle(),
+                    pagination_resource: ResourceState::idle(),
+                    has_more: false,
+                },
                 send: SendSnapshot {
                     operation_id: None,
                     phase: SendPhase::Idle,
@@ -375,14 +383,20 @@ mod tests {
             activity: Vec::new(),
             activity_cursor: None,
             activity_has_more: false,
+            nft_offset: 0,
+            nfts_has_more: false,
             next_id: 1,
             refresh_generation: 0,
             pagination_generation: 0,
+            nft_refresh_generation: 0,
+            nft_pagination_generation: 0,
             preview_generation: 0,
             send_generation: 0,
             resolution_generation: 0,
             active_refresh: None,
             active_pagination: None,
+            active_nft_refresh: None,
+            active_nft_pagination: None,
             active_preview: None,
             active_send: None,
             active_resolution: None,

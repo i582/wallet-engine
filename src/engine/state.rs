@@ -14,6 +14,8 @@ use super::provider::{ActivityPageCursor, ActivityRecord};
 pub(super) enum OperationFamily {
     Refresh,
     Pagination,
+    NftRefresh,
+    NftPagination,
     Preview,
     Send,
     Resolution,
@@ -47,6 +49,13 @@ pub(super) struct State {
     /// A false value makes later pagination calls no-ops.
     pub(super) activity_has_more: bool,
 
+    /// The raw provider offset for the next NFT page.
+    /// It advances by response rows rather than visible unique items.
+    pub(super) nft_offset: u64,
+
+    /// Reports whether the provider can have another NFT page.
+    pub(super) nfts_has_more: bool,
+
     /// The next HTTP request number for this client instance.
     /// Allocation never reuses a number, even when request construction later fails.
     /// Host cancellation registries must remain client-scoped because replacement clients start from the initial number.
@@ -59,6 +68,12 @@ pub(super) struct State {
     /// The generation of the newest pagination operation.
     /// This counter separates a cancelled page response from a later page request.
     pub(super) pagination_generation: u64,
+
+    /// The generation of the newest first-page NFT refresh.
+    pub(super) nft_refresh_generation: u64,
+
+    /// The generation of the newest NFT pagination operation.
+    pub(super) nft_pagination_generation: u64,
 
     /// The generation of the newest send preview.
     /// It prevents a cancelled preview response from completing a later preview.
@@ -79,6 +94,12 @@ pub(super) struct State {
     /// The active older-page load as `(generation, request_id)`.
     /// Only one page request can run. A refresh removes and cancels this entry.
     pub(super) active_pagination: Option<(u64, HttpRequestId)>,
+
+    /// The active first-page NFT refresh as `(generation, request_id)`.
+    pub(super) active_nft_refresh: Option<(u64, HttpRequestId)>,
+
+    /// The active additional-page NFT load as `(generation, request_id)`.
+    pub(super) active_nft_pagination: Option<(u64, HttpRequestId)>,
 
     /// The active send preview as `(generation, active_request_ids)`.
     /// Preview requests never read protected secrets or change the send snapshot.
@@ -153,7 +174,7 @@ impl State {
     /// Publishes the internal numeric activity model through portable DTOs.
     pub(super) fn sync_activity_snapshot(&mut self) {
         let network = self.config.network;
-        self.snapshot.activity = self
+        self.snapshot.activity.items = self
             .activity
             .iter()
             .map(|record| record.snapshot(network))
@@ -162,7 +183,7 @@ impl State {
             .activity_cursor
             .as_ref()
             .map(ActivityPageCursor::snapshot);
-        self.snapshot.activity_has_more = self.activity_has_more;
+        self.snapshot.activity.has_more = self.activity_has_more;
     }
 
     pub(super) fn is_current(&self, family: OperationFamily, generation: u64) -> bool {
@@ -173,6 +194,12 @@ impl State {
                 .is_some_and(|active| active.0 == generation),
             OperationFamily::Pagination => self
                 .active_pagination
+                .is_some_and(|active| active.0 == generation),
+            OperationFamily::NftRefresh => self
+                .active_nft_refresh
+                .is_some_and(|active| active.0 == generation),
+            OperationFamily::NftPagination => self
+                .active_nft_pagination
                 .is_some_and(|active| active.0 == generation),
             OperationFamily::Preview => self
                 .active_preview
@@ -202,6 +229,20 @@ pub(super) fn update(outcome: WalletOperationOutcome, added: u64, state: &State)
     WalletUpdate {
         outcome,
         activity_items_added: added,
+        nft_items_added: 0,
+        snapshot: state.snapshot.clone(),
+    }
+}
+
+pub(super) fn nft_update(
+    outcome: WalletOperationOutcome,
+    added: u64,
+    state: &State,
+) -> WalletUpdate {
+    WalletUpdate {
+        outcome,
+        activity_items_added: 0,
+        nft_items_added: added,
         snapshot: state.snapshot.clone(),
     }
 }

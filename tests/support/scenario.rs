@@ -2079,35 +2079,35 @@ impl ScenarioRunner {
                     ));
                 }
                 if let Some(expected) = expectation.activity_phase
-                    && snapshot.activity_resource.phase != expected
+                    && snapshot.activity.resource.phase != expected
                 {
                     return Err(format!(
                         "expected activity phase {expected:?}\nactual: {:?}",
-                        snapshot.activity_resource.phase
+                        snapshot.activity.resource.phase
                     ));
                 }
                 if let Some(expected) = expectation.pagination_phase
-                    && snapshot.activity_pagination_resource.phase != expected
+                    && snapshot.activity.pagination_resource.phase != expected
                 {
                     return Err(format!(
                         "expected pagination phase {expected:?}\nactual: {:?}",
-                        snapshot.activity_pagination_resource.phase
+                        snapshot.activity.pagination_resource.phase
                     ));
                 }
                 if let Some(expected) = expectation.activity_count
-                    && snapshot.activity.len() != expected
+                    && snapshot.activity.items.len() != expected
                 {
                     return Err(format!(
                         "expected {expected} activity items\nactual: {}",
-                        snapshot.activity.len()
+                        snapshot.activity.items.len()
                     ));
                 }
                 if let Some(expected) = expectation.has_more
-                    && snapshot.activity_has_more != expected
+                    && snapshot.activity.has_more != expected
                 {
                     return Err(format!(
                         "expected activity_has_more={expected}\nactual: {}",
-                        snapshot.activity_has_more
+                        snapshot.activity.has_more
                     ));
                 }
                 if let Some(expected) = expectation.account_error
@@ -2119,11 +2119,11 @@ impl ScenarioRunner {
                     ));
                 }
                 if let Some(expected) = expectation.activity_error
-                    && snapshot.activity_resource.error.as_ref() != Some(&expected)
+                    && snapshot.activity.resource.error.as_ref() != Some(&expected)
                 {
                     return Err(format!(
                         "expected activity error {expected:#?}\nactual: {:#?}",
-                        snapshot.activity_resource.error
+                        snapshot.activity.resource.error
                     ));
                 }
                 if let Some(expected) = expectation.send_error_message
@@ -2175,7 +2175,7 @@ impl ScenarioRunner {
             }
             Expectation::ActivityPresent => {
                 let snapshot = self.client.snapshot().map_err(|error| error.to_string())?;
-                if snapshot.activity.is_empty() {
+                if snapshot.activity.items.is_empty() {
                     Err("expected refreshed activity to contain an item".to_owned())
                 } else {
                     Ok(())
@@ -2221,6 +2221,7 @@ impl ScenarioRunner {
                     .snapshot()
                     .map_err(|error| error.to_string())?
                     .activity
+                    .items
                     .into_iter()
                     .map(|item| item.id)
                     .collect();
@@ -2249,6 +2250,7 @@ impl ScenarioRunner {
                     .snapshot()
                     .map_err(|error| error.to_string())?
                     .activity
+                    .items
                     .into_iter()
                     .map(|item| item.id)
                     .collect();
