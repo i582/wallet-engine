@@ -14,30 +14,33 @@ build-dev:
 
 fmt:
     cargo fmt --all
-    cargo fmt --manifest-path apple-bindgen/Cargo.toml
-    cargo fmt --manifest-path kotlin-bindgen/Cargo.toml
-    cargo fmt --manifest-path wasm-bindings/Cargo.toml
+    cargo fmt --manifest-path bindgen/apple/Cargo.toml
+    cargo fmt --manifest-path bindgen/cpp/bindgen/Cargo.toml
+    cargo fmt --manifest-path bindgen/kotlin/Cargo.toml
+    cargo fmt --manifest-path bindgen/wasm/Cargo.toml
     cargo fmt --manifest-path xtask/Cargo.toml
 
 fmt-check:
     cargo fmt --all --check
-    cargo fmt --manifest-path apple-bindgen/Cargo.toml -- --check
-    cargo fmt --manifest-path kotlin-bindgen/Cargo.toml -- --check
-    cargo fmt --manifest-path wasm-bindings/Cargo.toml -- --check
+    cargo fmt --manifest-path bindgen/apple/Cargo.toml -- --check
+    cargo fmt --manifest-path bindgen/cpp/bindgen/Cargo.toml -- --check
+    cargo fmt --manifest-path bindgen/kotlin/Cargo.toml -- --check
+    cargo fmt --manifest-path bindgen/wasm/Cargo.toml -- --check
     cargo fmt --manifest-path xtask/Cargo.toml -- --check
 
 check-build:
     cargo check --locked --all-targets
-    cargo check --locked --manifest-path apple-bindgen/Cargo.toml --all-targets
-    cargo check --locked --manifest-path kotlin-bindgen/Cargo.toml --all-targets
-    cargo check --locked --manifest-path wasm-bindings/Cargo.toml --target wasm32-unknown-unknown
+    cargo check --locked --manifest-path bindgen/apple/Cargo.toml --all-targets
+    cargo check --locked --manifest-path bindgen/cpp/Cargo.toml --workspace --all-targets
+    cargo check --locked --manifest-path bindgen/kotlin/Cargo.toml --all-targets
+    cargo check --locked --manifest-path bindgen/wasm/Cargo.toml --target wasm32-unknown-unknown
     cargo check --locked --manifest-path xtask/Cargo.toml --all-targets
 
 clippy:
     cargo clippy --locked --all-targets -- -D warnings
-    cargo clippy --locked --manifest-path apple-bindgen/Cargo.toml --all-targets -- -D warnings
-    cargo clippy --locked --manifest-path kotlin-bindgen/Cargo.toml --all-targets -- -D warnings
-    cargo clippy --locked --manifest-path wasm-bindings/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
+    cargo clippy --locked --manifest-path bindgen/apple/Cargo.toml --all-targets -- -D warnings
+    cargo clippy --locked --manifest-path bindgen/kotlin/Cargo.toml --all-targets -- -D warnings
+    cargo clippy --locked --manifest-path bindgen/wasm/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
     cargo clippy --locked --manifest-path xtask/Cargo.toml --all-targets -- -D warnings
 
 test-rust:
@@ -262,7 +265,8 @@ install-tools:
 
 clean:
     cargo clean
-    cargo clean --manifest-path apple-bindgen/Cargo.toml
-    cargo clean --manifest-path kotlin-bindgen/Cargo.toml
-    cargo clean --manifest-path wasm-bindings/Cargo.toml
+    cargo clean --manifest-path bindgen/apple/Cargo.toml
+    cargo clean --manifest-path bindgen/kotlin/Cargo.toml
+    cargo clean --manifest-path bindgen/wasm/Cargo.toml
+    cargo clean --manifest-path bindgen/cpp/Cargo.toml
     cargo clean --manifest-path xtask/Cargo.toml

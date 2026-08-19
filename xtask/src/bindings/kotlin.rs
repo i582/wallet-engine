@@ -22,7 +22,7 @@ pub(crate) fn generate_kotlin(check: bool) -> Result<()> {
         cargo_command(&root, &bindgen_target_dir(&root))
             .arg("run")
             .arg("--manifest-path")
-            .arg(root.join("kotlin-bindgen/Cargo.toml"))
+            .arg(root.join("bindgen/kotlin/Cargo.toml"))
             .arg("--locked")
             .arg("--")
             .arg("generate")

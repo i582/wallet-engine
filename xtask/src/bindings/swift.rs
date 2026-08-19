@@ -27,7 +27,7 @@ pub(crate) fn generate_swift(check: bool) -> Result<()> {
         cargo_command(&root, &bindgen_target_dir(&root))
             .arg("run")
             .arg("--manifest-path")
-            .arg(root.join("apple-bindgen/Cargo.toml"))
+            .arg(root.join("bindgen/apple/Cargo.toml"))
             .arg("--locked")
             .arg("--")
             .arg("--swift-sources")

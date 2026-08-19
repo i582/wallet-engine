@@ -15,7 +15,7 @@ pub(crate) fn generate_cpp() -> Result<()> {
         cargo_command(&root, &bindgen_target_dir(&root))
             .arg("run")
             .arg("--manifest-path")
-            .arg(root.join("cpp-bindgen/bindgen/Cargo.toml"))
+            .arg(root.join("bindgen/cpp/bindgen/Cargo.toml"))
             .arg("--locked")
             .arg("--")
             .arg("--library")

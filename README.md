@@ -95,6 +95,17 @@ platform-host implementations, and build commands.
 This repository does not track generated bindings. Generate them from the same
 revision that you use to build the Rust library.
 
+### Binding generator sources
+
+The pinned binding generators live together under `bindgen/`:
+
+- `bindgen/apple` — Swift and C UniFFI generation.
+- `bindgen/kotlin` — Kotlin UniFFI generation.
+- `bindgen/wasm` — the WebAssembly facade.
+- `bindgen/cpp` — the UniFFI C++ generator and its own test workspace.
+
+Generated packages remain under `bindings/` and are intentionally ignored.
+
 ## Rust
 
 For a native Rust integration, see the

@@ -10,12 +10,13 @@ license = "MIT OR Apache-2.0"
 members = ["crates/ton-connect-client", "crates/ton-connect-core"]
 default-members = [".", "crates/ton-connect-client", "crates/ton-connect-core"]
 exclude = [
-    "apple-bindgen",
+    "bindgen/apple",
+    "bindgen/cpp",
+    "bindgen/kotlin",
+    "bindgen/wasm",
     "examples/tui",
-    "kotlin-bindgen",
     "verification/kani",
     "vendor/ton",
-    "wasm-bindings",
     "xtask",
 ]
 resolver = "3"
