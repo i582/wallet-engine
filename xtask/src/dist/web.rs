@@ -60,6 +60,7 @@ pub(crate) fn run(root: &Path, args: &WebArgs) -> Result<()> {
             .arg("browser")
             .arg("--format")
             .arg("esm")
+            .arg("--minify")
             .arg("--external")
             .arg("@tonconnect/protocol")
             .arg("--external")

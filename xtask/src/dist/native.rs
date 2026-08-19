@@ -7,7 +7,7 @@ use clap::Args;
 use crate::bindings::generate_cpp;
 use crate::dist::{
     copy_file, copy_package_metadata, create_tar_gz, prepare_output_directory, require_file,
-    write_checksum,
+    strip_release_library, write_checksum,
 };
 use crate::process::{cargo_command, run_command};
 use crate::version::project_version;
@@ -83,8 +83,12 @@ pub(crate) fn run(root: &Path, args: &NativeArgs) -> Result<()> {
     fs::create_dir_all(&include_dir)?;
     fs::create_dir_all(&source_dir)?;
 
-    copy_file(&static_library, &library_dir.join("libwallet_engine.a"))?;
-    copy_file(&dynamic_library, &library_dir.join(target.dynamic_library))?;
+    let packaged_static_library = library_dir.join("libwallet_engine.a");
+    copy_file(&static_library, &packaged_static_library)?;
+    strip_release_library(&packaged_static_library)?;
+    let packaged_dynamic_library = library_dir.join(target.dynamic_library);
+    copy_file(&dynamic_library, &packaged_dynamic_library)?;
+    strip_release_library(&packaged_dynamic_library)?;
     let generated = root.join("bindings/cpp-experimental");
     copy_file(
         &generated.join("wallet_engine.hpp"),

@@ -23,9 +23,7 @@ wasm-bindgen-futures = "=0.4.77"
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = [
     "-Oz",
-    "--enable-bulk-memory",
-    "--enable-bulk-memory-opt",
-    "--enable-nontrapping-float-to-int",
+    "--all-features",
 ]
 
 [profile.release]

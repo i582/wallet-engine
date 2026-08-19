@@ -15,7 +15,7 @@ use clap::{Args, Subcommand};
 use sha2::{Digest, Sha256};
 
 use crate::paths::repository_root;
-use crate::process::run_command;
+use crate::process::{command_output, run_command};
 use crate::version::{project_version, verify_release_tag};
 
 const DEFAULT_OUTPUT: &str = "target/distrib";
@@ -112,6 +112,19 @@ fn copy_file(source: &Path, destination: &Path) -> Result<()> {
             destination.display()
         )
     })
+}
+
+/// Removes debug and local symbols from a packaged release library.
+fn strip_release_library(path: &Path) -> Result<()> {
+    require_file(path)?;
+    let mut command = Command::new("strip");
+    if cfg!(target_os = "macos") {
+        command.arg("-S").arg("-x");
+    } else {
+        command.arg("--strip-debug").arg("--discard-all");
+    }
+    command.arg(path);
+    command_output(&mut command).map(|_| ())
 }
 
 /// Copies licenses and the repository readme into a staged package.

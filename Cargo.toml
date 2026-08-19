@@ -35,7 +35,6 @@ incremental = false
 lto = false
 opt-level = "z"
 panic = "abort"
-strip = "symbols"
 
 [lib]
 crate-type = ["rlib", "staticlib", "cdylib"]

@@ -8,7 +8,8 @@ use clap::Args;
 
 use crate::bindings::generate_swift;
 use crate::dist::{
-    copy_file, copy_package_metadata, prepare_output_directory, require_file, write_checksum,
+    copy_file, copy_package_metadata, prepare_output_directory, require_file,
+    strip_release_library, write_checksum,
 };
 use crate::process::{cargo_command, run_command};
 use crate::version::project_version;
@@ -127,7 +128,8 @@ fn build_apple_target(root: &Path, build_root: &Path, target: &str) -> Result<()
     } else {
         command.env("IPHONEOS_DEPLOYMENT_TARGET", "18.0");
     }
-    run_command(&mut command)
+    run_command(&mut command)?;
+    strip_release_library(&static_library(build_root, target))
 }
 
 /// Returns the static library emitted for one Apple target.
