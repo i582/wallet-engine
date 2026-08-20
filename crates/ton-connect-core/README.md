@@ -5,8 +5,9 @@ state transitions, proof verification, and HTTP bridge framing.
 
 ## Protocol coverage
 
-The crate follows TON Connect specification revision
-`5656a962eee30819a31a9e918e3de0b9614713b6` from May 18, 2026.
+The crate follows the pinned [TON Connect specification revision
+`5656a962eee30819a31a9e918e3de0b9614713b6`](https://github.com/ton-blockchain/ton-connect/commit/5656a962eee30819a31a9e918e3de0b9614713b6)
+from May 18, 2026.
 
 | Area | Core support |
 | --- | --- |
@@ -27,7 +28,11 @@ These operations require platform services and are outside the protocol core.
 
 ## Try the HTTP bridge demo
 
-The included example implements a narrow real wallet flow:
+The [Ratatui wallet example](https://github.com/i582/wallet-engine/tree/master/examples/tui)
+is a workspace-only example and is not included in this published crate. Run
+it from a checkout of `wallet-engine`:
+
+It demonstrates a narrow real-wallet HTTP bridge flow:
 
 - parse a TON Connect v2 link;
 - fetch and validate the dApp manifest;
