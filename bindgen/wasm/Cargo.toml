@@ -1,6 +1,6 @@
 [package]
 name = "wallet-engine-wasm"
-version = "0.0.2"
+version = "0.0.3"
 authors = ["TON Core"]
 edition = "2024"
 rust-version = "1.96.1"

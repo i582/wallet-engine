@@ -2119,7 +2119,7 @@ dependencies = [
 
 [[package]]
 name = "ton-connect-client"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "base64",
  "serde",
@@ -2132,7 +2132,7 @@ dependencies = [
 
 [[package]]
 name = "ton-connect-core"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "base64",
  "crc",
@@ -2453,7 +2453,7 @@ dependencies = [
 
 [[package]]
 name = "wallet-engine"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "async-trait",
  "base64",
