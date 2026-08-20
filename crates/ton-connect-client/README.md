@@ -30,5 +30,5 @@ the same protection as wallet authentication credentials.
 
 The root `wallet-engine` crate adds an FFI-safe session wrapper, wallet account
 mapping, proof signing, and raw transaction mapping. Read
-[TON_CONNECT.md](../../TON_CONNECT.md) for the complete host flow and supported
-request surface.
+[TON_CONNECT.md](https://github.com/i582/wallet-engine/blob/master/TON_CONNECT.md)
+for the complete host flow and supported request surface.

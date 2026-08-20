@@ -6,7 +6,12 @@ edition = "2024"
 rust-version = "1.96.1"
 license = "MIT OR Apache-2.0"
 description = "Runtime-neutral wallet-side TON Connect session client"
+documentation = "https://docs.rs/ton-connect-client"
 readme = "README.md"
+repository.workspace = true
+publish.workspace = true
+keywords = ["ton", "ton-connect", "wallet", "blockchain", "cryptography"]
+categories = ["cryptography", "network-programming"]
 
 [dependencies]
 serde = { version = "=1.0.229", features = ["derive"] }
