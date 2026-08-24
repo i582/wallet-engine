@@ -57,7 +57,9 @@ impl WalletStateInit {
     /// `Ok(None)` means that the state is valid but its code is not one of the
     /// standard wallet versions. A verifier can then use the protocol-defined
     /// on-chain `get_public_key` fallback without conflating it with malformed
-    /// untrusted input.
+    /// untrusted input. [`Self::resolve_standard_wallet`] and
+    /// [`Self::verify_with_fetched_key`] drive that fallback while keeping the
+    /// address binding.
     pub fn extract_standard_public_key(
         &self,
     ) -> Result<Option<StandardWalletState>, WalletStateError> {
@@ -82,16 +84,74 @@ impl WalletStateInit {
         address: &RawAccountAddress,
         advertised_public_key: &Ed25519PublicKey,
     ) -> Result<StandardWalletState, WalletStateError> {
-        if self.derive_address(address.workchain())? != *address {
-            return Err(WalletStateError::AddressMismatch);
-        }
-        let state = self
-            .extract_standard_public_key()?
-            .ok_or(WalletStateError::UnsupportedWalletCode)?;
+        self.resolve_standard_wallet(address, advertised_public_key)?
+            .ok_or(WalletStateError::UnsupportedWalletCode)
+    }
+
+    /// Runs local `StateInit` verification and reports whether the on-chain
+    /// fallback is still required.
+    ///
+    /// `Ok(Some(state))` means that the state derives `address`, that its code
+    /// is a recognized standard wallet, and that its address-bound key equals
+    /// `advertised_public_key`. Nothing else is needed to trust that key.
+    ///
+    /// `Ok(None)` means that the state derives `address` but its code is not
+    /// recognized locally. The verifier must then read `get_public_key` from
+    /// the deployed contract at `address` and finish with
+    /// [`Self::verify_with_fetched_key`].
+    pub fn resolve_standard_wallet(
+        &self,
+        address: &RawAccountAddress,
+        advertised_public_key: &Ed25519PublicKey,
+    ) -> Result<Option<StandardWalletState>, WalletStateError> {
+        self.ensure_derives(address)?;
+        let Some(state) = self.extract_standard_public_key()? else {
+            return Ok(None);
+        };
         if state.public_key != *advertised_public_key {
             return Err(WalletStateError::PublicKeyMismatch);
         }
-        Ok(state)
+        Ok(Some(state))
+    }
+
+    /// Verifies address and advertised-key binding against a key read from the
+    /// contract's on-chain `get_public_key` get-method.
+    ///
+    /// This is the protocol-defined fallback for a state whose code cannot be
+    /// parsed locally, so it deliberately does not require a recognized wallet
+    /// version. It still enforces both remaining bindings: the state must
+    /// derive `address`, and the wallet-advertised key must equal the key the
+    /// verifier read from the chain.
+    ///
+    /// `fetched_public_key` is trusted only as far as its source. The caller
+    /// must have read it from the account at `address` over a connection it
+    /// trusts, because this value, not the `StateInit`, becomes the key that
+    /// authenticates the signature.
+    ///
+    /// A recognized contract whose `StateInit` key differs from the fetched key
+    /// is accepted rather than rejected. The on-chain value is the account's
+    /// current key, while the address-bound `StateInit` carries the deployment
+    /// key, and a contract that rotates its key makes the two differ
+    /// legitimately.
+    pub fn verify_with_fetched_key(
+        &self,
+        address: &RawAccountAddress,
+        advertised_public_key: &Ed25519PublicKey,
+        fetched_public_key: &Ed25519PublicKey,
+    ) -> Result<(), WalletStateError> {
+        self.ensure_derives(address)?;
+        if advertised_public_key != fetched_public_key {
+            return Err(WalletStateError::PublicKeyMismatch);
+        }
+        Ok(())
+    }
+
+    fn ensure_derives(&self, address: &RawAccountAddress) -> Result<(), WalletStateError> {
+        if self.derive_address(address.workchain())? == *address {
+            Ok(())
+        } else {
+            Err(WalletStateError::AddressMismatch)
+        }
     }
 }
 
@@ -465,6 +525,16 @@ mod tests {
         Ok((state, address))
     }
 
+    /// Builds a valid, address-bound state whose code no verifier recognizes.
+    fn unknown_wallet() -> Result<(WalletStateInit, RawAccountAddress), Box<dyn Error>> {
+        let mut code_builder = TonCell::builder();
+        code_builder.write_num(&7_u8, 8)?;
+        let root = state_init(code_builder.build()?, TonCell::builder().build()?)?;
+        let state = WalletStateInit::from_boc(root.to_boc()?)?;
+        let address = state.derive_address(0)?;
+        Ok((state, address))
+    }
+
     fn wallet_data(
         version: StandardWalletVersion,
         public_key: [u8; 32],
@@ -566,13 +636,7 @@ mod tests {
 
     #[test]
     fn unknown_wallet_is_distinct_from_malformed_state() -> TestResult {
-        let mut code_builder = TonCell::builder();
-        code_builder.write_num(&7_u8, 8)?;
-        let code = code_builder.build()?;
-        let data = TonCell::builder().build()?;
-        let root = state_init(code, data)?;
-        let state_init = WalletStateInit::from_boc(root.to_boc()?)?;
-        let address = state_init.derive_address(0)?;
+        let (state_init, address) = unknown_wallet()?;
 
         assert_eq!(state_init.extract_standard_public_key()?, None);
         assert_eq!(
@@ -584,6 +648,162 @@ mod tests {
         assert_eq!(
             WalletStateInit::from_boc(empty_cell.to_boc()?),
             Err(WalletStateError::InvalidStateInit)
+        );
+        Ok(())
+    }
+
+    /// The protocol fallback: an unrecognized contract is authenticated by the
+    /// key its `get_public_key` get-method returns, not by its `StateInit`.
+    #[test]
+    fn unknown_wallet_proof_verifies_with_the_fetched_key() -> TestResult {
+        let signing_key = SigningKey::from_bytes(&[0x66; 32]);
+        let public_key = Ed25519PublicKey::from_bytes(signing_key.verifying_key().to_bytes());
+        let (state_init, address) = unknown_wallet()?;
+        let account = TonAddressItemReply::new(
+            address,
+            NetworkId::try_from("-239")?,
+            state_init,
+            public_key,
+        );
+
+        // Local inspection cannot settle this account on its own.
+        assert_eq!(account.resolve_standard_wallet()?, None);
+        assert_eq!(
+            account.verify_standard_wallet(),
+            Err(WalletStateError::UnsupportedWalletCode)
+        );
+
+        let timestamp = 1_800_000_000_u64;
+        let domain = "wallet.example";
+        let payload = "single-use challenge";
+        let hash = ton_proof_signing_hash(&address, domain, timestamp, payload)?;
+        let proof = TonProof {
+            timestamp: Uint64String::from(timestamp),
+            domain: TonProofDomain::new(domain.to_owned())?,
+            payload: payload.to_owned(),
+            signature: Ed25519Signature::from_bytes(signing_key.sign(&hash).to_bytes()),
+        };
+
+        assert!(proof.verify_with_fetched_key(&account, &public_key)?);
+
+        // A key read from some other account cannot stand in for this one.
+        assert_eq!(
+            proof.verify_with_fetched_key(&account, &Ed25519PublicKey::from_bytes([0x77; 32])),
+            Err(AccountVerificationError::WalletState(
+                WalletStateError::PublicKeyMismatch
+            ))
+        );
+
+        // The advertised and fetched keys agreeing does not excuse the signature.
+        let other_key = SigningKey::from_bytes(&[0x88; 32]);
+        let forged = TonProof {
+            signature: Ed25519Signature::from_bytes(other_key.sign(&hash).to_bytes()),
+            ..proof.clone()
+        };
+        assert!(!forged.verify_with_fetched_key(&account, &public_key)?);
+
+        // The state must still derive the address it claims.
+        let (other_state, _) = standard_wallet(V5R1_CODE, StandardWalletVersion::V5R1)?;
+        let unbound = TonAddressItemReply::new(
+            address,
+            NetworkId::try_from("-239")?,
+            other_state,
+            public_key,
+        );
+        assert_eq!(
+            proof.verify_with_fetched_key(&unbound, &public_key),
+            Err(AccountVerificationError::WalletState(
+                WalletStateError::AddressMismatch
+            ))
+        );
+        Ok(())
+    }
+
+    /// A contract that replaces its key leaves the address-bound `StateInit`
+    /// holding the deployment key, so only the fetched key can verify.
+    #[test]
+    fn fetched_key_supersedes_a_superseded_state_init_key() -> TestResult {
+        let deployment_key = [0x11_u8; 32];
+        let signing_key = SigningKey::from_bytes(&[0x99; 32]);
+        let current_key = Ed25519PublicKey::from_bytes(signing_key.verifying_key().to_bytes());
+        let (state_init, address) =
+            standard_wallet_with_key(WALLET_CODE, StandardWalletVersion::Wallet, deployment_key)?;
+        let account = TonAddressItemReply::new(
+            address,
+            NetworkId::try_from("-239")?,
+            state_init,
+            current_key,
+        );
+
+        let timestamp = 1_800_000_002_u64;
+        let domain = "wallet.example";
+        let payload = "challenge after rotation";
+        let hash = ton_proof_signing_hash(&address, domain, timestamp, payload)?;
+        let proof = TonProof {
+            timestamp: Uint64String::from(timestamp),
+            domain: TonProofDomain::new(domain.to_owned())?,
+            payload: payload.to_owned(),
+            signature: Ed25519Signature::from_bytes(signing_key.sign(&hash).to_bytes()),
+        };
+
+        // Reading the key out of the recognized code rejects the current signer.
+        assert_eq!(
+            proof.verify_with_account(&account),
+            Err(AccountVerificationError::WalletState(
+                WalletStateError::PublicKeyMismatch
+            ))
+        );
+        assert!(proof.verify_with_fetched_key(&account, &current_key)?);
+        Ok(())
+    }
+
+    #[test]
+    fn sign_data_uses_the_same_fallback_as_a_proof() -> TestResult {
+        let signing_key = SigningKey::from_bytes(&[0xaa; 32]);
+        let public_key = Ed25519PublicKey::from_bytes(signing_key.verifying_key().to_bytes());
+        let (state_init, address) = unknown_wallet()?;
+        let account = TonAddressItemReply::new(
+            address,
+            NetworkId::try_from("-239")?,
+            state_init,
+            public_key,
+        );
+
+        let timestamp = 1_800_000_003_u64;
+        let domain = "wallet.example";
+        let text = "Authorize this operation";
+        let hash = sign_data_signing_hash(
+            &address,
+            domain,
+            timestamp,
+            SignDataSigningPayload::Text(text),
+        )?;
+        let result = serde_json::from_value::<SignDataResult>(serde_json::json!({
+            "signature": STANDARD.encode(signing_key.sign(&hash).to_bytes()),
+            "address": address.to_string(),
+            "timestamp": timestamp,
+            "domain": domain,
+            "payload": {
+                "type": "text",
+                "text": text,
+                "network": "-239",
+                "from": address.to_string()
+            }
+        }))?;
+
+        assert_eq!(
+            result.verify_with_account(&account),
+            Err(AccountVerificationError::WalletState(
+                WalletStateError::UnsupportedWalletCode
+            ))
+        );
+        assert!(result.verify_with_fetched_key(&account, &public_key)?);
+
+        let mut wrong_result = result;
+        wrong_result.address = RawAccountAddress::new(0, [0x66; 32]);
+        assert_eq!(
+            wrong_result.verify_with_fetched_key(&account, &public_key),
+            Err(AccountVerificationError::ResponseAddressMismatch)
         );
         Ok(())
     }

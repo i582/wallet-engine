@@ -642,6 +642,34 @@ impl TonAddressItemReply {
         self.wallet_state_init
             .verify_standard_wallet(&self.address, &self.public_key)
     }
+
+    /// Verifies this reply locally and reports whether the `get_public_key`
+    /// fallback is required.
+    ///
+    /// `Ok(None)` means that `walletStateInit` derives this address but its
+    /// contract code is not recognized locally. Read `get_public_key` from
+    /// [`Self::address`] and finish with [`Self::verify_with_fetched_key`].
+    pub fn resolve_standard_wallet(&self) -> Result<Option<StandardWalletState>, WalletStateError> {
+        self.wallet_state_init
+            .resolve_standard_wallet(&self.address, &self.public_key)
+    }
+
+    /// Verifies this reply against a key read from the account's on-chain
+    /// `get_public_key` get-method.
+    ///
+    /// The fetched key must come from the account at [`Self::address`]. See
+    /// [`WalletStateInit::verify_with_fetched_key`] for what this does and does
+    /// not establish.
+    pub fn verify_with_fetched_key(
+        &self,
+        fetched_public_key: &Ed25519PublicKey,
+    ) -> Result<(), WalletStateError> {
+        self.wallet_state_init.verify_with_fetched_key(
+            &self.address,
+            &self.public_key,
+            fetched_public_key,
+        )
+    }
 }
 
 /// dApp domain bound into a `ton_proof` signature.
@@ -752,6 +780,23 @@ impl TonProof {
     ) -> Result<bool, AccountVerificationError> {
         let wallet = account.verify_standard_wallet()?;
         self.verify(&account.address, wallet.public_key())
+            .map_err(Into::into)
+    }
+
+    /// Verifies this proof with a key read from the account's on-chain
+    /// `get_public_key` get-method.
+    ///
+    /// This is the protocol fallback for an account whose contract code
+    /// [`TonAddressItemReply::resolve_standard_wallet`] does not recognize. The
+    /// address binding of `walletStateInit` and the advertised key are still
+    /// checked before the signature.
+    pub fn verify_with_fetched_key(
+        &self,
+        account: &TonAddressItemReply,
+        fetched_public_key: &Ed25519PublicKey,
+    ) -> Result<bool, AccountVerificationError> {
+        account.verify_with_fetched_key(fetched_public_key)?;
+        self.verify(&account.address, fetched_public_key)
             .map_err(Into::into)
     }
 }

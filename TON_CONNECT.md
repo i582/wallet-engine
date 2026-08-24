@@ -263,6 +263,33 @@ The proof-signing API constructs the TON Connect digest in Rust. It requests
 the protected recovery phrase with the `signTonConnectProof` access reason and
 returns only the 64-byte signature.
 
+## Verifying a proof
+
+A dApp backend verifies `ton_proof` against the key that the account is bound
+to, never against the key the wallet advertises. `ton-connect-core` performs
+both protocol paths.
+
+Start with `TonAddressItemReply::resolve_standard_wallet`. It checks that
+`walletStateInit` derives the reported address and, for a recognized wallet
+contract, that the advertised key matches the address-bound one. Finish with
+`TonProof::verify_with_account`.
+
+`Ok(None)` means the contract code is not recognized locally, which is the case
+the protocol resolves with an on-chain read. Call the `get_public_key`
+get-method on the reported address and finish with
+`TonProof::verify_with_fetched_key`. It repeats the address binding, requires
+the advertised key to equal the fetched key, and verifies the signature against
+the fetched key. `SignDataResult` has the same pair of methods.
+
+`build_get_public_key_request` and `parse_get_public_key_response` in
+`wallet-engine` build that provider request and decode its TVM stack. The application performs
+the HTTP call, so the fetched key is only as trustworthy as the provider it came
+from. Read it over a connection the backend trusts.
+
+A contract that replaces its signing key makes the fetched key differ from the
+`StateInit` key legitimately. The fetched key wins in that case, because it is
+the account's current key while `StateInit` holds the deployment key.
+
 ## Session storage security
 
 Treat the serialized TON Connect session like wallet authentication material.

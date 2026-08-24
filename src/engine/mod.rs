@@ -8,6 +8,7 @@ mod activity;
 mod client;
 mod emulation;
 mod expiration;
+mod get_public_key;
 mod host;
 mod http;
 mod nft;
@@ -26,4 +27,5 @@ mod state;
 mod validation;
 
 pub use client::WalletClient;
+pub use get_public_key::{build_get_public_key_request, parse_get_public_key_response};
 pub use host::{WalletHttpHost, WalletPlatformHost};

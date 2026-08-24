@@ -47,7 +47,10 @@ mod types;
 mod wallet;
 
 pub use domain::*;
-pub use engine::{WalletClient, WalletHttpHost, WalletPlatformHost};
+pub use engine::{
+    WalletClient, WalletHttpHost, WalletPlatformHost, build_get_public_key_request,
+    parse_get_public_key_response,
+};
 pub use ton_connect::*;
 pub use types::{
     Base64Hash, Base64HashError, Boc, BocError, NonEmptyString, NonEmptyStringError,

@@ -918,6 +918,24 @@ impl SignDataResult {
         let wallet = account.verify_standard_wallet()?;
         self.verify(wallet.public_key()).map_err(Into::into)
     }
+
+    /// Verifies this result with a key read from the account's on-chain
+    /// `get_public_key` get-method.
+    ///
+    /// This is the same protocol fallback that
+    /// [`TonProof::verify_with_fetched_key`](crate::TonProof::verify_with_fetched_key)
+    /// uses for an account whose contract code is not recognized locally.
+    pub fn verify_with_fetched_key(
+        &self,
+        account: &TonAddressItemReply,
+        fetched_public_key: &Ed25519PublicKey,
+    ) -> Result<bool, AccountVerificationError> {
+        if self.address != account.address {
+            return Err(AccountVerificationError::ResponseAddressMismatch);
+        }
+        account.verify_with_fetched_key(fetched_public_key)?;
+        self.verify(fetched_public_key).map_err(Into::into)
+    }
 }
 
 /// Method-specific response after correlation and payload validation.

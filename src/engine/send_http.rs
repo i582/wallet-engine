@@ -51,18 +51,7 @@ pub(super) fn parse_seqno(body: &[u8]) -> Result<u32, DomainError> {
     let first = value
         .pointer("/result/stack/0")
         .ok_or_else(|| invalid_json("missing seqno stack"))?;
-    let encoded = first
-        .as_array()
-        .and_then(|items| match items.as_slice() {
-            [kind, value] if kind.as_str() == Some("num") => value.as_str(),
-            _ => None,
-        })
-        .or_else(|| {
-            (first.get("type").and_then(Value::as_str) == Some("num"))
-                .then(|| first.get("value").and_then(Value::as_str))
-                .flatten()
-        })
-        .ok_or_else(|| invalid_json("invalid seqno value"))?;
+    let encoded = stack_num(first).ok_or_else(|| invalid_json("invalid seqno value"))?;
 
     if let Some(hex) = encoded.strip_prefix("0x") {
         u32::from_str_radix(hex, 16).map_err(|error| invalid_json(error.to_string()))
@@ -98,7 +87,26 @@ pub(super) fn is_explicit_send_rejection(error: &DomainError) -> bool {
         .is_some_and(|status| matches!(status, 400 | 401 | 403 | 404 | 405 | 413 | 422 | 429))
 }
 
-fn build_json_rpc_request(
+/// Borrows the text of a TVM integer at one stack position.
+///
+/// Providers return a stack entry either as a `[kind, value]` pair or as a
+/// tagged object, so both shapes are accepted. Numbers arrive as text because
+/// a TVM integer does not fit a JSON number.
+pub(super) fn stack_num(entry: &Value) -> Option<&str> {
+    entry
+        .as_array()
+        .and_then(|items| match items.as_slice() {
+            [kind, value] if kind.as_str() == Some("num") => value.as_str(),
+            _ => None,
+        })
+        .or_else(|| {
+            (entry.get("type").and_then(Value::as_str) == Some("num"))
+                .then(|| entry.get("value").and_then(Value::as_str))
+                .flatten()
+        })
+}
+
+pub(super) fn build_json_rpc_request(
     config: &WalletClientConfig,
     id: HttpRequestId,
     method: &str,
@@ -136,7 +144,7 @@ fn json_error_message(value: &Value) -> String {
     bounded_diagnostic(message)
 }
 
-fn invalid_json(message: impl Into<String>) -> DomainError {
+pub(super) fn invalid_json(message: impl Into<String>) -> DomainError {
     DomainError {
         code: ErrorCode::InvalidProviderResponse,
         category: ErrorCategory::ProviderProtocol,
