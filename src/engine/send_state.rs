@@ -1,12 +1,12 @@
 //! Send-operation tracking and protected-byte lifetime handling.
 
 use crate::domain::bounded_diagnostic;
+use crate::transport::process_response;
 use crate::wallet::send::{SendWorkflow, SendWorkflowError};
 use crate::{DomainError, HttpRequest, HttpRequestId, SendPhase, SendSnapshot, WalletClientError};
 use zeroize::Zeroizing;
 
 use super::WalletClient;
-use super::http::process_response;
 use super::state::OperationFamily;
 
 pub(super) struct SensitiveBytes(Zeroizing<Vec<u8>>);

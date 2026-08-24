@@ -2,14 +2,13 @@
 
 use std::collections::HashMap;
 
+use crate::transport::{build_toncenter_v2_request, process_response};
 use crate::{
     ErrorCode, HttpRequest, HttpRequestId, ResourcePhase, ResourceState, WalletClientConfig,
     WalletClientError, WalletOperationOutcome, WalletUpdate,
 };
 
 use super::WalletClient;
-use super::http::build_toncenter_v2_request;
-use super::http::process_response;
 use super::provider::{ActivityPage, ActivityPageCursor, activity_record_order, parse_activity};
 use super::state::{OperationFamily, State, ensure_running, update};
 

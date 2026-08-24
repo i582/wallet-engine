@@ -4,12 +4,11 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::domain::bounded_diagnostic;
+use crate::transport::build_toncenter_v3_request;
 use crate::{
     Base64Hash, DomainError, ErrorCategory, ErrorCode, HttpRequest, HttpRequestId, RetryAdvice,
     UnsignedDecimalString, WalletClientConfig, WalletClientError,
 };
-
-use super::http::build_toncenter_v3_request;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ExecutedMessage {

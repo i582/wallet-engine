@@ -7,6 +7,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use ton::ton_core::types::TonAddress;
 
+use crate::transport::{build_toncenter_v3_request, process_response};
 use crate::{
     DomainError, ErrorCode, HttpRequest, HttpRequestId, Network, NftCollectionDescriptor, NftItem,
     ResourceState, TonAddressString, UnsignedDecimalString, WalletClientConfig, WalletClientError,
@@ -14,7 +15,6 @@ use crate::{
 };
 
 use super::WalletClient;
-use super::http::{build_toncenter_v3_request, process_response};
 use super::provider::invalid_response;
 use super::state::{OperationFamily, State, ensure_running, nft_update};
 

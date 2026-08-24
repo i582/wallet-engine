@@ -1,6 +1,7 @@
 //! Fresh NFT ownership validation and typed TEP-62 preview/send entry points.
 
 use crate::domain::bounded_diagnostic;
+use crate::transport::process_response;
 use crate::wallet::nft_transfer::canonicalize_nft_transfer;
 use crate::{
     NftItem, NftTransferPreviewRequest, NftTransferRequest, SendPreview, SendPreviewRequest,
@@ -8,7 +9,6 @@ use crate::{
 };
 
 use super::WalletClient;
-use super::http::process_response;
 use super::nft::{build_nft_item_request, parse_single_nft_item};
 use super::state::ensure_running;
 

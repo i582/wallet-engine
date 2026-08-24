@@ -1,6 +1,10 @@
 //! HTTP requests, responses, and host callback errors.
 
 use async_trait::async_trait;
+use serde_json::Value;
+
+use crate::domain::bounded_diagnostic;
+use crate::{DomainError, ErrorCategory, ErrorCode, RetryAdvice};
 
 /// An HTTP method that the host must execute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Enum)]
@@ -142,4 +146,291 @@ pub trait WalletHttpHost: Send + Sync {
     /// This callback must be idempotent. It can run before `execute_http`
     /// registers the request, so the host must remember an early cancellation.
     async fn cancel_http(&self, request_id: HttpRequestId);
+}
+
+/// Maps host and provider failures, verifies the response origin, and returns the body.
+pub(crate) fn process_response(
+    request: &HttpRequest,
+    result: Result<HttpResponse, HttpHostError>,
+) -> Result<Vec<u8>, DomainError> {
+    let response = match result {
+        Ok(response) => response,
+        Err(HttpHostError::Failed { kind, diagnostic }) => {
+            return Err(host_error(kind, &diagnostic));
+        }
+    };
+
+    // Native transports commonly follow redirects by default. Reject a truthful
+    // host report when the response came from anywhere but the requested endpoint.
+    if response.final_url != request.url {
+        return Err(host_error(
+            HttpHostErrorKind::PolicyViolation,
+            "HTTP redirect or mismatched final URL",
+        ));
+    }
+
+    if let Some(error) = response_error(response.status, &response.headers, &response.body) {
+        return Err(error);
+    }
+
+    Ok(response.body)
+}
+
+fn host_error(kind: HttpHostErrorKind, message: &str) -> DomainError {
+    let cancelled = kind == HttpHostErrorKind::Cancelled;
+    let policy = kind == HttpHostErrorKind::PolicyViolation;
+    let too_large = kind == HttpHostErrorKind::ResponseTooLarge;
+
+    DomainError {
+        code: if cancelled {
+            ErrorCode::HostCancelled
+        } else if policy {
+            ErrorCode::HostPolicyViolation
+        } else if too_large {
+            ErrorCode::ResponseTooLarge
+        } else {
+            ErrorCode::TransportFailed
+        },
+        category: if cancelled {
+            ErrorCategory::Cancellation
+        } else if policy || too_large {
+            ErrorCategory::HostPolicy
+        } else {
+            ErrorCategory::Transport
+        },
+        retry: if cancelled || policy || too_large {
+            RetryAdvice::None
+        } else {
+            RetryAdvice::Safe
+        },
+        developer_message: bounded_diagnostic(message),
+        provider_status: None,
+        retry_after_ms: None,
+        host_kind: Some(kind),
+    }
+}
+
+fn response_error(status: u16, headers: &[HttpHeader], body: &[u8]) -> Option<DomainError> {
+    if (200..300).contains(&status) {
+        return None;
+    }
+
+    let developer_message = provider_message(body).unwrap_or_else(|| format!("HTTP {status}"));
+
+    if status == 429 {
+        let retry_after_ms = parse_retry_after_ms(headers);
+        return Some(DomainError {
+            code: ErrorCode::RateLimited,
+            category: ErrorCategory::RateLimit,
+            retry: if retry_after_ms.is_some() {
+                RetryAdvice::AfterDelay
+            } else {
+                RetryAdvice::Safe
+            },
+            developer_message,
+            provider_status: Some(status),
+            retry_after_ms,
+            host_kind: None,
+        });
+    }
+
+    Some(DomainError {
+        code: ErrorCode::HttpRejected,
+        category: ErrorCategory::ProviderProtocol,
+        retry: if status >= 500 {
+            RetryAdvice::Safe
+        } else {
+            RetryAdvice::None
+        },
+        developer_message,
+        provider_status: Some(status),
+        retry_after_ms: None,
+        host_kind: None,
+    })
+}
+
+fn provider_message(body: &[u8]) -> Option<String> {
+    let value: Value = serde_json::from_slice(body).ok()?;
+
+    ["error", "description", "message"]
+        .into_iter()
+        .find_map(|field| value.get(field).and_then(Value::as_str))
+        .map(bounded_diagnostic)
+}
+
+fn parse_retry_after_ms(headers: &[HttpHeader]) -> Option<u64> {
+    let seconds = headers
+        .iter()
+        .find(|header| header.name.eq_ignore_ascii_case("retry-after"))?
+        .value
+        .trim()
+        .parse::<u64>()
+        .ok()?;
+
+    seconds.checked_mul(1_000)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request() -> HttpRequest {
+        HttpRequest {
+            id: HttpRequestId { value: 7 },
+            method: HttpMethod::Get,
+            url: "https://provider.example/api/v2/resource?limit=10".to_owned(),
+            headers: Vec::new(),
+            body: Vec::new(),
+            timeout_ms: 15_000,
+        }
+    }
+
+    fn response(request: &HttpRequest, body: &[u8]) -> HttpResponse {
+        HttpResponse {
+            status: 200,
+            headers: Vec::new(),
+            body: body.to_vec(),
+            final_url: request.url.clone(),
+        }
+    }
+
+    #[test]
+    fn returns_the_body_of_a_successful_response() {
+        let request = request();
+        let body = process_response(&request, Ok(response(&request, b"wallet")))
+            .expect("a successful response must expose its body");
+
+        assert_eq!(body, b"wallet");
+    }
+
+    #[test]
+    fn rejects_a_redirect_before_parsing_the_body() {
+        let request = request();
+        let mut redirected = response(&request, b"ignored");
+        redirected.final_url = "https://attacker.example/response".to_owned();
+
+        let error = process_response(&request, Ok(redirected))
+            .expect_err("a changed final URL must be rejected");
+
+        assert_eq!(error.code, ErrorCode::HostPolicyViolation);
+        assert_eq!(error.category, ErrorCategory::HostPolicy);
+        assert_eq!(error.retry, RetryAdvice::None);
+        assert_eq!(error.host_kind, Some(HttpHostErrorKind::PolicyViolation));
+        assert_eq!(
+            error.developer_message,
+            "HTTP redirect or mismatched final URL"
+        );
+    }
+
+    #[test]
+    fn maps_every_host_failure_family_to_a_stable_domain_error() {
+        let cases = [
+            (
+                HttpHostErrorKind::Cancelled,
+                ErrorCode::HostCancelled,
+                ErrorCategory::Cancellation,
+                RetryAdvice::None,
+            ),
+            (
+                HttpHostErrorKind::PolicyViolation,
+                ErrorCode::HostPolicyViolation,
+                ErrorCategory::HostPolicy,
+                RetryAdvice::None,
+            ),
+            (
+                HttpHostErrorKind::ResponseTooLarge,
+                ErrorCode::ResponseTooLarge,
+                ErrorCategory::HostPolicy,
+                RetryAdvice::None,
+            ),
+            (
+                HttpHostErrorKind::Offline,
+                ErrorCode::TransportFailed,
+                ErrorCategory::Transport,
+                RetryAdvice::Safe,
+            ),
+            (
+                HttpHostErrorKind::Timeout,
+                ErrorCode::TransportFailed,
+                ErrorCategory::Transport,
+                RetryAdvice::Safe,
+            ),
+            (
+                HttpHostErrorKind::ConnectionLost,
+                ErrorCode::TransportFailed,
+                ErrorCategory::Transport,
+                RetryAdvice::Safe,
+            ),
+            (
+                HttpHostErrorKind::Dns,
+                ErrorCode::TransportFailed,
+                ErrorCategory::Transport,
+                RetryAdvice::Safe,
+            ),
+            (
+                HttpHostErrorKind::Tls,
+                ErrorCode::TransportFailed,
+                ErrorCategory::Transport,
+                RetryAdvice::Safe,
+            ),
+            (
+                HttpHostErrorKind::Other,
+                ErrorCode::TransportFailed,
+                ErrorCategory::Transport,
+                RetryAdvice::Safe,
+            ),
+        ];
+
+        for (kind, code, category, retry) in cases {
+            let request = request();
+            let error = process_response(
+                &request,
+                Err(HttpHostError::Failed {
+                    kind,
+                    diagnostic: format!("{kind:?} diagnostic"),
+                }),
+            )
+            .expect_err("a host error must not reach the parser");
+
+            assert_eq!(error.code, code, "wrong code for {kind:?}");
+            assert_eq!(error.category, category, "wrong category for {kind:?}");
+            assert_eq!(error.retry, retry, "wrong retry advice for {kind:?}");
+            assert_eq!(error.host_kind, Some(kind));
+            assert_eq!(error.provider_status, None);
+            assert_eq!(error.retry_after_ms, None);
+        }
+    }
+
+    #[test]
+    fn forwards_provider_rejections_before_parsing() {
+        let request = request();
+        let mut rejected = response(&request, br#"{"error":"denied"}"#);
+        rejected.status = 403;
+
+        let error = process_response(&request, Ok(rejected))
+            .expect_err("a provider rejection must not reach the parser");
+
+        assert_eq!(error.code, ErrorCode::HttpRejected);
+        assert_eq!(error.category, ErrorCategory::ProviderProtocol);
+        assert_eq!(error.provider_status, Some(403));
+    }
+
+    #[test]
+    fn rate_limit_retry_after_is_converted_to_milliseconds() {
+        let request = request();
+        let mut rejected = response(&request, br#"{"error":"slow down"}"#);
+        rejected.status = 429;
+        rejected.headers.push(HttpHeader {
+            name: "Retry-After".to_owned(),
+            value: "7".to_owned(),
+        });
+
+        let error = process_response(&request, Ok(rejected))
+            .expect_err("a rate limit must not reach the parser");
+
+        assert_eq!(error.code, ErrorCode::RateLimited);
+        assert_eq!(error.category, ErrorCategory::RateLimit);
+        assert_eq!(error.retry, RetryAdvice::AfterDelay);
+        assert_eq!(error.retry_after_ms, Some(7_000));
+    }
 }

@@ -1,7 +1,6 @@
 //! Wallet transfer orchestration.
 use super::client::WalletClient;
 use super::expiration::resolve_send_expiration;
-use super::http::build_toncenter_v2_request;
 use super::send_http::{
     SendBocResponse, build_send_boc_request, build_seqno_request, is_explicit_send_rejection,
     parse_send_response, parse_seqno,
@@ -9,6 +8,7 @@ use super::send_http::{
 use super::send_state::SensitiveBytes;
 use super::state::{OperationFamily, ensure_running};
 
+use crate::transport::build_toncenter_v2_request;
 use crate::wallet::send::{FreshSendAccount, SendDirective, SendWorkflow};
 use crate::wallet::transfer::{derive_source, prepare_transfer};
 use crate::{AccountStatus, SendPhase, SendRequest, SendResult, WalletClientError};

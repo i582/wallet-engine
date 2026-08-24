@@ -4,13 +4,12 @@ use num_bigint::BigUint;
 use serde_json::Value;
 
 use crate::domain::bounded_diagnostic;
+use crate::transport::build_toncenter_v2_request;
 use crate::types::Boc;
 use crate::{
     DomainError, ErrorCategory, ErrorCode, HttpHeader, HttpMethod, HttpRequest, HttpRequestId,
     RetryAdvice, WalletClientConfig, WalletClientError,
 };
-
-use super::http::build_toncenter_v2_request;
 
 pub(super) enum SendBocResponse {
     Accepted,

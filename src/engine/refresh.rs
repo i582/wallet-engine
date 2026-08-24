@@ -2,6 +2,7 @@
 
 use futures::future::join;
 
+use crate::transport::process_response;
 use crate::{
     AccountSnapshot, DomainError, ResourcePhase, ResourceState, WalletClientError,
     WalletOperationOutcome, WalletUpdate,
@@ -11,7 +12,6 @@ use super::WalletClient;
 use super::activity::{
     PAGE_SIZE, apply_refreshed_activity_page, build_refresh_requests, mark_loading_cancelled,
 };
-use super::http::process_response;
 use super::provider::{ActivityPage, parse_account, parse_activity};
 use super::state::{OperationFamily, ensure_running, update};
 

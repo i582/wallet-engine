@@ -11,7 +11,6 @@ mod emulation;
 mod encrypted_comment;
 mod expiration;
 mod host;
-mod http;
 mod nft;
 mod nft_transfer;
 mod preview;

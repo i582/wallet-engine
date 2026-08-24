@@ -8,14 +8,13 @@ use serde::Deserialize;
 use ton::ton_core::types::TonAddress;
 
 use crate::domain::bounded_diagnostic;
+use crate::transport::build_toncenter_url;
 use crate::types::Boc;
 use crate::{
     Base64Hash, DomainError, ErrorCategory, ErrorCode, HttpHeader, HttpMethod, HttpRequest,
     HttpRequestId, NonEmptyString, RetryAdvice, SendEmulation, SendEmulationAction,
     SendEmulationTransaction, TonAddressString, WalletClientConfig, WalletClientError,
 };
-
-use super::http::build_toncenter_url;
 
 #[derive(Debug)]
 pub(super) struct EvaluatedEmulation {

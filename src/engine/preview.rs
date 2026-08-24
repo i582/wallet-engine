@@ -1,6 +1,7 @@
 //! Pre-authorization transfer previews built from fresh provider state.
 
 use crate::domain::bounded_diagnostic;
+use crate::transport::{build_toncenter_v2_request, process_response};
 use crate::wallet::send::FreshSendAccount;
 use crate::wallet::transfer::prepare_transfer_emulation;
 use crate::{
@@ -11,7 +12,6 @@ use crate::{
 use super::WalletClient;
 use super::emulation::{build_emulation_request, is_message_not_accepted, parse_emulation};
 use super::expiration::resolve_send_expiration;
-use super::http::{build_toncenter_v2_request, process_response};
 use super::provider::parse_account;
 use super::send_http::{build_seqno_request, parse_seqno};
 use super::state::{OperationFamily, ensure_running};

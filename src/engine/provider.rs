@@ -16,8 +16,8 @@ use ton::ton_core::types::TonAddress;
 use crate::domain::bounded_diagnostic;
 use crate::{
     AccountSnapshot, AccountStatus, ActivityCursor, ActivityDirection, ActivityItem,
-    ActivityStatus, Base64Hash, Boc, DomainError, ErrorCategory, ErrorCode, HttpHeader, Network,
-    RetryAdvice, TonAddressString,
+    ActivityStatus, Base64Hash, Boc, DomainError, ErrorCategory, ErrorCode, Network, RetryAdvice,
+    TonAddressString,
 };
 
 #[derive(Debug, Deserialize)]
@@ -170,49 +170,6 @@ pub(crate) struct ActivityPage {
     pub items: Vec<ActivityRecord>,
     pub cursor: Option<ActivityPageCursor>,
     pub has_more: bool,
-}
-
-pub(crate) fn response_error(
-    status: u16,
-    headers: &[HttpHeader],
-    body: &[u8],
-) -> Option<DomainError> {
-    if (200..300).contains(&status) {
-        return None;
-    }
-
-    let developer_message = provider_message(body).unwrap_or_else(|| format!("HTTP {status}"));
-
-    if status == 429 {
-        let retry_after_ms = parse_retry_after_ms(headers);
-        return Some(DomainError {
-            code: ErrorCode::RateLimited,
-            category: ErrorCategory::RateLimit,
-            retry: if retry_after_ms.is_some() {
-                RetryAdvice::AfterDelay
-            } else {
-                RetryAdvice::Safe
-            },
-            developer_message,
-            provider_status: Some(status),
-            retry_after_ms,
-            host_kind: None,
-        });
-    }
-
-    Some(DomainError {
-        code: ErrorCode::HttpRejected,
-        category: ErrorCategory::ProviderProtocol,
-        retry: if status >= 500 {
-            RetryAdvice::Safe
-        } else {
-            RetryAdvice::None
-        },
-        developer_message,
-        provider_status: Some(status),
-        retry_after_ms: None,
-        host_kind: None,
-    })
 }
 
 pub(crate) fn parse_account(body: &[u8]) -> Result<AccountSnapshot, DomainError> {
@@ -590,27 +547,6 @@ fn parse_hash(value: &str, field: &str) -> Result<Base64Hash, DomainError> {
         .map_err(|_| invalid_response(format!("{field} is not a 256-bit Base64 value")))
 }
 
-fn provider_message(body: &[u8]) -> Option<String> {
-    let value: Value = serde_json::from_slice(body).ok()?;
-
-    ["error", "description", "message"]
-        .into_iter()
-        .find_map(|field| value.get(field).and_then(Value::as_str))
-        .map(bounded_diagnostic)
-}
-
-fn parse_retry_after_ms(headers: &[HttpHeader]) -> Option<u64> {
-    let seconds = headers
-        .iter()
-        .find(|header| header.name.eq_ignore_ascii_case("retry-after"))?
-        .value
-        .trim()
-        .parse::<u64>()
-        .ok()?;
-
-    seconds.checked_mul(1_000)
-}
-
 #[cfg(test)]
 mod tests {
     use base64::Engine as _;
@@ -622,10 +558,10 @@ mod tests {
     use ton::ton_core::cell::TonCell;
     use ton::ton_core::traits::tlb::TLB;
 
-    use super::{parse_account, parse_activity, response_error};
+    use super::{parse_account, parse_activity};
     use crate::{
-        AccountStatus, ActivityDirection, ActivityStatus, ErrorCategory, ErrorCode, HttpHeader,
-        RetryAdvice, UnsignedDecimalString,
+        AccountStatus, ActivityDirection, ActivityStatus, ErrorCategory, ErrorCode, RetryAdvice,
+        UnsignedDecimalString,
     };
 
     const ADDRESS: &str = "0:0000000000000000000000000000000000000000000000000000000000000001";
@@ -670,30 +606,7 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_http_and_envelope_rejections() {
-        let limited =
-            response_error(429, &[], br#"{"message":"slow down"}"#).expect("429 must be an error");
-        assert_eq!(limited.code, ErrorCode::RateLimited);
-        assert_eq!(limited.retry, RetryAdvice::Safe);
-        assert_eq!(limited.retry_after_ms, None);
-
-        let rejected = response_error(400, &[], b"not-json").expect("400 must be an error");
-        assert_eq!(rejected.code, ErrorCode::HttpRejected);
-        assert_eq!(rejected.retry, RetryAdvice::None);
-        assert_eq!(rejected.developer_message, "HTTP 400");
-
-        let server = response_error(
-            503,
-            &[HttpHeader {
-                name: "Retry-After".to_owned(),
-                value: "invalid".to_owned(),
-            }],
-            br#"{"description":"temporarily unavailable"}"#,
-        )
-        .expect("503 must be an error");
-        assert_eq!(server.retry, RetryAdvice::Safe);
-        assert_eq!(server.developer_message, "temporarily unavailable");
-
+    fn normalizes_provider_envelope_rejections() {
         let envelope = parse_account(&encode(json!({
             "ok": false,
             "error": -32005,
@@ -723,24 +636,6 @@ mod tests {
         assert_eq!(error.retry, RetryAdvice::Safe);
         assert_eq!(error.provider_status, Some(503));
         assert_eq!(error.developer_message, "provider rejected request");
-    }
-
-    #[test]
-    fn rate_limit_retry_after_is_converted_to_milliseconds() {
-        let error = response_error(
-            429,
-            &[HttpHeader {
-                name: "retry-after".to_owned(),
-                value: "7".to_owned(),
-            }],
-            br#"{"error":"slow down"}"#,
-        )
-        .expect("429 must be an error");
-
-        assert_eq!(error.code, ErrorCode::RateLimited);
-        assert_eq!(error.retry, RetryAdvice::AfterDelay);
-        assert_eq!(error.retry_after_ms, Some(7_000));
-        assert_eq!(error.developer_message, "slow down");
     }
 
     #[test]

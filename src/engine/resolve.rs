@@ -1,10 +1,10 @@
 //! Public single-shot recovery of the durable outgoing-send journal.
 
 use super::WalletClient;
-use super::http::build_toncenter_v2_request;
 use super::provider::parse_account;
 use super::resolution::ResolutionRequests;
 use super::state::ensure_running;
+use crate::transport::build_toncenter_v2_request;
 use crate::wallet::send::{pending_send_record, send_snapshot_from_journal};
 use crate::{JournalKey, SendSnapshot, WalletClientError};
 

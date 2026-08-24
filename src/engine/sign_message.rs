@@ -1,5 +1,6 @@
 //! Durable owner-signed internal messages for TON Connect relayers.
 
+use crate::transport::build_toncenter_v2_request;
 use crate::wallet::send::{FreshSendAccount, SendDirective, SendResolution, SendWorkflow};
 use crate::wallet::transfer::{derive_source, prepare_internal_signed_transfer};
 use crate::{
@@ -8,7 +9,6 @@ use crate::{
 
 use super::WalletClient;
 use super::expiration::resolve_send_expiration;
-use super::http::build_toncenter_v2_request;
 use super::provider::parse_account;
 use super::resolution::ResolutionRequests;
 use super::send_http::{build_seqno_request, parse_seqno};

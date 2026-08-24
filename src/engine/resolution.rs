@@ -1,6 +1,7 @@
 //! Read-only chain resolution and durable CAS transitions for outgoing sends.
 
 use crate::domain::bounded_diagnostic;
+use crate::transport::process_response;
 use crate::wallet::send::{
     PendingSendRecord, SendResolution, SendWorkflowError, SignedMessageKind, pending_send_record,
     terminal_send_resolution,
@@ -10,7 +11,6 @@ use crate::{
 };
 
 use super::WalletClient;
-use super::http::process_response;
 use super::resolution_http::{
     build_executed_by_message_request, build_pending_transactions_request,
     build_wallet_state_request, parse_executed_message, parse_pending_message, parse_wallet_seqno,
