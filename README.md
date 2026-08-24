@@ -7,8 +7,12 @@ Use Wallet Engine to:
 
 - create and import wallets.
 - protect recovery phrases with platform storage.
-- read balances and transaction history.
+- parse, validate, and format TON addresses.
+- parse `ton://transfer/` links.
+- read balances, enriched activity, and NFT collection metadata.
 - load additional history pages.
+- resolve `.ton` wallet records.
+- create and decrypt encrypted transfer comments.
 - sign and submit transfers.
 - connect dApps, sign `ton_proof`, and approve TON Connect transactions.
 - observe immutable wallet snapshots.
@@ -183,11 +187,55 @@ The wallet descriptor contains the stable application record ID, address,
 Ed25519 public key, network, and protected-secret reference. Your application
 needs these values after a restart. The public key is not a secret.
 
+## Standalone utilities
+
+The engine exports these utilities through Rust, Swift, Kotlin, TypeScript, and
+the experimental C++ binding. They do not need a `WalletClient` or host
+callbacks.
+
+### Address formats
+
+Swift, Kotlin, and TypeScript expose `parseTonAddress`, `isValidTonAddress`, and
+`convertTonAddress`. Rust and C++ expose `parse_ton_address`,
+`is_valid_ton_address`, and `convert_ton_address`.
+
+These functions accept raw and
+[TEP-2 user-friendly addresses](https://docs.ton.org/llms/foundations/addresses/formats/content.md).
+Parsing returns the workchain and the user-friendly `bounceable` and `testnet`
+flags. Conversion returns a canonical raw or user-friendly representation.
+User-friendly output uses unpadded URL-safe Base64.
+
+### TON transfer links
+
+Swift, Kotlin, and TypeScript expose `parseTonTransferLink`. Rust and C++ expose
+`parse_ton_transfer_link`.
+
+The parser implements the strict `ton://transfer/` baseline. It accepts
+`amount`, `text`, `exp`, `jetton`, and `bin`. The result preserves the recipient,
+Gram or jetton asset, exact amount, text or BOC payload, and expiration policy.
+
+The parser validates addresses, decimal values, and single-root BOCs. It does
+not resolve chain state, check expiration, select bounce behavior, or authorize
+a send. Query parsing follows URI rules, so a literal `+` remains `+`.
+
+### Mnemonic word list
+
+Swift, Kotlin, and TypeScript expose `mnemonicWordlist`. Rust and C++ expose
+`mnemonic_wordlist`.
+
+The function returns the 2048 English BIP-39 words in their original index
+order. It does not filter or reorder the list. Applications can filter the list
+locally for prefix suggestions.
+
+This export provides the word vocabulary, not another recovery scheme. Wallet
+import accepts only the Rotation mnemonic scheme described below.
+
 ## Key derivation
 
-The engine is moving to a **Rotation mnemonic**: 24 words made of two
-independent 12-word Multichain mnemonics, defined in
+The engine uses the **Rotation mnemonic** scheme defined in
 [TEP-0003 section 3.3](https://github.com/ton-blockchain/TEPs/blob/master/text/0003-wallets.md#33-rotation-mnemonic).
+A complete phrase contains 24 words, divided into two independent 12-word
+Multichain mnemonics.
 
 | Half    | Words | Key         | Role                                                                            |
 |---------|-------|-------------|---------------------------------------------------------------------------------|
