@@ -1,10 +1,11 @@
-//! TON mnemonic word-list utilities.
+//! BIP-39 word-list utilities.
 
 use ton::ton_wallet::WORDLIST_EN;
 
-/// Returns the English word list accepted by TON mnemonic validation.
+/// Returns the English word list accepted by recovery-phrase validation.
 ///
-/// The 2048 words keep the source order from the embedded TON word-list file.
+/// This is the canonical BIP-39 English list, so the source order is also the
+/// BIP-39 index order. Both halves of a rotation mnemonic draw from it.
 #[uniffi::export]
 #[must_use]
 pub fn mnemonic_wordlist() -> Vec<String> {
@@ -17,7 +18,7 @@ mod tests {
     use ton::ton_wallet::WORDLIST_EN;
 
     #[test]
-    fn exports_the_complete_ton_wordlist_in_source_order() {
+    fn exports_the_complete_bip39_wordlist_in_source_order() {
         let words = mnemonic_wordlist();
 
         assert_eq!(words.len(), 2048);

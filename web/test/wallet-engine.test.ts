@@ -156,7 +156,7 @@ describe("high-level WASM API", () => {
     expect(await isValidTonAddress("not-an-address")).toBe(false)
   })
 
-  test("exports the complete TON mnemonic wordlist", async () => {
+  test("exports the complete BIP-39 wordlist", async () => {
     const words = await mnemonicWordlist()
 
     expect(words).toHaveLength(2048)
