@@ -281,10 +281,11 @@ get-method on the reported address and finish with
 the advertised key to equal the fetched key, and verifies the signature against
 the fetched key. `SignDataResult` has the same pair of methods.
 
-`build_get_public_key_request` and `parse_get_public_key_response` in
-`wallet-engine` build that provider request and decode its TVM stack. The
-application performs the HTTP call, so the fetched key is only as trustworthy as
-the provider it came from. Read it over a connection the backend trusts.
+`get_public_key_request` and `parse_get_public_key_response` build that provider
+request and decode its TVM stack. Like the rest of `ton-connect-core` they
+perform no I/O: the backend posts the body to the endpoint it already uses for
+chain access. The fetched key is therefore only as trustworthy as that provider,
+so read it over a connection the backend trusts.
 
 A fetched key never overrides a recognized contract. Calling
 `verify_with_fetched_key` on one still requires the address-bound key, the

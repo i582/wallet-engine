@@ -15,6 +15,7 @@ mod connect;
 mod deep_link;
 mod embedded;
 mod friendly_address;
+mod get_public_key;
 mod http_bridge;
 mod http_session;
 mod js_bridge;
@@ -49,6 +50,9 @@ pub use embedded::{
     EmbeddedResponseSuccess, decode_embedded_request_param, encode_embedded_request_param,
 };
 pub use friendly_address::{FriendlyAddress, FriendlyAddressError};
+pub use get_public_key::{
+    GetPublicKeyError, get_public_key_request, parse_get_public_key_response,
+};
 pub use http_bridge::{
     BridgeCodecError, BridgeSseDecoder, BridgeSseMessage, HeartbeatMode, HttpBridgeError,
     HttpBridgeUrl, PreparedBridgePost,

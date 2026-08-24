@@ -26,8 +26,9 @@ The host fetches manifests and wallet lists. The host also owns HTTP I/O,
 cache policy, user prompts, persistence, wallet signing, and transaction submission.
 These operations require platform services and are outside the protocol core.
 Reading `get_public_key` from an unrecognized contract is one of those host
-operations: the crate reports when the fallback is required and verifies the
-key the host reads, but it never contacts a chain provider itself.
+operations: the crate reports when the fallback is required, builds the provider
+request, parses its TVM stack, and verifies the key, but it never contacts a
+chain provider itself.
 
 ## Try the HTTP bridge demo
 
