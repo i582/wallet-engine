@@ -1,7 +1,6 @@
 //! Fresh NFT ownership validation and typed TEP-62 preview/send entry points.
 
 use crate::domain::bounded_diagnostic;
-use crate::transport::process_response;
 use crate::wallet::nft_transfer::canonicalize_nft_transfer;
 use crate::{
     NftItem, NftTransferPreviewRequest, NftTransferRequest, SendPreview, SendPreviewRequest,
@@ -87,8 +86,7 @@ impl WalletClient {
             (request, state.config.network)
         };
 
-        let body = process_response(&request, self.http_host.execute_http(request.clone()).await)
-            .map_err(|error| {
+        let body = self.transport.execute(&request).await.map_err(|error| {
             nft_unavailable(format!(
                 "failed to load fresh NFT state: {}",
                 error.developer_message

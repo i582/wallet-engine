@@ -2,7 +2,6 @@
 
 use futures::future::join;
 
-use crate::transport::process_response;
 use crate::{
     AccountSnapshot, DomainError, ResourcePhase, ResourceState, WalletClientError,
     WalletOperationOutcome, WalletUpdate,
@@ -62,20 +61,19 @@ impl WalletClient {
         };
 
         for request_id in previous_request_ids {
-            self.http_host.cancel_http(request_id).await;
+            self.transport.cancel(request_id).await;
         }
 
         let (account, activity) = join(
-            self.http_host.execute_http(requests.0.clone()),
-            self.http_host.execute_http(requests.1.clone()),
+            self.transport.execute(&requests.0),
+            self.transport.execute(&requests.1),
         )
         .await;
 
-        let account = process_response(&requests.0, account).and_then(|body| parse_account(&body));
+        let account = account.and_then(|body| parse_account(&body));
         self.publish_refresh_component(generation, RefreshValue::Account(account))?;
 
-        let activity = process_response(&requests.1, activity)
-            .and_then(|body| parse_activity(&body, PAGE_SIZE));
+        let activity = activity.and_then(|body| parse_activity(&body, PAGE_SIZE));
         self.publish_refresh_component(generation, RefreshValue::Activity(activity))?;
 
         let mut state = self.lock()?;
@@ -102,7 +100,7 @@ impl WalletClient {
         Ok(update(outcome, 0, &state))
     }
 
-    /// Cancels the active refresh and requests cancellation of its HTTP requests.
+    /// Cancels the active refresh and requests cancellation of its provider requests.
     ///
     /// This method has no effect when no refresh is active.
     pub async fn cancel_refresh(&self) -> Result<(), WalletClientError> {
@@ -123,7 +121,7 @@ impl WalletClient {
         };
 
         for request_id in request_ids {
-            self.http_host.cancel_http(request_id).await;
+            self.transport.cancel(request_id).await;
         }
 
         Ok(())

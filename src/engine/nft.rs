@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use ton::ton_core::types::TonAddress;
 
-use crate::transport::{build_toncenter_v3_request, process_response};
+use crate::transport::build_toncenter_v3_request;
 use crate::{
     DomainError, ErrorCode, HttpRequest, HttpRequestId, Network, NftCollectionDescriptor, NftItem,
     ResourceState, TonAddressString, UnsignedDecimalString, WalletClientConfig, WalletClientError,
@@ -64,10 +64,13 @@ impl WalletClient {
         };
 
         for request_id in previous_request_ids {
-            self.http_host.cancel_http(request_id).await;
+            self.transport.cancel(request_id).await;
         }
 
-        let result = process_response(&request, self.http_host.execute_http(request.clone()).await)
+        let result = self
+            .transport
+            .execute(&request)
+            .await
             .and_then(|body| parse_nft_page(&body, NFT_PAGE_SIZE, network));
 
         let mut state = self.lock()?;
@@ -111,7 +114,7 @@ impl WalletClient {
         };
 
         if let Some(request_id) = request_id {
-            self.http_host.cancel_http(request_id).await;
+            self.transport.cancel(request_id).await;
         }
 
         Ok(())
@@ -148,7 +151,10 @@ impl WalletClient {
             (generation, request, state.config.network)
         };
 
-        let result = process_response(&request, self.http_host.execute_http(request.clone()).await)
+        let result = self
+            .transport
+            .execute(&request)
+            .await
             .and_then(|body| parse_nft_page(&body, NFT_PAGE_SIZE, network));
 
         let mut state = self.lock()?;
@@ -192,7 +198,7 @@ impl WalletClient {
         };
 
         if let Some(request_id) = request_id {
-            self.http_host.cancel_http(request_id).await;
+            self.transport.cancel(request_id).await;
         }
 
         Ok(())

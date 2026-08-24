@@ -414,7 +414,7 @@ impl WalletClient {
         };
 
         for request_id in request_ids {
-            self.http_host.cancel_http(request_id).await;
+            self.transport.cancel(request_id).await;
         }
 
         Ok(())

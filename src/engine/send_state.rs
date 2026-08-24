@@ -1,7 +1,6 @@
 //! Send-operation tracking and protected-byte lifetime handling.
 
 use crate::domain::bounded_diagnostic;
-use crate::transport::process_response;
 use crate::wallet::send::{SendWorkflow, SendWorkflowError};
 use crate::{DomainError, HttpRequest, HttpRequestId, SendPhase, SendSnapshot, WalletClientError};
 use zeroize::Zeroizing;
@@ -186,7 +185,7 @@ impl WalletClient {
         Ok(())
     }
 
-    fn start_send_http_request(
+    fn start_send_request(
         &self,
         generation: u64,
         request_id: HttpRequestId,
@@ -209,26 +208,26 @@ impl WalletClient {
         Ok(())
     }
 
-    /// Executes a send-owned HTTP request and returns its engine-checked body.
+    /// Executes a send-owned provider request and returns its checked body.
     ///
-    /// Tracking is finished before response processing so a rejected response
-    /// cannot leave its request ID registered as active.
+    /// Tracking is finished after the transport completes and before its result
+    /// is propagated, so a rejection cannot leave the request ID active.
     pub(super) async fn execute_tracked_send_request(
         &self,
         generation: u64,
         request: &HttpRequest,
     ) -> Result<Result<Vec<u8>, DomainError>, WalletClientError> {
-        self.start_send_http_request(generation, request.id)?;
+        self.start_send_request(generation, request.id)?;
 
         // Do not hold the state lock while the foreign host performs I/O.
-        let result = self.http_host.execute_http(request.clone()).await;
+        let result = self.transport.execute(request).await;
 
-        self.finish_send_http_request(generation, request.id)?;
+        self.finish_send_request(generation, request.id)?;
 
-        Ok(process_response(request, result))
+        Ok(result)
     }
 
-    fn finish_send_http_request(
+    fn finish_send_request(
         &self,
         generation: u64,
         request_id: HttpRequestId,

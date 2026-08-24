@@ -16,7 +16,7 @@ impl WalletClient {
     /// commits terminal evidence with compare-and-swap journal transitions.
     pub async fn resolve_pending(&self) -> Result<SendSnapshot, WalletClientError> {
         // Reserve all request IDs before leaving the mutex. This keeps shutdown
-        // and late HTTP callbacks generation-safe without holding the state lock
+        // and late provider callbacks generation-safe without holding the state lock
         // across host calls.
         let (generation, config, source, journal_key, account_request, resolution_ids) = {
             let mut state = self.lock()?;

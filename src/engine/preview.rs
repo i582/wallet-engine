@@ -1,7 +1,7 @@
 //! Pre-authorization transfer previews built from fresh provider state.
 
 use crate::domain::bounded_diagnostic;
-use crate::transport::{build_toncenter_v2_request, process_response};
+use crate::transport::build_toncenter_v2_request;
 use crate::wallet::send::FreshSendAccount;
 use crate::wallet::transfer::prepare_transfer_emulation;
 use crate::{
@@ -329,7 +329,7 @@ impl WalletClient {
         Ok(preview)
     }
 
-    /// Cancels the current send preview and its active HTTP request.
+    /// Cancels the current send preview and its active provider request.
     pub async fn cancel_send_preview(&self) -> Result<(), WalletClientError> {
         let request_ids = {
             let mut state = self.lock()?;
@@ -341,7 +341,7 @@ impl WalletClient {
         };
 
         for request_id in request_ids {
-            self.http_host.cancel_http(request_id).await;
+            self.transport.cancel(request_id).await;
         }
 
         Ok(())
@@ -368,7 +368,7 @@ impl WalletClient {
         }
     }
 
-    fn start_preview_http_request(
+    fn start_preview_request(
         &self,
         generation: u64,
         request_id: HttpRequestId,
@@ -385,22 +385,22 @@ impl WalletClient {
         Ok(())
     }
 
-    /// Executes a preview-owned HTTP request and returns its engine-checked body.
+    /// Executes a preview-owned provider request and returns its checked body.
     ///
-    /// Tracking is finished before response processing so every completed host
-    /// callback releases its request ID, including rejected responses.
+    /// Tracking is finished after the transport completes and before its result
+    /// is propagated, including for rejected responses.
     async fn execute_tracked_preview_request(
         &self,
         generation: u64,
         request: &HttpRequest,
     ) -> Result<Result<Vec<u8>, DomainError>, WalletClientError> {
-        self.start_preview_http_request(generation, request.id)?;
-        let result = self.http_host.execute_http(request.clone()).await;
-        self.finish_preview_http_request(generation, request.id)?;
-        Ok(process_response(request, result))
+        self.start_preview_request(generation, request.id)?;
+        let result = self.transport.execute(request).await;
+        self.finish_preview_request(generation, request.id)?;
+        Ok(result)
     }
 
-    fn finish_preview_http_request(
+    fn finish_preview_request(
         &self,
         generation: u64,
         request_id: HttpRequestId,

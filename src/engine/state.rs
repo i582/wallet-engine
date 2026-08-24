@@ -56,7 +56,7 @@ pub(super) struct State {
     /// Reports whether the provider can have another NFT page.
     pub(super) nfts_has_more: bool,
 
-    /// The next HTTP request number for this client instance.
+    /// The next provider request number for this client instance.
     /// Allocation never reuses a number, even when request construction later fails.
     /// Host cancellation registries must remain client-scoped because replacement clients start from the initial number.
     pub(super) next_id: u64,
@@ -106,7 +106,7 @@ pub(super) struct State {
     pub(super) active_preview: Option<(u64, Vec<HttpRequestId>)>,
 
     /// The active send as `(generation, active_request_ids)`.
-    /// The list contains only HTTP requests that the host currently owns.
+    /// The list contains only provider requests that the host currently owns.
     /// Send steps are sequential, so the list usually contains zero or one identifier.
     pub(super) active_send: Option<(u64, Vec<HttpRequestId>)>,
 

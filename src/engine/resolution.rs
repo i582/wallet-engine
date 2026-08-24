@@ -1,7 +1,6 @@
 //! Read-only chain resolution and durable CAS transitions for outgoing sends.
 
 use crate::domain::bounded_diagnostic;
-use crate::transport::process_response;
 use crate::wallet::send::{
     PendingSendRecord, SendResolution, SendWorkflowError, SignedMessageKind, pending_send_record,
     terminal_send_resolution,
@@ -349,11 +348,11 @@ impl WalletClient {
             .resolution_failed_error(owner, "send journal remained contended during resolution"))
     }
 
-    /// Dispatches HTTP through the owning operation's tracker and returns its
-    /// engine-checked body.
+    /// Dispatches a provider request through the owning operation's tracker and
+    /// returns its checked body.
     ///
     /// Cancellation and stale-generation checks remain correct in both entry
-    /// paths, and response processing starts only after tracking is finished.
+    /// paths, and every completed transport call releases its request ID.
     async fn execute_resolution_request(
         &self,
         owner: ResolutionOwner,
@@ -364,17 +363,17 @@ impl WalletClient {
                 self.execute_tracked_send_request(generation, request).await
             }
             ResolutionOwner::Standalone(generation) => {
-                self.start_resolution_http_request(generation, request.id)?;
-                let result = self.http_host.execute_http(request.clone()).await;
-                self.finish_resolution_http_request(generation, request.id)?;
-                Ok(process_response(request, result))
+                self.start_resolution_request(generation, request.id)?;
+                let result = self.transport.execute(request).await;
+                self.finish_resolution_request(generation, request.id)?;
+                Ok(result)
             }
         }
     }
 
     /// Registers a standalone request before invoking the host, making it
     /// visible to shutdown cancellation.
-    fn start_resolution_http_request(
+    fn start_resolution_request(
         &self,
         generation: u64,
         request_id: crate::HttpRequestId,
@@ -391,7 +390,7 @@ impl WalletClient {
     }
 
     /// Removes a completed request only from the generation that started it.
-    fn finish_resolution_http_request(
+    fn finish_resolution_request(
         &self,
         generation: u64,
         request_id: crate::HttpRequestId,

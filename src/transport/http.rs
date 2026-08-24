@@ -1,10 +1,14 @@
 //! HTTP requests, responses, and host callback errors.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::domain::bounded_diagnostic;
 use crate::{DomainError, ErrorCategory, ErrorCode, RetryAdvice};
+
+use super::ProviderTransport;
 
 /// An HTTP method that the host must execute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Enum)]
@@ -148,8 +152,31 @@ pub trait WalletHttpHost: Send + Sync {
     async fn cancel_http(&self, request_id: HttpRequestId);
 }
 
+/// Adapts the public HTTP host callback to the engine's provider transport boundary.
+pub(crate) struct HttpTransport {
+    host: Arc<dyn WalletHttpHost>,
+}
+
+impl HttpTransport {
+    pub(crate) fn new(host: Arc<dyn WalletHttpHost>) -> Self {
+        Self { host }
+    }
+}
+
+#[async_trait]
+impl ProviderTransport for HttpTransport {
+    async fn execute(&self, request: &HttpRequest) -> Result<Vec<u8>, DomainError> {
+        let result = self.host.execute_http(request.clone()).await;
+        process_response(request, result)
+    }
+
+    async fn cancel(&self, request_id: HttpRequestId) {
+        self.host.cancel_http(request_id).await;
+    }
+}
+
 /// Maps host and provider failures, verifies the response origin, and returns the body.
-pub(crate) fn process_response(
+fn process_response(
     request: &HttpRequest,
     result: Result<HttpResponse, HttpHostError>,
 ) -> Result<Vec<u8>, DomainError> {

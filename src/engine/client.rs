@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use futures::channel::oneshot;
 
+use crate::transport::{HttpTransport, ProviderTransport};
 use crate::{
     ResourceState, SendPhase, WalletClientConfig, WalletClientError, WalletHttpHost, WalletSnapshot,
 };
@@ -19,7 +20,7 @@ use super::validation::validate_config;
 /// The client owns no transport or platform resources. Call [`Self::shutdown`]
 /// before the host releases callback objects or application services.
 pub struct WalletClient {
-    pub(super) http_host: Arc<dyn WalletHttpHost>,
+    pub(super) transport: Arc<dyn ProviderTransport>,
     pub(super) platform_host: Arc<dyn WalletPlatformHost>,
     state: Mutex<State>,
 }
@@ -35,43 +36,11 @@ impl WalletClient {
         http_host: Arc<dyn WalletHttpHost>,
         platform_host: Arc<dyn WalletPlatformHost>,
     ) -> Result<Arc<Self>, WalletClientError> {
-        validate_config(&config)?;
-
-        let snapshot = WalletSnapshot::empty(&config);
-
-        Ok(Arc::new(Self {
-            http_host,
+        Self::with_transport(
+            config,
+            Arc::new(HttpTransport::new(http_host)),
             platform_host,
-            state: Mutex::new(State {
-                config,
-                snapshot,
-                activity: Vec::new(),
-                activity_cursor: None,
-                activity_has_more: false,
-                nft_offset: 0,
-                nfts_has_more: false,
-                next_id: 1,
-                refresh_generation: 0,
-                pagination_generation: 0,
-                nft_refresh_generation: 0,
-                nft_pagination_generation: 0,
-                preview_generation: 0,
-                send_generation: 0,
-                resolution_generation: 0,
-                active_refresh: None,
-                active_pagination: None,
-                active_nft_refresh: None,
-                active_nft_pagination: None,
-                active_preview: None,
-                active_send: None,
-                active_resolution: None,
-                send_commit_started: false,
-                send_workflow: None,
-                waiters: Vec::new(),
-                shutdown: false,
-                closing: false,
-            }),
-        }))
+        )
     }
 
     /// Returns a clone of the current immutable snapshot.
@@ -151,7 +120,7 @@ impl WalletClient {
                 }
                 ShutdownAction::Finish((request_ids, waiters)) => {
                     for request_id in request_ids {
-                        self.http_host.cancel_http(request_id).await;
+                        self.transport.cancel(request_id).await;
                     }
 
                     drop(waiters);
@@ -159,6 +128,52 @@ impl WalletClient {
                 }
             }
         }
+    }
+}
+
+impl WalletClient {
+    fn with_transport(
+        config: WalletClientConfig,
+        transport: Arc<dyn ProviderTransport>,
+        platform_host: Arc<dyn WalletPlatformHost>,
+    ) -> Result<Arc<Self>, WalletClientError> {
+        validate_config(&config)?;
+
+        let snapshot = WalletSnapshot::empty(&config);
+
+        Ok(Arc::new(Self {
+            transport,
+            platform_host,
+            state: Mutex::new(State {
+                config,
+                snapshot,
+                activity: Vec::new(),
+                activity_cursor: None,
+                activity_has_more: false,
+                nft_offset: 0,
+                nfts_has_more: false,
+                next_id: 1,
+                refresh_generation: 0,
+                pagination_generation: 0,
+                nft_refresh_generation: 0,
+                nft_pagination_generation: 0,
+                preview_generation: 0,
+                send_generation: 0,
+                resolution_generation: 0,
+                active_refresh: None,
+                active_pagination: None,
+                active_nft_refresh: None,
+                active_nft_pagination: None,
+                active_preview: None,
+                active_send: None,
+                active_resolution: None,
+                send_commit_started: false,
+                send_workflow: None,
+                waiters: Vec::new(),
+                shutdown: false,
+                closing: false,
+            }),
+        }))
     }
 }
 

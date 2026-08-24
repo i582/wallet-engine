@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::transport::{build_toncenter_v2_request, process_response};
+use crate::transport::build_toncenter_v2_request;
 use crate::{
     ErrorCode, HttpRequest, HttpRequestId, ResourcePhase, ResourceState, WalletClientConfig,
     WalletClientError, WalletOperationOutcome, WalletUpdate,
@@ -50,7 +50,10 @@ impl WalletClient {
             (generation, request)
         };
 
-        let result = process_response(&request, self.http_host.execute_http(request.clone()).await)
+        let result = self
+            .transport
+            .execute(&request)
+            .await
             .and_then(|body| parse_activity(&body, PAGE_SIZE));
 
         let mut state = self.lock()?;
@@ -97,7 +100,7 @@ impl WalletClient {
         };
 
         if let Some(request_id) = request_id {
-            self.http_host.cancel_http(request_id).await;
+            self.transport.cancel(request_id).await;
         }
 
         Ok(())
