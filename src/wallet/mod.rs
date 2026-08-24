@@ -163,7 +163,7 @@ pub enum WalletLifecycleError {
     /// The record ID is empty, too long, or contains unsupported characters.
     #[error("invalid wallet record identifier")]
     InvalidRecordId,
-    /// The recovery phrase is not a valid 24-word TON mnemonic.
+    /// The recovery phrase is not a valid 12- or 24-word Rotation mnemonic.
     #[error("invalid recovery phrase")]
     InvalidRecoveryPhrase,
     /// Rust cannot construct the requested wallet address.

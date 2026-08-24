@@ -499,8 +499,8 @@ impl App {
             .split_whitespace()
             .map(str::to_lowercase)
             .collect::<Vec<_>>();
-        if words.len() != 24 {
-            self.status = Some("Enter exactly 24 recovery words".to_owned());
+        if !matches!(words.len(), 12 | 24) {
+            self.status = Some("Enter 12 or 24 recovery words".to_owned());
             return;
         }
 

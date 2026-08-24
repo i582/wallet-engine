@@ -152,7 +152,7 @@ fn render_welcome(frame: &mut Frame<'_>, area: Rect, _app: &App) {
                 Style::default().add_modifier(Modifier::BOLD),
             )),
             Line::default(),
-            Line::from("Create a new wallet or import 24 recovery words."),
+            Line::from("Create a new wallet or import 12 or 24 recovery words."),
             Line::from(Span::styled(
                 "This example uses TON testnet.",
                 Style::default().fg(WARNING),
@@ -173,7 +173,11 @@ fn render_welcome(frame: &mut Frame<'_>, area: Rect, _app: &App) {
             "Create a wallet",
             "Generate and store a new recovery phrase",
         ]),
-        Row::new(["i", "Import a wallet", "Restore from 24 recovery words"]),
+        Row::new([
+            "i",
+            "Import a wallet",
+            "Restore from 12 or 24 recovery words",
+        ]),
         Row::new(["q", "Quit", "Close the application"]),
     ];
     frame.render_widget(
@@ -262,7 +266,7 @@ fn render_recovery(frame: &mut Frame<'_>, area: Rect, created: &CreatedWallet) {
 fn render_import(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let content = if app.import_words.is_empty() {
         Span::styled(
-            "Type or paste 24 words separated by spaces",
+            "Type or paste 12 or 24 words separated by spaces",
             Style::default().fg(MUTED),
         )
     } else {
@@ -274,7 +278,7 @@ fn render_import(frame: &mut Frame<'_>, area: Rect, app: &App) {
         Paragraph::new(Line::from(content))
             .block(
                 Block::default()
-                    .title(format!(" Import · {word_count}/24 "))
+                    .title(format!(" Import · {word_count} words (12 or 24) "))
                     .title_style(Style::default().fg(ACCENT).add_modifier(Modifier::BOLD))
                     .borders(Borders::ALL)
                     .padding(Padding::uniform(1)),

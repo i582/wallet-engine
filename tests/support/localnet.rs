@@ -239,6 +239,11 @@ impl LocalnetHttpHost {
         lock(&self.localnet).balance(address)
     }
 
+    /// Advances Acton's virtual clock without waiting for wall-clock time.
+    pub(super) fn increase_time(&self, seconds: u64) -> Result<(), String> {
+        lock(&self.localnet).increase_time(seconds)
+    }
+
     /// Delivers a wallet-signed internal message through an independently funded wallet.
     #[allow(
         dead_code,
@@ -697,6 +702,25 @@ impl Localnet {
             Ok(())
         } else {
             Err(format!("localnet mining failed with HTTP {status}: {body}"))
+        }
+    }
+
+    fn increase_time(&self, seconds: u64) -> Result<(), String> {
+        let (status, body) = request(
+            &self.client,
+            Method::POST,
+            &format!("{}/acton_increaseTime", self.base_url),
+            Some(&json!({ "seconds": seconds })),
+        )?;
+        if (200..300).contains(&status)
+            && (body.get("ok").and_then(Value::as_bool) == Some(true)
+                || body.get("success").and_then(Value::as_bool) == Some(true))
+        {
+            Ok(())
+        } else {
+            Err(format!(
+                "localnet time increase failed with HTTP {status}: {body}"
+            ))
         }
     }
 

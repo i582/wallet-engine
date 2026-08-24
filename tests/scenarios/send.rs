@@ -1355,12 +1355,18 @@ fn localnet_expired_external_message_is_rejected_before_authorization() {
         .when(call("baseline-refresh", refresh_wallet()))
         .then(update("baseline-refresh").completed())
         .then(remember_activity_as("funding"))
-        // The local emulator evaluates valid_until before the engine unlocks
-        // the secret or persists a signed message.
-        .when(call(
+        // Hold the request after the engine has derived valid_until from fresh
+        // provider time, then advance Acton's virtual clock past that bound.
+        // The local emulator evaluates the expired message before the engine
+        // unlocks the secret or persists a signed message.
+        .when(pause_next_emulation_request("expired-emulation"))
+        .when(start(
             "expired",
             preview_send(send().to(own_address()).nanograms(1)),
         ))
+        .when(wait_for_request("expired-emulation"))
+        .when(increase_localnet_time(2))
+        .when(release_request("expired-emulation"))
         .then(emulation_message_not_accepted("expired"))
         .then(snapshot().send_phase(SendPhase::Idle))
         .then(protected_secret_was_not_read())

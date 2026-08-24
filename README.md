@@ -245,8 +245,8 @@ half and is treated as invalid
 `WalletDescriptor.publicKey` holds the anchor public key: it determines the
 account address and never changes, so persisted descriptors survive rotation.
 The current signing key is on-chain state, not descriptor state.
-`revealRecoveryPhrase` returns the full 24 words, and protected storage holds
-one secret.
+`revealRecoveryPhrase` returns the phrase exactly as recorded: 12 words before
+rotation or 24 words after it. Protected storage holds one secret.
 
 ## Wallet flow diagrams
 
@@ -304,7 +304,7 @@ flowchart TD
 
     Create["createWallet"] --> ValidateCreate{"Valid record ID?"}
     ValidateCreate -- no --> InvalidRecord["CALL ERROR<br/>InvalidRecordId"]
-    ValidateCreate -- yes --> Generate["Generate 24-word TON mnemonic"]
+    ValidateCreate -- yes --> Generate["Generate 12-word Rotation mnemonic"]
     Generate --> Generated{"Mnemonic generated?"}
     Generated -- no --> InvalidGenerated["CALL ERROR<br/>InvalidRecoveryPhrase"]
     Generated -- yes --> DeriveCreate["Derive wallet address and public key"]

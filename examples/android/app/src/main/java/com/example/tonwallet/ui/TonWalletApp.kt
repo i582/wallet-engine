@@ -959,7 +959,7 @@ private fun ImportWalletSheet(
     val wordCount = mnemonic.trim().split(Regex("\\s+")).count { it.isNotBlank() }
     WalletFormSheet(title = "Import wallet", onDismiss = onDismiss) {
         Text(
-            "Enter the 24 words in the original order. The phrase is validated by the Rust core and never leaves this device.",
+            "Enter the 12 or 24 words in the original order. The phrase is validated by the Rust core and never leaves this device.",
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         OutlinedTextField(
@@ -973,7 +973,7 @@ private fun ImportWalletSheet(
             value = mnemonic,
             onValueChange = { mnemonic = it },
             label = { Text("Recovery phrase") },
-            supportingText = { Text("$wordCount / 24 words") },
+            supportingText = { Text("$wordCount words (12 or 24 required)") },
             minLines = 5,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -982,7 +982,7 @@ private fun ImportWalletSheet(
                 onImport(name, mnemonic)
                 onDismiss()
             },
-            enabled = name.isNotBlank() && wordCount == 24,
+            enabled = name.isNotBlank() && (wordCount == 12 || wordCount == 24),
             modifier = Modifier.fillMaxWidth().height(54.dp),
         ) {
             Text("Import wallet")
@@ -1026,7 +1026,7 @@ private fun WalletFormSheet(
 private fun WalletSecurityIntro(modifier: Modifier = Modifier) {
     val spacing = LocalAppSpacing.current
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
-        SecurityLine(Icons.Rounded.Shield, "24 words generated with a cryptographic RNG")
+        SecurityLine(Icons.Rounded.Shield, "12 words generated with a cryptographic RNG")
         SecurityLine(Icons.Rounded.Lock, "Encrypted with Android Keystore")
         SecurityLine(Icons.Rounded.WifiOff, "Recovery phrase is never sent over the network")
     }
@@ -1115,7 +1115,7 @@ private fun RecoveryPhraseSheet(
                         tint = if (confirmed) MaterialTheme.colorScheme.primary else Warning,
                     )
                     Spacer(Modifier.width(spacing.sm))
-                    Text("I saved these 24 words somewhere safe")
+                    Text("I saved these 12 words somewhere safe")
                 }
             }
             Button(

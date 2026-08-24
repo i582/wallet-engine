@@ -7,7 +7,7 @@ fn create_reveal_and_delete_round_trip() {
     wallet_lifecycle_scenario("a created wallet survives the complete secret lifecycle")
         .when(create_wallet("create", "created-wallet", Network::Testnet))
         .then(descriptor_is("create", "created-wallet", Network::Testnet))
-        .then(phrase_has_words("create", 24))
+        .then(phrase_has_words("create", 12))
         .then(protected_secret_is_stored("create"))
         .when(reveal_wallet("reveal", "create"))
         .then(phrases_match("create", "reveal"))

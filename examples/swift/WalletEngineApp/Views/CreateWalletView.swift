@@ -144,7 +144,7 @@ struct CreateWalletView: View {
             }
 
             pendingDescriptor = descriptor
-            guard recoveryWords.count == 24 else {
+            guard recoveryWords.count == 12 else {
                 await removeInvalidWallet(descriptor)
                 return
             }
@@ -377,7 +377,7 @@ private struct RecoveryPhraseView: View {
                     .accessibilityLabel("Wallet address \(descriptor.address)")
                     .accessibilityIdentifier("recovery-wallet-address")
 
-                if words.count == 24 {
+                if words.count == 12 {
                     RecoveryWordsGrid(words: words)
                         .privacySensitive()
                         .accessibilityIdentifier("recovery-words")
@@ -390,11 +390,11 @@ private struct RecoveryPhraseView: View {
                 }
 
                 Toggle(
-                    "I saved all 24 words in a safe place",
+                    "I saved all 12 words in a safe place",
                     isOn: $hasSavedRecoveryPhrase
                 )
                 .platformConfirmationToggleStyle()
-                .disabled(words.count != 24)
+                .disabled(words.count != 12)
 
                 if let errorMessage {
                     WalletCreationError(message: errorMessage)
