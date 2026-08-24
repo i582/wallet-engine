@@ -28,4 +28,4 @@ mod state;
 mod validation;
 
 pub use client::WalletClient;
-pub use host::{WalletHttpHost, WalletPlatformHost};
+pub use host::WalletPlatformHost;

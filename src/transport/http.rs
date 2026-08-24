@@ -1,4 +1,6 @@
-//! HTTP requests and host transport errors.
+//! HTTP requests, responses, and host callback errors.
+
+use async_trait::async_trait;
 
 /// An HTTP method that the host must execute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Enum)]
@@ -96,7 +98,7 @@ pub enum HttpHostErrorKind {
     Other,
 }
 
-/// An HTTP failure returned by [`crate::WalletHttpHost`].
+/// An HTTP failure returned by [`WalletHttpHost`].
 #[derive(
     Debug,
     Clone,
@@ -118,4 +120,26 @@ pub enum HttpHostError {
         /// A developer-facing message without secrets or credential values.
         diagnostic: String,
     },
+}
+
+/// Executes HTTP work for the engine.
+///
+/// The host must enforce the request timeout while it connects and reads the
+/// response. It owns any local response limits, must reject redirects, and must
+/// return the observed URL in `final_url`.
+#[uniffi::export(foreign)]
+#[async_trait]
+pub trait WalletHttpHost: Send + Sync {
+    /// Executes one complete HTTP request and returns an accepted response.
+    ///
+    /// The host can add its Toncenter credential according to the actual URL
+    /// and its local security policy. It must return
+    /// [`HttpHostErrorKind::Timeout`] when `request.timeout_ms` expires.
+    async fn execute_http(&self, request: HttpRequest) -> Result<HttpResponse, HttpHostError>;
+
+    /// Requests cancellation of the request with `request_id`.
+    ///
+    /// This callback must be idempotent. It can run before `execute_http`
+    /// registers the request, so the host must remember an early cancellation.
+    async fn cancel_http(&self, request_id: HttpRequestId);
 }

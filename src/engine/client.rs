@@ -4,10 +4,12 @@ use std::sync::{Arc, Mutex};
 
 use futures::channel::oneshot;
 
-use crate::{ResourceState, SendPhase, WalletClientConfig, WalletClientError, WalletSnapshot};
+use crate::{
+    ResourceState, SendPhase, WalletClientConfig, WalletClientError, WalletHttpHost, WalletSnapshot,
+};
 
 use super::activity::mark_loading_cancelled;
-use super::host::{WalletHttpHost, WalletPlatformHost};
+use super::host::WalletPlatformHost;
 use super::state::State;
 use super::validation::validate_config;
 

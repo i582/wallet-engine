@@ -1,7 +1,7 @@
 //! Resource state and errors exposed by wallet operations.
 
-use super::{AccountStatus, HttpHostErrorKind};
-use crate::UnsignedDecimalString;
+use super::AccountStatus;
+use crate::{HttpHostErrorKind, UnsignedDecimalString};
 
 /// Replaces control characters and bounds diagnostics stored in public errors.
 ///

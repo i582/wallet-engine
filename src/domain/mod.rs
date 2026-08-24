@@ -1,4 +1,4 @@
-//! Public records, enums, and errors shared by the engine and host callbacks.
+//! Public wallet records, enums, and operation errors.
 //!
 //! `UniFFI` and WASM bindings expose these values to Swift, Kotlin, and
 //! TypeScript. Records are immutable snapshots at the API boundary.
@@ -7,7 +7,6 @@ mod activity;
 mod config;
 mod encrypted_comment;
 mod error;
-mod http;
 mod journal;
 mod nft;
 mod nft_send;
@@ -20,7 +19,6 @@ pub use activity::*;
 pub use config::*;
 pub use encrypted_comment::*;
 pub use error::*;
-pub use http::*;
 pub use journal::*;
 pub use nft::*;
 pub use nft_send::*;

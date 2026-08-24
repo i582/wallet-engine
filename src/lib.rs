@@ -43,12 +43,14 @@
 mod domain;
 mod engine;
 mod ton_connect;
+mod transport;
 mod types;
 mod wallet;
 
 pub use domain::*;
-pub use engine::{WalletClient, WalletHttpHost, WalletPlatformHost};
+pub use engine::{WalletClient, WalletPlatformHost};
 pub use ton_connect::*;
+pub use transport::*;
 pub use types::{
     Base64Hash, Base64HashError, Boc, BocError, NonEmptyString, NonEmptyStringError,
     TonAddressError, TonAddressFormat, TonAddressInfo, TonAddressString, TonAddressStringError,

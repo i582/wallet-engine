@@ -1,34 +1,12 @@
-//! Callback interfaces implemented by the embedding application.
+//! Platform callback interfaces implemented by the embedding application.
 
 use async_trait::async_trait;
 
 use crate::{
-    HttpHostError, HttpRequest, HttpRequestId, HttpResponse, JournalCompareExchange,
-    JournalCompareExchangeResult, JournalHostError, JournalKey, JournalRecord,
-    ProtectedSecretHostError, ProtectedSecretRead, ProtectedSecretRef, ProtectedSecretStore,
+    JournalCompareExchange, JournalCompareExchangeResult, JournalHostError, JournalKey,
+    JournalRecord, ProtectedSecretHostError, ProtectedSecretRead, ProtectedSecretRef,
+    ProtectedSecretStore,
 };
-
-/// Executes HTTP work for the engine.
-///
-/// The host must enforce the request timeout while it connects and reads the
-/// response. It owns any local response limits, must reject redirects, and must
-/// return the observed URL in `final_url`.
-#[uniffi::export(foreign)]
-#[async_trait]
-pub trait WalletHttpHost: Send + Sync {
-    /// Executes one complete HTTP request and returns an accepted response.
-    ///
-    /// The host can add its Toncenter credential according to the actual URL
-    /// and its local security policy. It must return
-    /// [`crate::HttpHostErrorKind::Timeout`] when `request.timeout_ms` expires.
-    async fn execute_http(&self, request: HttpRequest) -> Result<HttpResponse, HttpHostError>;
-
-    /// Requests cancellation of the request with `request_id`.
-    ///
-    /// This callback must be idempotent. It can run before `execute_http`
-    /// registers the request, so the host must remember an early cancellation.
-    async fn cancel_http(&self, request_id: HttpRequestId);
-}
 
 /// Supplies protected storage and durable journal storage.
 ///
