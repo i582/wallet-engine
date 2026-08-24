@@ -65,6 +65,18 @@ val display = convertTonAddress(
 `bounceable` and `testnet` flags. Raw input has `TonAddressFormat.Raw` because
 the raw representation does not carry these flags.
 
+## Mnemonic word list
+
+Use the engine's TON word list for recovery-phrase input:
+
+```kotlin
+val words = mnemonicWordlist()
+val suggestions = words.filter { it.startsWith(input.lowercase()) }
+```
+
+The list contains the 2048 English words accepted by the same mnemonic
+validation used for wallet import.
+
 ## TON Connect
 
 The generated Kotlin module includes `TonConnectSession`, manifest parsing,

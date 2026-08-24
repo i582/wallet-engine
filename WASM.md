@@ -106,6 +106,20 @@ const display = await convertTonAddress(raw, {
 flags. Both standard and URL-safe Base64 friendly inputs are accepted. Friendly
 output is canonical unpadded URL-safe Base64.
 
+## Mnemonic word list
+
+Use the engine's TON word list for recovery-phrase input:
+
+```ts
+import {mnemonicWordlist} from "@ton/wallet-engine"
+
+const words = await mnemonicWordlist()
+const suggestions = words.filter(word => word.startsWith(input.toLowerCase()))
+```
+
+The list contains the 2048 English words accepted by the same mnemonic
+validation used for wallet import.
+
 ## Implement protected storage
 
 The package does not include an insecure recovery-phrase store. Implement the

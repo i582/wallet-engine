@@ -8,6 +8,7 @@ import {
   convertTonAddress,
   initializeWalletEngine,
   isValidTonAddress,
+  mnemonicWordlist,
   parseTonAddress,
   type HttpRequest,
   type NftTransferPreviewRequest,
@@ -153,6 +154,14 @@ describe("high-level WASM API", () => {
     ).toBe("EQDKbjIcfM6ezt8KjKJJLshZJJSqX7XOA4ff-W72r5gqPrHF")
     expect(await isValidTonAddress(friendly)).toBe(true)
     expect(await isValidTonAddress("not-an-address")).toBe(false)
+  })
+
+  test("exports the complete TON mnemonic wordlist", async () => {
+    const words = await mnemonicWordlist()
+
+    expect(words).toHaveLength(2048)
+    expect(words[0]).toBe("abandon")
+    expect(words.at(-1)).toBe("zoo")
   })
 
   afterAll(async () => {

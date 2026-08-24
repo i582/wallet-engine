@@ -58,6 +58,18 @@ The `.userFriendly` case inside `info.format` contains the parsed `bounceable`
 and `testnet` flags. Raw input has `.raw` because the raw representation does
 not carry these flags.
 
+## Mnemonic word list
+
+Use the engine's TON word list for recovery-phrase input:
+
+```swift
+let words = mnemonicWordlist()
+let suggestions = words.filter { $0.hasPrefix(input.lowercased()) }
+```
+
+The list contains the 2048 English words accepted by the same mnemonic
+validation used for wallet import.
+
 ## TON Connect
 
 The generated Swift module includes `TonConnectSession`, manifest parsing,

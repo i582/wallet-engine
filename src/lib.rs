@@ -53,7 +53,7 @@ pub use types::{
     Base64Hash, Base64HashError, Boc, BocError, NonEmptyString, NonEmptyStringError,
     TonAddressError, TonAddressFormat, TonAddressInfo, TonAddressString, TonAddressStringError,
     UnsignedDecimalString, UnsignedDecimalStringError, convert_ton_address, is_valid_ton_address,
-    parse_ton_address,
+    mnemonic_wordlist, parse_ton_address,
 };
 pub use wallet::*;
 

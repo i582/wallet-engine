@@ -8,7 +8,7 @@ use std::sync::LazyLock;
 use std::{cmp, convert::TryInto, fmt};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-const WORDLIST_EN: &str = include_str!("../../resources/mnemonics/wordlist_en.txt");
+pub const WORDLIST_EN: &str = include_str!("../../resources/mnemonics/wordlist_en.txt");
 const PBKDF_ITERATIONS: u32 = 100000;
 
 pub static WORDLIST_EN_SET: LazyLock<HashSet<&'static str>> =

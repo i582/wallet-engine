@@ -2,12 +2,14 @@ mod address;
 mod error;
 mod host;
 mod lifecycle;
+mod mnemonic;
 mod serde;
 mod wallet;
 
 pub use address::{convert_ton_address, is_valid_ton_address, parse_ton_address};
 pub use host::{WalletHttpHost, WalletPlatformHost};
 pub use lifecycle::WalletLifecycle;
+pub use mnemonic::mnemonic_wordlist;
 pub use wallet::WalletClient;
 
 use wasm_bindgen::prelude::wasm_bindgen;
