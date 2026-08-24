@@ -282,13 +282,15 @@ the advertised key to equal the fetched key, and verifies the signature against
 the fetched key. `SignDataResult` has the same pair of methods.
 
 `build_get_public_key_request` and `parse_get_public_key_response` in
-`wallet-engine` build that provider request and decode its TVM stack. The application performs
-the HTTP call, so the fetched key is only as trustworthy as the provider it came
-from. Read it over a connection the backend trusts.
+`wallet-engine` build that provider request and decode its TVM stack. The
+application performs the HTTP call, so the fetched key is only as trustworthy as
+the provider it came from. Read it over a connection the backend trusts.
 
-A contract that replaces its signing key makes the fetched key differ from the
-`StateInit` key legitimately. The fetched key wins in that case, because it is
-the account's current key while `StateInit` holds the deployment key.
+A fetched key never overrides a recognized contract. Calling
+`verify_with_fetched_key` on one still requires the address-bound key, the
+advertised key, and the fetched key to agree. A wallet whose signing key can
+change must therefore stay out of the recognized-code table, so that its
+accounts take the fallback path and read their current key from the chain.
 
 ## Session storage security
 

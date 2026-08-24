@@ -118,28 +118,32 @@ impl WalletStateInit {
     /// contract's on-chain `get_public_key` get-method.
     ///
     /// This is the protocol-defined fallback for a state whose code cannot be
-    /// parsed locally, so it deliberately does not require a recognized wallet
-    /// version. It still enforces both remaining bindings: the state must
-    /// derive `address`, and the wallet-advertised key must equal the key the
-    /// verifier read from the chain.
+    /// parsed locally, so it does not require a recognized wallet version. It
+    /// still enforces both remaining bindings: the state must derive `address`,
+    /// and the wallet-advertised key must equal the key the verifier read from
+    /// the chain.
+    ///
+    /// A fetched key never overrides a recognized contract. When the code is
+    /// recognized, [`Self::resolve_standard_wallet`] still requires the
+    /// address-bound key to equal the advertised one, so all three values must
+    /// agree and a disagreeing fetched key is rejected. A contract whose key
+    /// can change therefore must not be listed as a recognized version: only an
+    /// unrecognized contract takes its key from the chain.
     ///
     /// `fetched_public_key` is trusted only as far as its source. The caller
     /// must have read it from the account at `address` over a connection it
-    /// trusts, because this value, not the `StateInit`, becomes the key that
-    /// authenticates the signature.
-    ///
-    /// A recognized contract whose `StateInit` key differs from the fetched key
-    /// is accepted rather than rejected. The on-chain value is the account's
-    /// current key, while the address-bound `StateInit` carries the deployment
-    /// key, and a contract that rotates its key makes the two differ
-    /// legitimately.
+    /// trusts, because for an unrecognized contract this value, not the
+    /// `StateInit`, becomes the key that authenticates the signature.
     pub fn verify_with_fetched_key(
         &self,
         address: &RawAccountAddress,
         advertised_public_key: &Ed25519PublicKey,
         fetched_public_key: &Ed25519PublicKey,
     ) -> Result<(), WalletStateError> {
-        self.ensure_derives(address)?;
+        // A recognized contract has already had its address-bound key compared
+        // with the advertised one, so the single comparison below covers the
+        // fetched key against both.
+        let _ = self.resolve_standard_wallet(address, advertised_public_key)?;
         if advertised_public_key != fetched_public_key {
             return Err(WalletStateError::PublicKeyMismatch);
         }
@@ -719,25 +723,24 @@ mod tests {
         Ok(())
     }
 
-    /// A contract that replaces its key leaves the address-bound `StateInit`
-    /// holding the deployment key, so only the fetched key can verify.
+    /// The fallback never overrides a recognized contract. A wallet whose key
+    /// can change must stay out of the recognized-code table instead.
     #[test]
-    fn fetched_key_supersedes_a_superseded_state_init_key() -> TestResult {
-        let deployment_key = [0x11_u8; 32];
+    fn a_fetched_key_cannot_override_a_recognized_contract() -> TestResult {
         let signing_key = SigningKey::from_bytes(&[0x99; 32]);
-        let current_key = Ed25519PublicKey::from_bytes(signing_key.verifying_key().to_bytes());
-        let (state_init, address) =
-            standard_wallet_with_key(WALLET_CODE, StandardWalletVersion::Wallet, deployment_key)?;
-        let account = TonAddressItemReply::new(
-            address,
-            NetworkId::try_from("-239")?,
-            state_init,
-            current_key,
-        );
+        let state_key = Ed25519PublicKey::from_bytes(signing_key.verifying_key().to_bytes());
+        let other_key = Ed25519PublicKey::from_bytes([0x11; 32]);
+        let (state_init, address) = standard_wallet_with_key(
+            WALLET_CODE,
+            StandardWalletVersion::Wallet,
+            *state_key.as_bytes(),
+        )?;
+        let account =
+            TonAddressItemReply::new(address, NetworkId::try_from("-239")?, state_init, state_key);
 
         let timestamp = 1_800_000_002_u64;
         let domain = "wallet.example";
-        let payload = "challenge after rotation";
+        let payload = "challenge for a recognized contract";
         let hash = ton_proof_signing_hash(&address, domain, timestamp, payload)?;
         let proof = TonProof {
             timestamp: Uint64String::from(timestamp),
@@ -746,14 +749,15 @@ mod tests {
             signature: Ed25519Signature::from_bytes(signing_key.sign(&hash).to_bytes()),
         };
 
-        // Reading the key out of the recognized code rejects the current signer.
+        // Agreeing with the address-bound key is the only accepted outcome.
+        assert!(proof.verify_with_account(&account)?);
+        assert!(proof.verify_with_fetched_key(&account, &state_key)?);
         assert_eq!(
-            proof.verify_with_account(&account),
+            proof.verify_with_fetched_key(&account, &other_key),
             Err(AccountVerificationError::WalletState(
                 WalletStateError::PublicKeyMismatch
             ))
         );
-        assert!(proof.verify_with_fetched_key(&account, &current_key)?);
         Ok(())
     }
 
