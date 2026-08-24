@@ -1,11 +1,13 @@
 //! Validated TON addresses and internal formatting helpers.
 
 use std::{
+    borrow::Cow,
     fmt::{Debug, Display, Formatter},
     str::FromStr,
 };
 
 use ton::ton_core::types::TonAddress;
+use ton_connect_core::{FriendlyAddress, RawAccountAddress};
 
 use crate::Network;
 
@@ -20,6 +22,105 @@ use crate::Network;
 pub struct TonAddressString {
     value: String,
     address: TonAddress,
+}
+
+/// Selects a raw representation or a user-friendly representation with flags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Enum)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum TonAddressFormat {
+    /// `workchain:64-hex` without display or network flags.
+    Raw,
+    /// TEP-2 user-friendly Base64 with a checksum and display flags.
+    UserFriendly {
+        /// Whether senders should use a bounceable internal message.
+        bounceable: bool,
+        /// Whether mainnet applications must reject the address.
+        testnet: bool,
+    },
+}
+
+/// Parsed TON address identity and any flags carried by its input representation.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct TonAddressInfo {
+    /// Canonical lowercase `workchain:64-hex` account identity.
+    pub raw: String,
+    /// Signed workchain identifier from the address.
+    pub workchain: i32,
+    /// Representation and flags used by the parsed input.
+    pub format: TonAddressFormat,
+}
+
+/// Reports invalid address text or a raw address that cannot use TEP-2 formatting.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    thiserror::Error,
+    serde::Serialize,
+    serde::Deserialize,
+    uniffi::Error,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum TonAddressError {
+    /// The input is neither a valid raw address nor a valid TEP-2 friendly address.
+    #[error("value must be a valid raw or user-friendly TON internal address")]
+    InvalidAddress,
+    /// The workchain cannot be encoded by the supported TEP-2 friendly format.
+    #[error("TON address workchain cannot be represented in user-friendly format")]
+    UnsupportedWorkchain,
+}
+
+/// Parses a raw or user-friendly TON address without changing its account identity.
+///
+/// Friendly input accepts the standard and URL-safe Base64 alphabets and returns
+/// the flags protected by its checksum in [`TonAddressFormat::UserFriendly`].
+#[uniffi::export]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "UniFFI free functions use owned strings at the language boundary"
+)]
+pub fn parse_ton_address(value: String) -> Result<TonAddressInfo, TonAddressError> {
+    parse_ton_address_parts(&value).map(|parsed| parsed.info())
+}
+
+/// Reports whether `value` is a valid raw or user-friendly TON address.
+#[uniffi::export]
+#[must_use]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "UniFFI free functions use owned strings at the language boundary"
+)]
+pub fn is_valid_ton_address(value: String) -> bool {
+    parse_ton_address_parts(&value).is_ok()
+}
+
+/// Converts a TON address to the requested canonical representation.
+///
+/// Raw output is lowercase `workchain:64-hex`. User-friendly output is
+/// unpadded URL-safe TEP-2 Base64. Requested friendly flags replace any flags
+/// carried by the input.
+#[uniffi::export]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "UniFFI free functions use owned strings at the language boundary"
+)]
+pub fn convert_ton_address(
+    value: String,
+    format: TonAddressFormat,
+) -> Result<String, TonAddressError> {
+    let parsed = parse_ton_address_parts(&value)?;
+    match format {
+        TonAddressFormat::Raw => Ok(parsed.raw.to_string()),
+        TonAddressFormat::UserFriendly {
+            bounceable,
+            testnet,
+        } => FriendlyAddress::from_raw(parsed.raw, bounceable, testnet)
+            .map(|address| address.to_string())
+            .map_err(|_| TonAddressError::UnsupportedWorkchain),
+    }
 }
 
 impl TonAddressString {
@@ -61,7 +162,9 @@ impl TryFrom<String> for TonAddressString {
     type Error = TonAddressStringError;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        let address = TonAddress::from_str(&value).map_err(|_| TonAddressStringError)?;
+        let address = parse_ton_address_parts(&value)
+            .map_err(|_| TonAddressStringError)?
+            .address;
         Ok(Self { value, address })
     }
 }
@@ -116,6 +219,75 @@ pub struct TonAddressStringError;
 
 uniffi::custom_type!(TonAddressString, String);
 
+struct ParsedTonAddressParts {
+    address: TonAddress,
+    raw: RawAccountAddress,
+    format: TonAddressFormat,
+}
+
+impl ParsedTonAddressParts {
+    fn info(&self) -> TonAddressInfo {
+        TonAddressInfo {
+            raw: self.raw.to_string(),
+            workchain: self.raw.workchain(),
+            format: self.format,
+        }
+    }
+}
+
+fn parse_ton_address_parts(value: &str) -> Result<ParsedTonAddressParts, TonAddressError> {
+    if value.contains(':') {
+        let address = TonAddress::from_str(value).map_err(|_| TonAddressError::InvalidAddress)?;
+        let raw = raw_account_address(&address)?;
+        return Ok(ParsedTonAddressParts {
+            address,
+            raw,
+            format: TonAddressFormat::Raw,
+        });
+    }
+
+    let canonical = canonical_user_friendly(value)?;
+    let friendly = FriendlyAddress::try_from(canonical.as_ref())
+        .map_err(|_| TonAddressError::InvalidAddress)?;
+    let address = TonAddress::from_str(value).map_err(|_| TonAddressError::InvalidAddress)?;
+    Ok(ParsedTonAddressParts {
+        address,
+        raw: friendly.raw_address(),
+        format: TonAddressFormat::UserFriendly {
+            bounceable: friendly.is_bounceable(),
+            testnet: friendly.is_test_only(),
+        },
+    })
+}
+
+fn raw_account_address(address: &TonAddress) -> Result<RawAccountAddress, TonAddressError> {
+    let hash = <[u8; 32]>::try_from(address.hash.as_slice())
+        .map_err(|_| TonAddressError::InvalidAddress)?;
+    Ok(RawAccountAddress::new(address.workchain, hash))
+}
+
+fn canonical_user_friendly(value: &str) -> Result<Cow<'_, str>, TonAddressError> {
+    let uses_standard_alphabet = value.bytes().any(|byte| matches!(byte, b'+' | b'/'));
+    let uses_url_safe_alphabet = value.bytes().any(|byte| matches!(byte, b'-' | b'_'));
+    if uses_standard_alphabet && uses_url_safe_alphabet {
+        return Err(TonAddressError::InvalidAddress);
+    }
+    if uses_standard_alphabet {
+        Ok(Cow::Owned(
+            value
+                .chars()
+                .map(|character| match character {
+                    '+' => '-',
+                    '/' => '_',
+                    other => other,
+                })
+                .collect(),
+        ))
+    } else {
+        Ok(Cow::Borrowed(value))
+    }
+}
+
 pub(crate) trait TonAddressExt {
     /// Encodes the address for display and public API responses.
     ///
@@ -137,7 +309,10 @@ mod tests {
     use ton::ton_core::types::TonAddress;
     use uniffi::{Lift, Lower};
 
-    use super::{TonAddressExt as _, TonAddressString};
+    use super::{
+        TonAddressError, TonAddressExt as _, TonAddressFormat, TonAddressInfo, TonAddressString,
+        convert_ton_address, is_valid_ton_address, parse_ton_address,
+    };
     use crate::Network;
 
     const RAW_ADDRESS: &str = "0:1111111111111111111111111111111111111111111111111111111111111111";
@@ -194,5 +369,123 @@ mod tests {
         let expected = mainnet.as_str().to_owned();
         assert_eq!(mainnet.clone().into_string(), expected);
         assert_eq!(String::from(mainnet), expected);
+    }
+
+    #[test]
+    fn parses_raw_and_both_friendly_base64_alphabets() -> Result<(), TonAddressError> {
+        let raw = "0:e4d954ef9f4e1250a26b5bbad76a1cdd17cfd08babad6f4c23e372270aef6f76";
+        let url_safe = "EQDk2VTvn04SUKJrW7rXahzdF8_Qi6utb0wj43InCu9vdjrR";
+        let standard = "EQDk2VTvn04SUKJrW7rXahzdF8/Qi6utb0wj43InCu9vdjrR";
+
+        assert_eq!(
+            parse_ton_address(raw.to_owned())?,
+            TonAddressInfo {
+                raw: raw.to_owned(),
+                workchain: 0,
+                format: TonAddressFormat::Raw,
+            }
+        );
+        for friendly in [url_safe, standard] {
+            assert_eq!(
+                parse_ton_address(friendly.to_owned())?,
+                TonAddressInfo {
+                    raw: raw.to_owned(),
+                    workchain: 0,
+                    format: TonAddressFormat::UserFriendly {
+                        bounceable: true,
+                        testnet: false,
+                    },
+                }
+            );
+            assert_eq!(
+                convert_ton_address(friendly.to_owned(), TonAddressFormat::Raw)?,
+                raw
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn formats_every_tep_2_flag_combination() -> Result<(), TonAddressError> {
+        let raw = "0:ca6e321c7cce9ecedf0a8ca2492ec8592494aa5fb5ce0387dff96ef6af982a3e";
+        for (friendly, bounceable, testnet) in [
+            (
+                "EQDKbjIcfM6ezt8KjKJJLshZJJSqX7XOA4ff-W72r5gqPrHF",
+                true,
+                false,
+            ),
+            (
+                "UQDKbjIcfM6ezt8KjKJJLshZJJSqX7XOA4ff-W72r5gqPuwA",
+                false,
+                false,
+            ),
+            (
+                "kQDKbjIcfM6ezt8KjKJJLshZJJSqX7XOA4ff-W72r5gqPgpP",
+                true,
+                true,
+            ),
+            (
+                "0QDKbjIcfM6ezt8KjKJJLshZJJSqX7XOA4ff-W72r5gqPleK",
+                false,
+                true,
+            ),
+        ] {
+            assert_eq!(
+                convert_ton_address(
+                    raw.to_owned(),
+                    TonAddressFormat::UserFriendly {
+                        bounceable,
+                        testnet,
+                    }
+                )?,
+                friendly
+            );
+            let parsed = parse_ton_address(friendly.to_owned())?;
+            assert_eq!(
+                parsed.format,
+                TonAddressFormat::UserFriendly {
+                    bounceable,
+                    testnet,
+                }
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn validation_rejects_bad_flags_checksums_and_mixed_alphabets() {
+        let corrupt_checksum = "EQDk2VTvn04SUKJrW7rXahzdF8_Qi6utb0wj43InCu9vdjra";
+        let invalid_friendly = "UQEzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM2SU";
+        let mixed_alphabet = FRIENDLY_ADDRESS.replacen('_', "/", 1);
+
+        for invalid in [
+            "",
+            "not-an-address",
+            corrupt_checksum,
+            invalid_friendly,
+            mixed_alphabet.as_str(),
+        ] {
+            assert!(!is_valid_ton_address(invalid.to_owned()));
+            assert_eq!(
+                parse_ton_address(invalid.to_owned()),
+                Err(TonAddressError::InvalidAddress)
+            );
+        }
+    }
+
+    #[test]
+    fn friendly_format_rejects_an_unsupported_workchain() {
+        let raw = format!("1:{}", "11".repeat(32));
+        assert!(is_valid_ton_address(raw.clone()));
+        assert_eq!(
+            convert_ton_address(
+                raw,
+                TonAddressFormat::UserFriendly {
+                    bounceable: false,
+                    testnet: false,
+                }
+            ),
+            Err(TonAddressError::UnsupportedWorkchain)
+        );
     }
 }

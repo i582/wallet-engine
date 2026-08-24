@@ -46,6 +46,50 @@ dependencies from this document to the application module.
 
 The release AAR requires Android API level 28 or newer.
 
+## Address utilities
+
+The generated module validates raw and user-friendly addresses, exposes the
+friendly flags, and converts between canonical formats:
+
+```kotlin
+val info = parseTonAddress(input)
+val valid = isValidTonAddress(input)
+val raw = convertTonAddress(input, TonAddressFormat.Raw)
+val display = convertTonAddress(
+    raw,
+    TonAddressFormat.UserFriendly(bounceable = false, testnet = false),
+)
+```
+
+`TonAddressFormat.UserFriendly` inside `info.format` contains the parsed
+`bounceable` and `testnet` flags. Raw input has `TonAddressFormat.Raw` because
+the raw representation does not carry these flags.
+
+## Mnemonic word list
+
+Use the engine's TON word list for recovery-phrase input:
+
+```kotlin
+val words = mnemonicWordlist()
+val suggestions = words.filter { it.startsWith(input.lowercase()) }
+```
+
+The list contains the 2048 English words accepted by the same mnemonic
+validation used for wallet import.
+
+## Enriched activity
+
+Every nonzero transfer returned in `WalletSnapshot.activity.items` includes
+`transactionFeeNanograms`, `status`, and an optional decoded plaintext
+`comment`. The fee is the total fee for the transaction. It is repeated when
+one transaction produces multiple activity rows, so do not sum it per row.
+
+## NFT collection metadata
+
+An NFT that belongs to a collection includes a neutral `collection` descriptor
+with its address, standard TEP-64 fields, and complete string metadata. Keep
+product-specific classification, such as Telegram gifts, in the application.
+
 ## TON Connect
 
 The generated Kotlin module includes `TonConnectSession`, manifest parsing,

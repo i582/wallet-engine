@@ -51,7 +51,9 @@ pub use engine::{WalletClient, WalletHttpHost, WalletPlatformHost};
 pub use ton_connect::*;
 pub use types::{
     Base64Hash, Base64HashError, Boc, BocError, NonEmptyString, NonEmptyStringError,
-    TonAddressString, TonAddressStringError, UnsignedDecimalString, UnsignedDecimalStringError,
+    TonAddressError, TonAddressFormat, TonAddressInfo, TonAddressString, TonAddressStringError,
+    UnsignedDecimalString, UnsignedDecimalStringError, convert_ton_address, is_valid_ton_address,
+    mnemonic_wordlist, parse_ton_address,
 };
 pub use wallet::*;
 

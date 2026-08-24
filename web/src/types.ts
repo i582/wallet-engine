@@ -67,6 +67,10 @@ export interface ActivityItem {
   readonly timestamp: number
   readonly direction: "sent" | "received"
   readonly amountNanograms: string
+  /** Total transaction fee; repeated when one transaction has multiple activity rows. */
+  readonly transactionFeeNanograms: string
+  readonly status: "success" | "failed" | "bounced"
+  readonly comment?: string
   readonly counterparty?: string
 }
 
@@ -162,9 +166,18 @@ export interface ActivityList {
   readonly hasMore: boolean
 }
 
+export interface NftCollectionDescriptor {
+  readonly address: string
+  readonly name?: string
+  readonly description?: string
+  readonly image?: string
+  readonly content: Readonly<Record<string, string>>
+}
+
 export interface NftItem {
   readonly address: string
   readonly collectionAddress?: string
+  readonly collection?: NftCollectionDescriptor
   readonly ownerAddress?: string
   readonly realOwner?: string
   readonly saleContractAddress?: string

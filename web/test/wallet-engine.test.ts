@@ -5,7 +5,11 @@ import {
   BrowserPlatformHost,
   WalletClient,
   WalletLifecycle,
+  convertTonAddress,
   initializeWalletEngine,
+  isValidTonAddress,
+  mnemonicWordlist,
+  parseTonAddress,
   type HttpRequest,
   type NftTransferPreviewRequest,
   type WalletClientConfig,
@@ -131,6 +135,35 @@ describe("high-level WASM API", () => {
   const clients: WalletClient[] = []
   const lifecycles: WalletLifecycle[] = []
 
+  test("parses, validates, and converts TON address formats", async () => {
+    const raw = "0:ca6e321c7cce9ecedf0a8ca2492ec8592494aa5fb5ce0387dff96ef6af982a3e"
+    const friendly = "0QDKbjIcfM6ezt8KjKJJLshZJJSqX7XOA4ff-W72r5gqPleK"
+
+    expect(await parseTonAddress(friendly)).toEqual({
+      raw,
+      workchain: 0,
+      format: {kind: "userFriendly", bounceable: false, testnet: true},
+    })
+    expect(await convertTonAddress(friendly, {kind: "raw"})).toBe(raw)
+    expect(
+      await convertTonAddress(raw, {
+        kind: "userFriendly",
+        bounceable: true,
+        testnet: false,
+      }),
+    ).toBe("EQDKbjIcfM6ezt8KjKJJLshZJJSqX7XOA4ff-W72r5gqPrHF")
+    expect(await isValidTonAddress(friendly)).toBe(true)
+    expect(await isValidTonAddress("not-an-address")).toBe(false)
+  })
+
+  test("exports the complete TON mnemonic wordlist", async () => {
+    const words = await mnemonicWordlist()
+
+    expect(words).toHaveLength(2048)
+    expect(words[0]).toBe("abandon")
+    expect(words.at(-1)).toBe("zoo")
+  })
+
   afterAll(async () => {
     await Promise.all(clients.map(client => client.close()))
     for (const lifecycle of lifecycles) {
@@ -163,7 +196,7 @@ describe("high-level WASM API", () => {
     expect(update.snapshot.accountResource.error?.hostKind).toBe("connectionLost")
   })
 
-  test("preserves indexed NFT names and inline SVG artwork at the WASM boundary", async () => {
+  test("preserves NFT and collection metadata at the WASM boundary", async () => {
     const lifecycle = await WalletLifecycle.create(platform)
     lifecycles.push(lifecycle)
     const created = await lifecycle.createWallet({
@@ -171,6 +204,7 @@ describe("high-level WASM API", () => {
       network: "testnet",
     })
     const itemAddress = `0:${"2B".repeat(32)}`
+    const collectionAddress = `0:${"3C".repeat(32)}`
     const inlineSvg = "data:image/svg+xml,%3Csvg%2F%3E"
     const client = await WalletClient.create(walletConfig(created.descriptor), {
       platformHost: platform,
@@ -181,7 +215,13 @@ describe("high-level WASM API", () => {
             {
               address: itemAddress,
               code_hash: "code",
-              collection_address: null,
+              collection: {
+                address: collectionAddress,
+                collection_content: {
+                  description: "A collection from the chain.",
+                  image: "ipfs://collection/image.png",
+                },
+              },
               content: {
                 description: "Few have witnessed such magnificence.",
                 image: inlineSvg,
@@ -196,6 +236,11 @@ describe("high-level WASM API", () => {
               real_owner: created.descriptor.address,
             },
           ],
+          metadata: {
+            [collectionAddress]: {
+              token_info: [{name: "Nightfall", type: "nft_collections"}],
+            },
+          },
         })
       }),
     })
@@ -203,11 +248,21 @@ describe("high-level WASM API", () => {
 
     const update = await client.refreshNfts()
     const [item] = update.snapshot.nfts.items
+    const resolvedCollectionAddress = await convertTonAddress(collectionAddress, {
+      kind: "userFriendly",
+      bounceable: false,
+      testnet: true,
+    })
 
     expect(update.outcome).toBe("completed")
     expect(item?.content.name).toBe("Shadow Reaper")
     expect(item?.content.description).toBe("Few have witnessed such magnificence.")
     expect(item?.content.image).toBe(inlineSvg)
+    expect(item?.collectionAddress).toBe(resolvedCollectionAddress)
+    expect(item?.collection?.address).toBe(resolvedCollectionAddress)
+    expect(item?.collection?.name).toBe("Nightfall")
+    expect(item?.collection?.description).toBe("A collection from the chain.")
+    expect(item?.collection?.image).toBe("ipfs://collection/image.png")
   })
 
   test("accepts the camel-case exact expiration field at the WASM boundary", async () => {

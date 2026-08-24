@@ -39,6 +39,50 @@ Xcode or `Package.swift`.
 The `XCFramework` contains macOS, iOS, and iOS Simulator slices. The minimum
 versions are macOS 15 and iOS 18.
 
+## Address utilities
+
+The generated module validates raw and user-friendly addresses, exposes the
+friendly flags, and converts between canonical formats:
+
+```swift
+let info = try parseTonAddress(value: input)
+let valid = isValidTonAddress(value: input)
+let raw = try convertTonAddress(value: input, format: .raw)
+let display = try convertTonAddress(
+    value: raw,
+    format: .userFriendly(bounceable: false, testnet: false)
+)
+```
+
+The `.userFriendly` case inside `info.format` contains the parsed `bounceable`
+and `testnet` flags. Raw input has `.raw` because the raw representation does
+not carry these flags.
+
+## Mnemonic word list
+
+Use the engine's TON word list for recovery-phrase input:
+
+```swift
+let words = mnemonicWordlist()
+let suggestions = words.filter { $0.hasPrefix(input.lowercased()) }
+```
+
+The list contains the 2048 English words accepted by the same mnemonic
+validation used for wallet import.
+
+## Enriched activity
+
+Every nonzero transfer returned in `WalletSnapshot.activity.items` includes
+`transactionFeeNanograms`, `status`, and an optional decoded plaintext
+`comment`. The fee is the total fee for the transaction. It is repeated when
+one transaction produces multiple activity rows, so do not sum it per row.
+
+## NFT collection metadata
+
+An NFT that belongs to a collection includes a neutral `collection` descriptor
+with its address, standard TEP-64 fields, and complete string metadata. Keep
+product-specific classification, such as Telegram gifts, in the application.
+
 ## TON Connect
 
 The generated Swift module includes `TonConnectSession`, manifest parsing,

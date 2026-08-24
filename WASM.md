@@ -80,6 +80,46 @@ await initializeWalletEngine()
 A bundler can load the adjacent `wallet_engine_bg.wasm` file. You can also pass
 an explicit `InitInput` to `initializeWalletEngine`.
 
+## Address utilities
+
+The high-level package validates raw and user-friendly addresses, exposes the
+friendly flags, and converts between canonical formats:
+
+```ts
+import {
+  convertTonAddress,
+  isValidTonAddress,
+  parseTonAddress,
+} from "@ton/wallet-engine"
+
+const info = await parseTonAddress(input)
+const valid = await isValidTonAddress(input)
+const raw = await convertTonAddress(input, {kind: "raw"})
+const display = await convertTonAddress(raw, {
+  kind: "userFriendly",
+  bounceable: false,
+  testnet: false,
+})
+```
+
+`info.format` contains either `{kind: "raw"}` or the parsed user-friendly
+flags. Both standard and URL-safe Base64 friendly inputs are accepted. Friendly
+output is canonical unpadded URL-safe Base64.
+
+## Mnemonic word list
+
+Use the engine's TON word list for recovery-phrase input:
+
+```ts
+import {mnemonicWordlist} from "@ton/wallet-engine"
+
+const words = await mnemonicWordlist()
+const suggestions = words.filter(word => word.startsWith(input.toLowerCase()))
+```
+
+The list contains the 2048 English words accepted by the same mnemonic
+validation used for wallet import.
+
 ## Implement protected storage
 
 The package does not include an insecure recovery-phrase store. Implement the
@@ -131,6 +171,16 @@ const client = await WalletClient.create(
 const update = await client.refresh()
 console.log(update.snapshot.account)
 ```
+
+Every nonzero transfer in `update.snapshot.activity.items` includes
+`transactionFeeNanograms`, `status` (`"success"`, `"failed"`, or `"bounced"`),
+and an optional decoded plaintext `comment`. The fee is the total fee for the
+transaction. It is repeated when one transaction produces multiple activity
+rows, so do not sum it per row.
+
+An NFT that belongs to a collection includes a neutral `collection` descriptor
+with its address, standard TEP-64 fields, and complete string metadata. Keep
+product-specific classification, such as Telegram gifts, in the application.
 
 Call `close()` before you discard the client:
 

@@ -4,6 +4,25 @@ use std::collections::HashMap;
 
 use crate::{TonAddressString, UnsignedDecimalString};
 
+/// Chain-derived metadata for an NFT collection.
+///
+/// Product-specific classification, such as Telegram gifts or usernames,
+/// intentionally stays outside the engine.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct NftCollectionDescriptor {
+    /// The NFT collection contract address.
+    pub address: TonAddressString,
+    /// The standard TEP-64 collection name, when available.
+    pub name: Option<String>,
+    /// The standard TEP-64 collection description, when available.
+    pub description: Option<String>,
+    /// The standard TEP-64 collection image reference, when available.
+    pub image: Option<String>,
+    /// All string-valued collection metadata returned by the provider.
+    pub content: HashMap<String, String>,
+}
+
 /// One NFT item returned by the configured Toncenter v3 provider.
 ///
 /// `content` contains the string-valued on-chain and indexed metadata fields.
@@ -16,6 +35,8 @@ pub struct NftItem {
     pub address: TonAddressString,
     /// The collection contract address, if this item belongs to a collection.
     pub collection_address: Option<TonAddressString>,
+    /// Chain-derived collection metadata, if this item belongs to a collection.
+    pub collection: Option<NftCollectionDescriptor>,
     /// The current owner reported by the NFT item contract.
     pub owner_address: Option<TonAddressString>,
     /// The effective owner while a sale contract owns the item.

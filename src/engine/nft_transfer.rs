@@ -257,6 +257,7 @@ mod tests {
         NftItem {
             address: address(NFT),
             collection_address: None,
+            collection: None,
             owner_address: Some(address(owner)),
             real_owner: None,
             sale_contract_address: None,

@@ -7,12 +7,17 @@ use num_bigint::BigUint;
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::Value;
 use std::str::FromStr;
+use ton::block_tlb::{CommonMsgInfo, Msg as TonMessage, Tx, TxDescr};
+use ton::tep::snake_data::SnakeData;
+use ton::ton_core::cell::TonCell;
+use ton::ton_core::traits::tlb::TLB;
 use ton::ton_core::types::TonAddress;
 
 use crate::domain::bounded_diagnostic;
 use crate::{
-    AccountSnapshot, AccountStatus, ActivityCursor, ActivityDirection, ActivityItem, Base64Hash,
-    DomainError, ErrorCategory, ErrorCode, HttpHeader, Network, RetryAdvice, TonAddressString,
+    AccountSnapshot, AccountStatus, ActivityCursor, ActivityDirection, ActivityItem,
+    ActivityStatus, Base64Hash, DomainError, ErrorCategory, ErrorCode, HttpHeader, Network,
+    RetryAdvice, TonAddressString,
 };
 
 #[derive(Debug, Deserialize)]
@@ -35,6 +40,8 @@ struct Account {
 #[derive(Debug, Deserialize)]
 struct Transaction {
     utime: u64,
+    data: String,
+    fee: Value,
     transaction_id: TransactionId,
     #[serde(default)]
     in_msg: Option<Message>,
@@ -92,6 +99,16 @@ pub(crate) struct ActivityRecord {
     /// This amount excludes transaction fees. The parser removes zero-value messages before it creates a record.
     pub amount_nanograms: BigUint,
 
+    /// The total transaction fee in nanograms.
+    /// Multi-message transactions repeat this value on each public row.
+    pub transaction_fee_nanograms: BigUint,
+
+    /// The transaction and message outcome parsed from the raw on-chain data.
+    pub status: ActivityStatus,
+
+    /// A zero-opcode plaintext comment decoded from the message body.
+    pub comment: Option<String>,
+
     /// The source of a received transfer or the destination of a sent transfer.
     /// The Toncenter parser rejects a nonzero transfer when this address is absent or invalid.
     /// The optional form permits future providers that cannot supply a counterparty.
@@ -111,6 +128,9 @@ impl ActivityRecord {
             timestamp: self.timestamp,
             direction: self.direction,
             amount_nanograms: (&self.amount_nanograms).into(),
+            transaction_fee_nanograms: (&self.transaction_fee_nanograms).into(),
+            status: self.status,
+            comment: self.comment.clone(),
             counterparty: self
                 .counterparty
                 .as_ref()
@@ -229,9 +249,20 @@ pub(crate) fn parse_activity(body: &[u8], page_size: u32) -> Result<ActivityPage
     let mut items = Vec::new();
 
     for transaction in transactions {
+        let chain_data = parse_transaction_chain_data(&transaction)?;
+        let transaction_fee_nanograms =
+            parse_unsigned_decimal(&transaction.fee, "transaction fee")?;
+
         if let Some(message) = &transaction.in_msg
-            && let Some(item) =
-                activity_from_message(&transaction, message, ActivityDirection::Received, 0)?
+            && let Some(item) = activity_from_message(
+                &transaction,
+                message,
+                chain_data.in_msg.as_ref(),
+                &transaction_fee_nanograms,
+                chain_data.aborted,
+                ActivityDirection::Received,
+                0,
+            )?
         {
             items.push(item);
         }
@@ -241,6 +272,9 @@ pub(crate) fn parse_activity(body: &[u8], page_size: u32) -> Result<ActivityPage
             if let Some(item) = activity_from_message(
                 &transaction,
                 ordered_message.message,
+                chain_data.out_msgs.get(ordered_message.original_index),
+                &transaction_fee_nanograms,
+                chain_data.aborted,
                 ActivityDirection::Sent,
                 index,
             )? {
@@ -272,6 +306,9 @@ pub(crate) fn activity_record_order(
 fn activity_from_message(
     transaction: &Transaction,
     message: &Message,
+    chain_message: Option<&ChainMessage>,
+    transaction_fee_nanograms: &BigUint,
+    transaction_aborted: bool,
     direction: ActivityDirection,
     index: usize,
 ) -> Result<Option<ActivityRecord>, DomainError> {
@@ -279,6 +316,9 @@ fn activity_from_message(
     if amount_nanograms == BigUint::default() {
         return Ok(None);
     }
+
+    let chain_message = chain_message
+        .ok_or_else(|| invalid_response("raw transaction message does not match provider JSON"))?;
 
     // A zero-value service message is not wallet activity and does not need a
     // counterparty. Every value transfer must still provide a valid address.
@@ -302,8 +342,78 @@ fn activity_from_message(
         timestamp: transaction.utime,
         direction,
         amount_nanograms,
+        transaction_fee_nanograms: transaction_fee_nanograms.clone(),
+        status: if chain_message.bounced {
+            ActivityStatus::Bounced
+        } else if transaction_aborted {
+            ActivityStatus::Failed
+        } else {
+            ActivityStatus::Success
+        },
+        comment: chain_message.comment.clone(),
         counterparty: Some(counterparty),
     }))
+}
+
+struct ChainTransaction {
+    aborted: bool,
+    in_msg: Option<ChainMessage>,
+    out_msgs: Vec<ChainMessage>,
+}
+
+struct ChainMessage {
+    bounced: bool,
+    comment: Option<String>,
+}
+
+fn parse_transaction_chain_data(
+    transaction: &Transaction,
+) -> Result<ChainTransaction, DomainError> {
+    let transaction = Tx::from_boc_base64(&transaction.data)
+        .map_err(|error| invalid_response(format!("invalid raw transaction data: {error}")))?;
+    let aborted = transaction_aborted(&transaction.descr);
+    let in_msg = transaction.msgs.in_msg.as_ref().map(chain_message);
+    let out_msgs = transaction
+        .msgs
+        .out_msgs
+        .iter()
+        .map(chain_message)
+        .collect();
+
+    Ok(ChainTransaction {
+        aborted,
+        in_msg,
+        out_msgs,
+    })
+}
+
+const fn transaction_aborted(description: &TxDescr) -> bool {
+    match description {
+        TxDescr::Ord(value) => value.aborted,
+        TxDescr::Storage(_) => false,
+        TxDescr::TickTock(value) => value.aborted,
+        TxDescr::SplitPrepare(value) => value.aborted,
+        TxDescr::SplitInstall(value) => !value.installed,
+        TxDescr::MergePrepare(value) => value.aborted,
+        TxDescr::MergeInstall(value) => value.aborted,
+    }
+}
+
+fn chain_message(message: &TonMessage) -> ChainMessage {
+    ChainMessage {
+        bounced: matches!(&message.info, CommonMsgInfo::Int(info) if info.bounced),
+        comment: plaintext_comment(&message.body.value),
+    }
+}
+
+fn plaintext_comment(body: &TonCell) -> Option<String> {
+    let mut parser = body.parser();
+    if parser.read_num::<u32>(32).ok()? != 0 {
+        return None;
+    }
+
+    let snake = SnakeData::read(&mut parser).ok()?;
+    Some(String::from_utf8_lossy(snake.as_slice()).into_owned())
 }
 
 struct OrderedMessage<'a> {
@@ -491,12 +601,17 @@ fn parse_retry_after_ms(headers: &[HttpHeader]) -> Option<u64> {
 mod tests {
     use base64::Engine as _;
     use base64::engine::general_purpose::STANDARD;
+    use num_bigint::BigUint;
     use serde_json::{Value, json};
+    use ton::block_tlb::{CommonMsgInfoInt, Msg as TonMessage, Tx, TxDescr, TxDescrOrd, TxMsgs};
+    use ton::tep::snake_data::SnakeData;
+    use ton::ton_core::cell::TonCell;
+    use ton::ton_core::traits::tlb::TLB;
 
     use super::{parse_account, parse_activity, response_error};
     use crate::{
-        AccountStatus, ActivityDirection, ErrorCategory, ErrorCode, HttpHeader, RetryAdvice,
-        UnsignedDecimalString,
+        AccountStatus, ActivityDirection, ActivityStatus, ErrorCategory, ErrorCode, HttpHeader,
+        RetryAdvice, UnsignedDecimalString,
     };
 
     const ADDRESS: &str = "0:0000000000000000000000000000000000000000000000000000000000000001";
@@ -632,6 +747,8 @@ mod tests {
                 "ok": true,
                 "result": [{
                     "utime": 1,
+                    "data": transaction_data(false, Some(empty_message(false)), Vec::new()),
+                    "fee": "0",
                     "transaction_id": { "lt": {}, "hash": hash(1) },
                     "in_msg": { "source": ADDRESS, "value": "1" }
                 }]
@@ -665,6 +782,12 @@ mod tests {
             "ok": true,
             "result": [{
                 "utime": 123,
+                "data": transaction_data(
+                    false,
+                    None,
+                    vec![empty_message(false), empty_message(false), empty_message(false)],
+                ),
+                "fee": "42",
                 "transaction_id": {
                     "lt": "340282366920938463463374607431768211456",
                     "hash": transaction_hash,
@@ -710,6 +833,16 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["100", "200", "300000000000000000000000000000000000000"]
         );
+        assert!(
+            page.items
+                .iter()
+                .all(|item| item.transaction_fee_nanograms == BigUint::from(42_u8))
+        );
+        assert!(
+            page.items
+                .iter()
+                .all(|item| item.status == ActivityStatus::Success && item.comment.is_none())
+        );
         assert_eq!(
             page.cursor
                 .expect("cursor must exist")
@@ -720,12 +853,74 @@ mod tests {
     }
 
     #[test]
+    fn enriches_activity_with_comments_fees_and_chain_status() {
+        let long_comment = "snake-data ".repeat(20);
+        let body = json!({
+            "ok": true,
+            "result": [
+                {
+                    "utime": 3,
+                    "data": transaction_data(
+                        false,
+                        Some(comment_message(false, long_comment.as_bytes())),
+                        Vec::new(),
+                    ),
+                    "fee": "340282366920938463463374607431768211456",
+                    "transaction_id": { "lt": "3", "hash": hash(3) },
+                    "in_msg": { "source": ADDRESS, "value": "30" },
+                },
+                {
+                    "utime": 2,
+                    "data": transaction_data(
+                        true,
+                        Some(comment_message(false, b"failed")),
+                        Vec::new(),
+                    ),
+                    "fee": "20",
+                    "transaction_id": { "lt": "2", "hash": hash(2) },
+                    "in_msg": { "source": ADDRESS, "value": "20" },
+                },
+                {
+                    "utime": 1,
+                    "data": transaction_data(
+                        true,
+                        Some(comment_message(true, &[0xff])),
+                        Vec::new(),
+                    ),
+                    "fee": 10,
+                    "transaction_id": { "lt": "1", "hash": hash(1) },
+                    "in_msg": { "source": ADDRESS, "value": "10" },
+                },
+            ]
+        });
+
+        let page = parse_activity(&encode(body), 10).expect("enriched activity must parse");
+        assert_eq!(page.items.len(), 3);
+
+        let success = &page.items[0];
+        assert_eq!(success.status, ActivityStatus::Success);
+        assert_eq!(success.comment.as_deref(), Some(long_comment.as_str()));
+        assert_eq!(
+            success.transaction_fee_nanograms.to_string(),
+            "340282366920938463463374607431768211456"
+        );
+
+        let failed = &page.items[1];
+        assert_eq!(failed.status, ActivityStatus::Failed);
+        assert_eq!(failed.comment.as_deref(), Some("failed"));
+
+        let bounced = &page.items[2];
+        assert_eq!(bounced.status, ActivityStatus::Bounced);
+        assert_eq!(bounced.comment.as_deref(), Some("�"));
+    }
+
+    #[test]
     fn rejects_missing_results_and_invalid_transfer_fields() {
         let missing =
             parse_account(&encode(json!({ "ok": true }))).expect_err("missing result must fail");
         assert_eq!(missing.code, ErrorCode::InvalidProviderResponse);
 
-        for transaction in [
+        for mut transaction in [
             json!({
                 "utime": 1,
                 "transaction_id": { "lt": "1", "hash": "not-a-hash" },
@@ -752,6 +947,12 @@ mod tests {
                 }]
             }),
         ] {
+            transaction["data"] = json!(transaction_data(
+                false,
+                Some(empty_message(false)),
+                vec![empty_message(false)],
+            ));
+            transaction["fee"] = json!("0");
             let error = parse_activity(&encode(json!({ "ok": true, "result": [transaction] })), 10)
                 .expect_err("invalid transfer field must fail");
             assert_eq!(error.code, ErrorCode::InvalidProviderResponse);
@@ -765,5 +966,51 @@ mod tests {
 
     fn encode(value: Value) -> Vec<u8> {
         serde_json::to_vec(&value).expect("test JSON must serialize")
+    }
+
+    fn transaction_data(
+        aborted: bool,
+        in_msg: Option<TonMessage>,
+        out_msgs: Vec<TonMessage>,
+    ) -> String {
+        Tx {
+            msgs: TxMsgs { in_msg, out_msgs }.into(),
+            descr: TxDescr::Ord(TxDescrOrd {
+                aborted,
+                ..TxDescrOrd::default()
+            })
+            .into(),
+            ..Tx::default()
+        }
+        .to_boc_base64()
+        .expect("raw transaction fixture must serialize")
+    }
+
+    fn empty_message(bounced: bool) -> TonMessage {
+        let body = TonCell::builder()
+            .build()
+            .expect("empty body fixture must build");
+        message(bounced, body)
+    }
+
+    fn comment_message(bounced: bool, comment: &[u8]) -> TonMessage {
+        let mut body = TonCell::builder();
+        body.write_bits([0_u8; 4], 32)
+            .expect("comment opcode fixture must write");
+        SnakeData::new(comment.to_vec())
+            .write(&mut body)
+            .expect("comment snake fixture must write");
+        let body = body.build().expect("comment body fixture must build");
+        message(bounced, body)
+    }
+
+    fn message(bounced: bool, body: TonCell) -> TonMessage {
+        TonMessage::new(
+            CommonMsgInfoInt {
+                bounced,
+                ..CommonMsgInfoInt::default()
+            },
+            body,
+        )
     }
 }
