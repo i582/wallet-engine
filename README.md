@@ -180,6 +180,9 @@ follow or emulate provider redirects, and it does not return a status, headers,
 or final URL. The engine can classify only explicit provider codes present in
 the body; it does not invent HTTP metadata or `Retry-After`.
 
+See the [TypeScript provider transport example](examples/provider-transports-ts/README.md)
+for separate direct HTTP and relay-backed integrations.
+
 TON Connect uses the same wallet hosts. Native applications also own manifest
 HTTP, bridge HTTP and SSE, protected session storage, and approval screens.
 Read [TON_CONNECT.md](TON_CONNECT.md) for the required delivery order.

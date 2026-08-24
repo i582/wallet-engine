@@ -14,6 +14,7 @@ import {
   type HttpRequest,
   type NftTransferPreviewRequest,
   type WalletClientConfig,
+  type WalletStatuslessHost,
 } from "../src"
 import {MemoryJournal} from "./memory-journal"
 import {MemorySecrets} from "./memory-secrets"
@@ -215,6 +216,37 @@ describe("high-level WASM API", () => {
     expect(fetchCount).toBe(2)
     expect(update.outcome).toBe("failed")
     expect(update.snapshot.accountResource.phase).toBe("failed")
+    expect(update.snapshot.accountResource.error?.hostKind).toBe("connectionLost")
+  })
+
+  test("routes provider requests through a JavaScript status-less host", async () => {
+    let executeCount = 0
+    const lifecycle = await WalletLifecycle.create(platform)
+    lifecycles.push(lifecycle)
+    const created = await lifecycle.createWallet({
+      recordId: "statusless-wallet",
+      network: "testnet",
+    })
+    const statuslessHost: WalletStatuslessHost = {
+      executeStatusless: async () => {
+        executeCount += 1
+        throw Object.assign(new Error("relay unavailable"), {
+          kind: "connectionLost",
+          diagnostic: "relay unavailable",
+        })
+      },
+      cancelStatusless: () => Promise.resolve(),
+    }
+    const client = await WalletClient.createStatusless(walletConfig(created.descriptor), {
+      platformHost: platform,
+      statuslessHost,
+    })
+    clients.push(client)
+
+    const update = await client.refresh()
+
+    expect(executeCount).toBe(2)
+    expect(update.outcome).toBe("failed")
     expect(update.snapshot.accountResource.error?.hostKind).toBe("connectionLost")
   })
 

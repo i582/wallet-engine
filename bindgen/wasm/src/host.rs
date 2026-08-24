@@ -12,7 +12,8 @@ use wallet_engine::{
     HttpHostError, HttpHostErrorKind, HttpRequest, HttpRequestId, HttpResponse,
     JournalCompareExchange, JournalCompareExchangeResult, JournalHostError, JournalHostErrorKind,
     JournalKey, JournalRecord, ProtectedSecretHostError, ProtectedSecretHostErrorKind,
-    ProtectedSecretRead, ProtectedSecretRef, ProtectedSecretStore,
+    ProtectedSecretRead, ProtectedSecretRef, ProtectedSecretStore, StatuslessHostError,
+    StatuslessHostErrorKind,
 };
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
@@ -23,6 +24,7 @@ use crate::serde::{from_value, to_value};
 
 thread_local! {
     static HTTP_HOSTS: RefCell<HashMap<u32, JsValue>> = RefCell::new(HashMap::new());
+    static STATUSLESS_HOSTS: RefCell<HashMap<u32, JsValue>> = RefCell::new(HashMap::new());
     static PLATFORM_HOSTS: RefCell<HashMap<u32, JsValue>> = RefCell::new(HashMap::new());
 }
 
@@ -32,6 +34,9 @@ static NEXT_HOST_ID: AtomicU32 = AtomicU32::new(1);
 extern "C" {
     #[wasm_bindgen(typescript_type = "WalletHttpHost")]
     pub type WalletHttpHost;
+
+    #[wasm_bindgen(typescript_type = "WalletStatuslessHost")]
+    pub type WalletStatuslessHost;
 
     #[wasm_bindgen(typescript_type = "WalletPlatformHost")]
     pub type WalletPlatformHost;
@@ -77,6 +82,65 @@ impl wallet_engine::WalletHttpHost for HttpHostAdapter {
             return;
         };
         let Ok(promise) = invoke_promise(&HTTP_HOSTS, self.id, "cancelHttp", &[argument]) else {
+            return;
+        };
+        let _ = SendJsFuture::new(promise).await;
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct StatuslessHostAdapter {
+    id: u32,
+}
+
+impl StatuslessHostAdapter {
+    pub(crate) fn register(host: WalletStatuslessHost) -> Self {
+        let id = next_host_id();
+        STATUSLESS_HOSTS.with(|hosts| {
+            hosts.borrow_mut().insert(id, host.into());
+        });
+        Self { id }
+    }
+}
+
+impl Drop for StatuslessHostAdapter {
+    fn drop(&mut self) {
+        STATUSLESS_HOSTS.with(|hosts| {
+            hosts.borrow_mut().remove(&self.id);
+        });
+    }
+}
+
+#[async_trait]
+impl wallet_engine::WalletStatuslessHost for StatuslessHostAdapter {
+    async fn execute_statusless(
+        &self,
+        request: HttpRequest,
+    ) -> Result<Vec<u8>, StatuslessHostError> {
+        let argument = to_value(&request).map_err(|value| statusless_rejection(&value))?;
+        let promise = invoke_promise(
+            &STATUSLESS_HOSTS,
+            self.id,
+            "executeStatusless",
+            &[argument],
+        )
+        .map_err(|value| statusless_rejection(&value))?;
+        let value = SendJsFuture::new(promise)
+            .await
+            .map_err(|value| statusless_rejection(&value))?;
+        from_value(value).map_err(|value| statusless_rejection(&value))
+    }
+
+    async fn cancel_statusless(&self, request_id: HttpRequestId) {
+        let Ok(argument) = to_value(&request_id) else {
+            return;
+        };
+        let Ok(promise) = invoke_promise(
+            &STATUSLESS_HOSTS,
+            self.id,
+            "cancelStatusless",
+            &[argument],
+        ) else {
             return;
         };
         let _ = SendJsFuture::new(promise).await;
@@ -224,6 +288,22 @@ fn http_rejection(value: &JsValue) -> HttpHostError {
         _ => HttpHostErrorKind::Other,
     };
     HttpHostError::Failed {
+        kind,
+        diagnostic: rejection_diagnostic(value),
+    }
+}
+
+fn statusless_rejection(value: &JsValue) -> StatuslessHostError {
+    let kind = match rejection_kind(value).as_deref() {
+        Some("offline") => StatuslessHostErrorKind::Offline,
+        Some("timeout") => StatuslessHostErrorKind::Timeout,
+        Some("connectionLost") => StatuslessHostErrorKind::ConnectionLost,
+        Some("policyViolation") => StatuslessHostErrorKind::PolicyViolation,
+        Some("responseTooLarge") => StatuslessHostErrorKind::ResponseTooLarge,
+        Some("cancelled") => StatuslessHostErrorKind::Cancelled,
+        _ => StatuslessHostErrorKind::Other,
+    };
+    StatuslessHostError::Failed {
         kind,
         diagnostic: rejection_diagnostic(value),
     }

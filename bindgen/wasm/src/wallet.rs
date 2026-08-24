@@ -3,7 +3,10 @@ use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 
 use crate::error::engine_error;
-use crate::host::{HttpHostAdapter, PlatformHostAdapter, WalletHttpHost, WalletPlatformHost};
+use crate::host::{
+    HttpHostAdapter, PlatformHostAdapter, StatuslessHostAdapter, WalletHttpHost,
+    WalletPlatformHost, WalletStatuslessHost,
+};
 use crate::serde::{from_value, to_value};
 
 #[wasm_bindgen(js_name = WalletClient)]
@@ -24,6 +27,22 @@ impl WalletClient {
         let platform_host = Arc::new(PlatformHostAdapter::register(platform_host));
         let inner = wallet_engine::WalletClient::new(config, http_host, platform_host)
             .map_err(|error| engine_error(&error))?;
+        Ok(Self { inner })
+    }
+
+    /// Creates a client whose provider requests run through a body-or-error host.
+    #[wasm_bindgen(js_name = newStatusless)]
+    pub fn new_statusless(
+        config: JsValue,
+        statusless_host: WalletStatuslessHost,
+        platform_host: WalletPlatformHost,
+    ) -> Result<Self, JsValue> {
+        let config = from_value(config)?;
+        let statusless_host = Arc::new(StatuslessHostAdapter::register(statusless_host));
+        let platform_host = Arc::new(PlatformHostAdapter::register(platform_host));
+        let inner =
+            wallet_engine::WalletClient::new_statusless(config, statusless_host, platform_host)
+                .map_err(|error| engine_error(&error))?;
         Ok(Self { inner })
     }
 

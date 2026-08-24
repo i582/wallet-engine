@@ -14,6 +14,7 @@ import type {
   SignMessagePreview,
   SignMessageResult,
 } from "./send-types"
+import type {WalletStatuslessHost} from "./statusless-host"
 import type {
   CreateEncryptedCommentRequest,
   DecryptCommentRequest,
@@ -24,6 +25,11 @@ import type {
 
 export interface CreateClientOptions extends BrowserHttpHostOptions {
   readonly platformHost: BrowserPlatformHost
+}
+
+export interface CreateStatuslessClientOptions {
+  readonly platformHost: BrowserPlatformHost
+  readonly statuslessHost: WalletStatuslessHost
 }
 
 export class WalletClient {
@@ -41,6 +47,17 @@ export class WalletClient {
     await initializeWalletEngine()
     const httpHost = new BrowserHttpHost(config.providers.toncenterBaseUrl, options)
     return new WalletClient(new RawWalletClient(config, httpHost, options.platformHost))
+  }
+
+  /** Creates a client backed by a relay that returns only body or error. */
+  static async createStatusless(
+    config: WalletClientConfig,
+    options: CreateStatuslessClientOptions,
+  ): Promise<WalletClient> {
+    await initializeWalletEngine()
+    return new WalletClient(
+      RawWalletClient.newStatusless(config, options.statuslessHost, options.platformHost),
+    )
   }
 
   snapshot(): WalletSnapshot {

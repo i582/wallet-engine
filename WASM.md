@@ -195,6 +195,10 @@ const update = await client.refresh()
 console.log(update.snapshot.account)
 ```
 
+For a relay that returns only body or error, use `createStatusless`. The
+[TypeScript provider transport example](examples/provider-transports-ts/README.md)
+provides separate HTTP and relay implementations plus a selectable Bun demo.
+
 Every nonzero transfer in `update.snapshot.activity.items` includes
 `transactionFeeNanograms`, `status` (`"success"`, `"failed"`, or `"bounced"`),
 and an optional decoded plaintext `comment`. The fee is the total fee for the

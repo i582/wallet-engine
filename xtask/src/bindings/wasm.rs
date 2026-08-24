@@ -81,7 +81,9 @@ fn validate_wasm(generated: &Path) -> Result<()> {
     if declarations.contains("export class WalletClient")
         && declarations.contains("export class WalletLifecycle")
         && declarations.contains("export interface WalletHttpHost")
+        && declarations.contains("export interface WalletStatuslessHost")
         && declarations.contains("export interface WalletPlatformHost")
+        && declarations.contains("newStatusless(")
     {
         Ok(())
     } else {
