@@ -29,7 +29,7 @@ RustBuffer {{ ffi_converter_name }}::lower(const {{ class_name }} &val) {
     {% else %}
     case {{ loop.index }}:
     {
-        {{ class_name|to_lower_snake_case }}::{{ variant.name() }} var;
+        {{ class_name|to_lower_snake_case }}::{{ variant.name() }} var("{{ class_name }}::{{ variant.name()|class_name }}");
         {%- for field in variant.fields() %}
         var.{% call macros::field_name(field, loop.index) %} = {{ field|read_fn }}(stream);
         {%- endfor %}

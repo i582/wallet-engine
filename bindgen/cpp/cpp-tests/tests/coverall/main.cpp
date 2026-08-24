@@ -191,7 +191,7 @@ void test_flat_errors() {
         coverall::throw_rich_error_no_variant_data();
         ASSERT_TRUE(false);
     } catch (coverall::coverall_rich_error_no_variant_data::TooManyPlainVariants &e) {
-        ASSERT_EQ(std::string(""), e.what());
+        ASSERT_EQ(std::string("CoverallRichErrorNoVariantData::TooManyPlainVariants"), e.what());
     } catch (...) {
         ASSERT_TRUE(false);
     }
