@@ -80,6 +80,32 @@ await initializeWalletEngine()
 A bundler can load the adjacent `wallet_engine_bg.wasm` file. You can also pass
 an explicit `InitInput` to `initializeWalletEngine`.
 
+## Address utilities
+
+The high-level package validates raw and user-friendly addresses, exposes the
+friendly flags, and converts between canonical formats:
+
+```ts
+import {
+  convertTonAddress,
+  isValidTonAddress,
+  parseTonAddress,
+} from "@ton/wallet-engine"
+
+const info = await parseTonAddress(input)
+const valid = await isValidTonAddress(input)
+const raw = await convertTonAddress(input, {kind: "raw"})
+const display = await convertTonAddress(raw, {
+  kind: "userFriendly",
+  bounceable: false,
+  testnet: false,
+})
+```
+
+`info.format` contains either `{kind: "raw"}` or the parsed user-friendly
+flags. Both standard and URL-safe Base64 friendly inputs are accepted. Friendly
+output is canonical unpadded URL-safe Base64.
+
 ## Implement protected storage
 
 The package does not include an insecure recovery-phrase store. Implement the

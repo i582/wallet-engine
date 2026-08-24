@@ -39,6 +39,25 @@ Xcode or `Package.swift`.
 The `XCFramework` contains macOS, iOS, and iOS Simulator slices. The minimum
 versions are macOS 15 and iOS 18.
 
+## Address utilities
+
+The generated module validates raw and user-friendly addresses, exposes the
+friendly flags, and converts between canonical formats:
+
+```swift
+let info = try parseTonAddress(value: input)
+let valid = isValidTonAddress(value: input)
+let raw = try convertTonAddress(value: input, format: .raw)
+let display = try convertTonAddress(
+    value: raw,
+    format: .userFriendly(bounceable: false, testnet: false)
+)
+```
+
+The `.userFriendly` case inside `info.format` contains the parsed `bounceable`
+and `testnet` flags. Raw input has `.raw` because the raw representation does
+not carry these flags.
+
 ## TON Connect
 
 The generated Swift module includes `TonConnectSession`, manifest parsing,

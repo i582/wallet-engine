@@ -1,3 +1,4 @@
+export * from "./address"
 export * from "./http-host"
 export * from "./initialize"
 export * from "./indexeddb-journal"

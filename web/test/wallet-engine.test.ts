@@ -5,7 +5,10 @@ import {
   BrowserPlatformHost,
   WalletClient,
   WalletLifecycle,
+  convertTonAddress,
   initializeWalletEngine,
+  isValidTonAddress,
+  parseTonAddress,
   type HttpRequest,
   type NftTransferPreviewRequest,
   type WalletClientConfig,
@@ -130,6 +133,27 @@ describe("high-level WASM API", () => {
   })
   const clients: WalletClient[] = []
   const lifecycles: WalletLifecycle[] = []
+
+  test("parses, validates, and converts TON address formats", async () => {
+    const raw = "0:ca6e321c7cce9ecedf0a8ca2492ec8592494aa5fb5ce0387dff96ef6af982a3e"
+    const friendly = "0QDKbjIcfM6ezt8KjKJJLshZJJSqX7XOA4ff-W72r5gqPleK"
+
+    expect(await parseTonAddress(friendly)).toEqual({
+      raw,
+      workchain: 0,
+      format: {kind: "userFriendly", bounceable: false, testnet: true},
+    })
+    expect(await convertTonAddress(friendly, {kind: "raw"})).toBe(raw)
+    expect(
+      await convertTonAddress(raw, {
+        kind: "userFriendly",
+        bounceable: true,
+        testnet: false,
+      }),
+    ).toBe("EQDKbjIcfM6ezt8KjKJJLshZJJSqX7XOA4ff-W72r5gqPrHF")
+    expect(await isValidTonAddress(friendly)).toBe(true)
+    expect(await isValidTonAddress("not-an-address")).toBe(false)
+  })
 
   afterAll(async () => {
     await Promise.all(clients.map(client => client.close()))

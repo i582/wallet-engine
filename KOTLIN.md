@@ -46,6 +46,25 @@ dependencies from this document to the application module.
 
 The release AAR requires Android API level 28 or newer.
 
+## Address utilities
+
+The generated module validates raw and user-friendly addresses, exposes the
+friendly flags, and converts between canonical formats:
+
+```kotlin
+val info = parseTonAddress(input)
+val valid = isValidTonAddress(input)
+val raw = convertTonAddress(input, TonAddressFormat.Raw)
+val display = convertTonAddress(
+    raw,
+    TonAddressFormat.UserFriendly(bounceable = false, testnet = false),
+)
+```
+
+`TonAddressFormat.UserFriendly` inside `info.format` contains the parsed
+`bounceable` and `testnet` flags. Raw input has `TonAddressFormat.Raw` because
+the raw representation does not carry these flags.
+
 ## TON Connect
 
 The generated Kotlin module includes `TonConnectSession`, manifest parsing,
