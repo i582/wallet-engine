@@ -339,6 +339,12 @@ publishes the account and activity resource states separately. An HTTP or
 provider failure is stored as `ResourceState.error`; it does not turn the whole
 call into a thrown `WalletClientError`.
 
+Each nonzero transfer in `ActivityItem` includes the total transaction fee in
+`transactionFeeNanograms`, an on-chain `status` (`success`, `failed`, or
+`bounced`), and an optional zero-opcode plaintext `comment`. If one transaction
+produces multiple activity rows, its total fee is repeated on every row and
+must not be summed per row.
+
 ```mermaid
 flowchart TD
     Refresh["refresh"]

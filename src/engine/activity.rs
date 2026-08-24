@@ -416,6 +416,9 @@ mod tests {
             timestamp: logical_time,
             direction: ActivityDirection::Received,
             amount_nanograms: BigUint::from(1_u8),
+            transaction_fee_nanograms: BigUint::default(),
+            status: crate::ActivityStatus::Success,
+            comment: None,
             counterparty: Some(
                 TonAddress::from_str(ADDRESS).expect("activity test address must be valid"),
             ),

@@ -67,6 +67,10 @@ export interface ActivityItem {
   readonly timestamp: number
   readonly direction: "sent" | "received"
   readonly amountNanograms: string
+  /** Total transaction fee; repeated when one transaction has multiple activity rows. */
+  readonly transactionFeeNanograms: string
+  readonly status: "success" | "failed" | "bounced"
+  readonly comment?: string
   readonly counterparty?: string
 }
 

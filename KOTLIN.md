@@ -77,6 +77,13 @@ val suggestions = words.filter { it.startsWith(input.lowercase()) }
 The list contains the 2048 English words accepted by the same mnemonic
 validation used for wallet import.
 
+## Enriched activity
+
+Every nonzero transfer returned in `WalletSnapshot.activity.items` includes
+`transactionFeeNanograms`, `status`, and an optional decoded plaintext
+`comment`. The fee is the total fee for the transaction. It is repeated when
+one transaction produces multiple activity rows, so do not sum it per row.
+
 ## TON Connect
 
 The generated Kotlin module includes `TonConnectSession`, manifest parsing,

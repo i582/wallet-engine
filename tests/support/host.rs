@@ -8,7 +8,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use futures::future::poll_fn;
 use serde_json::{Value, json};
-use ton::block_tlb::Msg;
+use ton::block_tlb::{CommonMsgInfoInt, Msg, Tx, TxDescr, TxDescrOrd, TxMsgs};
 use ton::tep::snake_data::SnakeData;
 use ton::ton_core::cell::TonCell;
 use ton::ton_core::traits::tlb::TLB;
@@ -653,6 +653,7 @@ impl ScenarioHttpHost {
 
 fn activity_transactions(page: usize, count: usize) -> Vec<Value> {
     let address = test_wallet().testnet_address();
+    let data = activity_transaction_data();
     (0..count)
         .map(|index| {
             let ordinal = page.saturating_mul(10).saturating_add(index);
@@ -663,11 +664,30 @@ fn activity_transactions(page: usize, count: usize) -> Vec<Value> {
                     "lt": lt.to_string(),
                     "hash": STANDARD.encode([ordinal as u8; 32]),
                 },
+                "data": data,
+                "fee": "0",
                 "in_msg": { "source": address, "value": "1" },
                 "out_msgs": [],
             })
         })
         .collect()
+}
+
+fn activity_transaction_data() -> String {
+    let body = TonCell::builder()
+        .build()
+        .expect("empty activity body fixture must build");
+    Tx {
+        msgs: TxMsgs {
+            in_msg: Some(Msg::new(CommonMsgInfoInt::default(), body)),
+            out_msgs: Vec::new(),
+        }
+        .into(),
+        descr: TxDescr::Ord(TxDescrOrd::default()).into(),
+        ..Tx::default()
+    }
+    .to_boc_base64()
+    .expect("activity transaction fixture must serialize")
 }
 
 #[async_trait]

@@ -172,6 +172,12 @@ const update = await client.refresh()
 console.log(update.snapshot.account)
 ```
 
+Every nonzero transfer in `update.snapshot.activity.items` includes
+`transactionFeeNanograms`, `status` (`"success"`, `"failed"`, or `"bounced"`),
+and an optional decoded plaintext `comment`. The fee is the total fee for the
+transaction. It is repeated when one transaction produces multiple activity
+rows, so do not sum it per row.
+
 Call `close()` before you discard the client:
 
 ```ts

@@ -41,6 +41,18 @@ pub enum ActivityDirection {
     Received,
 }
 
+/// The on-chain result of the transaction or internal message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Enum)]
+#[serde(rename_all = "camelCase")]
+pub enum ActivityStatus {
+    /// The transaction completed and this message was not a bounce.
+    Success,
+    /// The transaction was aborted while processing the message.
+    Failed,
+    /// The internal message has the on-chain `bounced` flag.
+    Bounced,
+}
+
 /// One nonzero incoming or outgoing value transfer in wallet activity.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
@@ -57,6 +69,15 @@ pub struct ActivityItem {
     pub direction: ActivityDirection,
     /// The exact transferred value, in nanograms.
     pub amount_nanograms: UnsignedDecimalString,
+    /// The total fee charged by this transaction, in nanograms.
+    ///
+    /// A transaction with multiple visible messages repeats this value on each
+    /// activity item; callers must not sum it per row.
+    pub transaction_fee_nanograms: UnsignedDecimalString,
+    /// The on-chain execution status for this message and transaction.
+    pub status: ActivityStatus,
+    /// A decoded zero-opcode plaintext comment, including an empty comment.
+    pub comment: Option<String>,
     /// The source or destination address, if the provider supplies it.
     pub counterparty: Option<TonAddressString>,
 }
