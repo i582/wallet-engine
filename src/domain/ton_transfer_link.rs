@@ -1,5 +1,6 @@
 //! Pure parsing for standard `ton://transfer/` deep links.
 
+use ton_connect_core::RawAccountAddress;
 use url::Url;
 
 use crate::{Boc, SendExpiration, TonAddressString, UnsignedDecimalString};
@@ -128,6 +129,10 @@ pub fn parse_ton_transfer_link(
 }
 
 fn parse_ton_transfer_link_ref(value: &str) -> Result<ParsedTonTransferLink, TonTransferLinkError> {
+    if value.bytes().any(|byte| byte.is_ascii_control()) {
+        return Err(TonTransferLinkError::InvalidUrl);
+    }
+
     let url = Url::parse(value).map_err(|_| TonTransferLinkError::InvalidUrl)?;
 
     if !url.scheme().eq_ignore_ascii_case("ton")
@@ -146,7 +151,7 @@ fn parse_ton_transfer_link_ref(value: &str) -> Result<ParsedTonTransferLink, Ton
         return Err(TonTransferLinkError::InvalidUrl);
     }
 
-    let raw_path = url.path();
+    let (raw_path, raw_query) = raw_transfer_components(value)?;
     if raw_path.is_empty() || raw_path == "/" {
         return Err(TonTransferLinkError::MissingRecipient);
     }
@@ -155,10 +160,13 @@ fn parse_ton_transfer_link_ref(value: &str) -> Result<ParsedTonTransferLink, Ton
         .filter(|path| !path.is_empty() && !path.contains('/'))
         .ok_or(TonTransferLinkError::InvalidUrl)?;
     let recipient_text = percent_decode_once(raw_recipient)?;
+    if !is_canonical_raw_address(&recipient_text) {
+        return Err(TonTransferLinkError::InvalidRecipient);
+    }
     let recipient = TonAddressString::try_from(recipient_text)
         .map_err(|_| TonTransferLinkError::InvalidRecipient)?;
 
-    let parameters = parse_parameters(url.query())?;
+    let parameters = parse_parameters(raw_query)?;
     let amount = parameters
         .amount
         .map(UnsignedDecimalString::try_from)
@@ -167,9 +175,13 @@ fn parse_ton_transfer_link_ref(value: &str) -> Result<ParsedTonTransferLink, Ton
     let expiration = parse_expiration(parameters.exp)?;
     let jetton = parameters
         .jetton
-        .map(TonAddressString::try_from)
-        .transpose()
-        .map_err(|_| TonTransferLinkError::InvalidJettonMaster)?;
+        .map(|value| {
+            if !is_canonical_raw_address(&value) {
+                return Err(TonTransferLinkError::InvalidJettonMaster);
+            }
+            TonAddressString::try_from(value).map_err(|_| TonTransferLinkError::InvalidJettonMaster)
+        })
+        .transpose()?;
     let binary = parameters
         .binary
         .map(Boc::try_from)
@@ -200,6 +212,44 @@ fn parse_ton_transfer_link_ref(value: &str) -> Result<ParsedTonTransferLink, Ton
         payload,
         expiration,
     })
+}
+
+fn raw_transfer_components(value: &str) -> Result<(&str, Option<&str>), TonTransferLinkError> {
+    let (scheme, after_scheme) = value
+        .split_once(':')
+        .ok_or(TonTransferLinkError::InvalidUrl)?;
+    if !scheme.eq_ignore_ascii_case("ton") {
+        return Err(TonTransferLinkError::InvalidUrl);
+    }
+
+    let authority_and_rest = after_scheme
+        .strip_prefix("//")
+        .ok_or(TonTransferLinkError::InvalidUrl)?;
+    let (authority, path_and_query) = match authority_and_rest.find(['/', '?', '#']) {
+        Some(index) => authority_and_rest.split_at(index),
+        None => (authority_and_rest, ""),
+    };
+    if authority.bytes().any(|byte| matches!(byte, b'@' | b':')) {
+        return Err(TonTransferLinkError::InvalidUrl);
+    }
+
+    let (raw_path, raw_query) = match path_and_query.split_once('?') {
+        Some((path, query)) => (path, Some(query)),
+        None => (path_and_query, None),
+    };
+    if raw_path.bytes().any(|byte| byte == b' ') {
+        return Err(TonTransferLinkError::InvalidUrl);
+    }
+    Ok((raw_path, raw_query))
+}
+
+fn is_canonical_raw_address(value: &str) -> bool {
+    if !value.contains(':') {
+        return true;
+    }
+    value
+        .parse::<RawAccountAddress>()
+        .is_ok_and(|address| address.to_string() == value)
 }
 
 #[derive(Default)]
@@ -529,6 +579,19 @@ mod tests {
     }
 
     #[test]
+    fn rejects_source_characters_that_the_url_parser_would_discard() {
+        for value in [
+            format!(" ton://transfer/{RECIPIENT}"),
+            format!("ton://transfer/{RECIPIENT} "),
+            format!("ton://transfer/{RECIPIENT}?text=a\tb"),
+            format!("ton://transfer/{RECIPIENT}?amount=1\n"),
+            format!("ton://transfer/{RECIPIENT}?exp=1\r"),
+        ] {
+            assert_eq!(parse_error(&value), TonTransferLinkError::InvalidUrl);
+        }
+    }
+
+    #[test]
     fn rejects_payload_and_asset_conflicts() {
         let boc = Boc::try_from(TonCell::EMPTY_BOC.to_vec())
             .expect("empty cell BOC must be valid")
@@ -573,12 +636,30 @@ mod tests {
             parse_error(&format!("ton://transfer/{RECIPIENT}/extra")),
             TonTransferLinkError::InvalidUrl
         );
+        for path in [
+            format!("ignored/../{RECIPIENT}"),
+            format!("ignored/%2e%2e/{RECIPIENT}"),
+            format!("%2e/{RECIPIENT}"),
+        ] {
+            assert_eq!(
+                parse_error(&format!("ton://transfer/{path}")),
+                TonTransferLinkError::InvalidUrl
+            );
+        }
         assert_eq!(
             parse_error(&format!("ton://user@transfer/{RECIPIENT}")),
             TonTransferLinkError::InvalidUrl
         );
         assert_eq!(
+            parse_error(&format!("ton://@transfer/{RECIPIENT}")),
+            TonTransferLinkError::InvalidUrl
+        );
+        assert_eq!(
             parse_error(&format!("ton://transfer:80/{RECIPIENT}")),
+            TonTransferLinkError::InvalidUrl
+        );
+        assert_eq!(
+            parse_error(&format!("ton://transfer:/{RECIPIENT}")),
             TonTransferLinkError::InvalidUrl
         );
         assert_eq!(
@@ -597,6 +678,25 @@ mod tests {
             parse_error(&format!("ton://transfer/{RECIPIENT}?jetton=not-an-address")),
             TonTransferLinkError::InvalidJettonMaster
         );
+    }
+
+    #[test]
+    fn rejects_noncanonical_raw_recipient_and_jetton_addresses() {
+        for address in [
+            format!("0:{}", "AB".repeat(32)),
+            format!("00:{}", "ab".repeat(32)),
+            format!("+0:{}", "ab".repeat(32)),
+            format!("-0:{}", "ab".repeat(32)),
+        ] {
+            assert_eq!(
+                parse_error(&format!("ton://transfer/{address}")),
+                TonTransferLinkError::InvalidRecipient
+            );
+            assert_eq!(
+                parse_error(&format!("ton://transfer/{RECIPIENT}?jetton={address}")),
+                TonTransferLinkError::InvalidJettonMaster
+            );
+        }
     }
 
     fn parse(value: &str) -> ParsedTonTransferLink {
