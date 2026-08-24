@@ -7,7 +7,7 @@ Swift, Kotlin, TypeScript, or generated bindings.
 The application can:
 
 - create a testnet wallet.
-- import 24 recovery words.
+- import 12 pre-rotation or 24 post-rotation recovery words.
 - restore the wallet after a restart.
 - refresh the balance and activity.
 - load older activity.

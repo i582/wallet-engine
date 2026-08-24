@@ -152,7 +152,7 @@ fn render_welcome(frame: &mut Frame<'_>, area: Rect, _app: &App) {
                 Style::default().add_modifier(Modifier::BOLD),
             )),
             Line::default(),
-            Line::from("Create a new wallet or import 24 recovery words."),
+            Line::from("Create a new wallet or import 12 or 24 recovery words."),
             Line::from(Span::styled(
                 "This example uses TON testnet.",
                 Style::default().fg(WARNING),
@@ -173,7 +173,11 @@ fn render_welcome(frame: &mut Frame<'_>, area: Rect, _app: &App) {
             "Create a wallet",
             "Generate and store a new recovery phrase",
         ]),
-        Row::new(["i", "Import a wallet", "Restore from 24 recovery words"]),
+        Row::new([
+            "i",
+            "Import a wallet",
+            "Restore from 12 or 24 recovery words",
+        ]),
         Row::new(["q", "Quit", "Close the application"]),
     ];
     frame.render_widget(
@@ -216,9 +220,12 @@ fn render_recovery(frame: &mut Frame<'_>, area: Rect, created: &CreatedWallet) {
         .phrase
         .split_ascii_whitespace()
         .collect::<Vec<_>>();
-    let rows = (0..8).map(|row_index| {
+    // A pre-rotation phrase has 12 words and a rotated one 24, so the column
+    // height follows the phrase instead of a fixed 8.
+    let column_height = phrase.len().div_ceil(3);
+    let rows = (0..column_height).map(|row_index| {
         let cells = (0..3).map(|column_index| {
-            let index = row_index + column_index * 8;
+            let index = row_index + column_index * column_height;
             let value = phrase
                 .get(index)
                 .map_or_else(String::new, |word| format!("{:>2}  {word}", index + 1));
@@ -262,7 +269,7 @@ fn render_recovery(frame: &mut Frame<'_>, area: Rect, created: &CreatedWallet) {
 fn render_import(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let content = if app.import_words.is_empty() {
         Span::styled(
-            "Type or paste 24 words separated by spaces",
+            "Type or paste 12 or 24 words separated by spaces",
             Style::default().fg(MUTED),
         )
     } else {
@@ -274,7 +281,7 @@ fn render_import(frame: &mut Frame<'_>, area: Rect, app: &App) {
         Paragraph::new(Line::from(content))
             .block(
                 Block::default()
-                    .title(format!(" Import · {word_count}/24 "))
+                    .title(format!(" Import · {word_count} words (12 or 24) "))
                     .title_style(Style::default().fg(ACCENT).add_modifier(Modifier::BOLD))
                     .borders(Borders::ALL)
                     .padding(Padding::uniform(1)),

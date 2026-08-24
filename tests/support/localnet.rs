@@ -22,7 +22,7 @@ use ton::ton_core::traits::tlb::TLB;
 use ton::ton_core::types::TonAddress;
 use ton::ton_core::types::tlb_core::TLBCoins;
 use ton::ton_wallet::{
-    Mnemonic, TonWallet, WALLET_V5R1_ID_DEFAULT_TESTNET, WalletV5ExtMsgBody, WalletVersion,
+    TonWallet, WALLET_V5R1_ID_DEFAULT_TESTNET, WalletV5ExtMsgBody, WalletVersion,
 };
 use wallet_engine::{
     Boc, HttpHeader, HttpHostError, HttpHostErrorKind, HttpMethod, HttpRequest, HttpRequestId,
@@ -239,6 +239,11 @@ impl LocalnetHttpHost {
         lock(&self.localnet).balance(address)
     }
 
+    /// Advances Acton's virtual clock without waiting for wall-clock time.
+    pub(super) fn increase_time(&self, seconds: u64) -> Result<(), String> {
+        lock(&self.localnet).increase_time(seconds)
+    }
+
     /// Delivers a wallet-signed internal message through an independently funded wallet.
     #[allow(
         dead_code,
@@ -254,9 +259,7 @@ impl LocalnetHttpHost {
         let localnet = lock(&self.localnet);
         let mnemonic = std::str::from_utf8(test_wallet().other_recovery_phrase_bytes())
             .map_err(|error| error.to_string())?;
-        let key_pair = Mnemonic::from_str(mnemonic, None)
-            .and_then(|mnemonic| mnemonic.to_key_pair())
-            .map_err(|error| error.to_string())?;
+        let key_pair = test_wallet::rotation_anchor_key_pair(mnemonic)?;
         let relayer_wallet_id = WALLET_V5R1_ID_DEFAULT_TESTNET
             .checked_add(1)
             .ok_or_else(|| "localnet relayer wallet ID overflowed".to_owned())?;
@@ -318,9 +321,7 @@ impl LocalnetHttpHost {
         let localnet = lock(&self.localnet);
         let mnemonic = std::str::from_utf8(test_wallet().recovery_phrase_bytes())
             .map_err(|error| error.to_string())?;
-        let key_pair = Mnemonic::from_str(mnemonic, None)
-            .and_then(|mnemonic| mnemonic.to_key_pair())
-            .map_err(|error| error.to_string())?;
+        let key_pair = test_wallet::rotation_anchor_key_pair(mnemonic)?;
         let wallet = TonWallet::new_with_params(
             WalletVersion::Wallet,
             key_pair,
@@ -701,6 +702,25 @@ impl Localnet {
             Ok(())
         } else {
             Err(format!("localnet mining failed with HTTP {status}: {body}"))
+        }
+    }
+
+    fn increase_time(&self, seconds: u64) -> Result<(), String> {
+        let (status, body) = request(
+            &self.client,
+            Method::POST,
+            &format!("{}/acton_increaseTime", self.base_url),
+            Some(&json!({ "seconds": seconds })),
+        )?;
+        if (200..300).contains(&status)
+            && (body.get("ok").and_then(Value::as_bool) == Some(true)
+                || body.get("success").and_then(Value::as_bool) == Some(true))
+        {
+            Ok(())
+        } else {
+            Err(format!(
+                "localnet time increase failed with HTTP {status}: {body}"
+            ))
         }
     }
 

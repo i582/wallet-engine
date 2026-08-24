@@ -139,7 +139,7 @@ export class WebScenarioRunner {
         await expect(
           this.context.page.getByRole("heading", {name: "Back up your wallet"}),
         ).toBeVisible()
-        await expect(this.wallet.recoveryWords().getByRole("listitem")).toHaveCount(24)
+        await expect(this.wallet.recoveryWords().getByRole("listitem")).toHaveCount(12)
         await expect(this.context.page.getByRole("button", {name: "Continue"})).toBeDisabled()
         return
       case "expect.ui.dashboard":

@@ -156,7 +156,7 @@ describe("high-level WASM API", () => {
     expect(await isValidTonAddress("not-an-address")).toBe(false)
   })
 
-  test("exports the complete TON mnemonic wordlist", async () => {
+  test("exports the complete BIP-39 wordlist", async () => {
     const words = await mnemonicWordlist()
 
     expect(words).toHaveLength(2048)
@@ -349,7 +349,7 @@ describe("high-level WASM API", () => {
       recordId: "browser-lifecycle-wallet",
       network: "testnet",
     })
-    expect(created.recoveryPhrase.phrase.split(" ")).toHaveLength(24)
+    expect(created.recoveryPhrase.phrase.split(" ")).toHaveLength(12)
     expect(created.descriptor.address).toStartWith("0Q")
     expect(created.descriptor.publicKey).toHaveLength(32)
 

@@ -2,7 +2,7 @@ import {mnemonicWordlist as rawMnemonicWordlist} from "../../bindings/wasm/walle
 
 import {initializeWalletEngine} from "./initialize"
 
-/** Returns the 2048 English words accepted by TON mnemonic validation. */
+/** Returns the 2048 English BIP-39 words accepted by recovery-phrase validation. */
 export async function mnemonicWordlist(): Promise<readonly string[]> {
   await initializeWalletEngine()
   return rawMnemonicWordlist() as string[]

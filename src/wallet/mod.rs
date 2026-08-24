@@ -4,8 +4,10 @@
 //! words. Private submodules derive wallet keys and build signed transfers.
 
 pub(crate) mod crypto;
+pub(crate) mod mnemonic;
 pub(crate) mod nft_transfer;
 pub(crate) mod send;
+pub(crate) mod slip_0010;
 pub(crate) mod transfer;
 
 use std::sync::Arc;
@@ -35,10 +37,12 @@ pub struct WalletDescriptor {
     pub record_id: String,
     /// The derived friendly non-bounceable TON address.
     pub address: TonAddressString,
-    /// The raw 32-byte Ed25519 public key used by the wallet contract.
+    /// The raw 32-byte Ed25519 anchor public key of the rotation mnemonic.
     ///
-    /// This is safe to persist. It lets the engine emulate a first deployment
-    /// before it asks the host to unlock the recovery phrase.
+    /// The anchor key determines the wallet account address and never
+    /// changes, so this is safe to persist. It lets the engine emulate a
+    /// first deployment before it asks the host to unlock the recovery
+    /// phrase.
     pub public_key: Vec<u8>,
     /// The network used for derivation and future operations.
     pub network: Network,
@@ -103,7 +107,12 @@ pub struct ImportWalletRequest {
     pub record_id: String,
     /// The network used to derive the wallet contract and address.
     pub network: Network,
-    /// Exactly 24 lowercase English TON mnemonic words.
+    /// Lowercase English words of a rotation mnemonic (TEP-0003 section 3.3).
+    ///
+    /// Pass the phrase exactly as the user recorded it: 12 words for a wallet
+    /// whose key was never rotated, or 24 words - two independently
+    /// checksummed BIP-39 halves - after rotation. The engine expands the
+    /// 12-word form itself; never duplicate the words in the application.
     pub recovery_words: Vec<String>,
 }
 
@@ -111,12 +120,15 @@ pub struct ImportWalletRequest {
 ///
 /// The UI must discard this value as soon as the recovery-phrase screen is
 /// dismissed. Neither `WalletDescriptor` nor `WalletSnapshot` contains it.
+///
+/// A newly created wallet has a 12-word phrase; the phrase becomes 24 words
+/// when the wallet's key is rotated.
 #[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct RecoveryPhrase {
-    /// The 24 recovery words in order, separated by one ASCII space.
+    /// The recovery words in order, separated by one ASCII space.
     ///
-    /// Keeping the phrase in one allocation avoids 24 separately allocated
+    /// Keeping the phrase in one allocation avoids separately allocated
     /// secret strings at the FFI boundary. Split it only while presenting
     /// individual words, then release those temporary views.
     pub phrase: String,
@@ -151,7 +163,7 @@ pub enum WalletLifecycleError {
     /// The record ID is empty, too long, or contains unsupported characters.
     #[error("invalid wallet record identifier")]
     InvalidRecordId,
-    /// The recovery phrase is not a valid 24-word TON mnemonic.
+    /// The recovery phrase is not a valid 12- or 24-word Rotation mnemonic.
     #[error("invalid recovery phrase")]
     InvalidRecoveryPhrase,
     /// Rust cannot construct the requested wallet address.
@@ -205,7 +217,11 @@ impl WalletLifecycle {
         Arc::new(Self { platform_host })
     }
 
-    /// Generates and derives a wallet account, then stores its mnemonic.
+    /// Generates the initial 12-word recovery phrase, derives its wallet
+    /// account, and stores the phrase.
+    ///
+    /// A new wallet starts before its one-time key rotation, so its signing
+    /// key equals its anchor key and the user records a single 12-word half.
     ///
     /// Persist `descriptor` after this method succeeds. Present the recovery
     /// phrase once, then release all application copies of it.
@@ -497,7 +513,7 @@ mod tests {
 
     use super::*;
 
-    const MNEMONIC: &str = "fancy carpet hello mandate penalty trial consider property top vicious exit rebuild tragic profit urban major total month holiday sudden rib gather media vicious";
+    const MNEMONIC: &str = "notice tortoise soup strong gun divide offer process salon siren general carry clump left year void clutch tool case burden fix income champion lounge";
 
     #[test]
     fn descriptor_rejects_each_broken_identity_binding_independently() {

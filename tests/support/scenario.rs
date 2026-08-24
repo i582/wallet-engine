@@ -263,6 +263,10 @@ pub(crate) fn release_request(name: impl Into<String>) -> ControlStep {
     ControlStep::ReleaseRequest { name: name.into() }
 }
 
+pub(crate) const fn increase_localnet_time(seconds: u64) -> ControlStep {
+    ControlStep::IncreaseLocalnetTime { seconds }
+}
+
 pub(crate) fn wait_for_platform_call(name: impl Into<String>) -> ControlStep {
     ControlStep::WaitForPlatformCall { name: name.into() }
 }
@@ -947,6 +951,9 @@ pub(crate) enum ControlStep {
     },
     ReleaseRequest {
         name: String,
+    },
+    IncreaseLocalnetTime {
+        seconds: u64,
     },
     PausePlatformCall {
         name: String,
@@ -1879,6 +1886,11 @@ impl ScenarioRunner {
                     Err("scenario has no HTTP host".to_owned())
                 }
             }
+            When::Control(ControlStep::IncreaseLocalnetTime { seconds }) => self
+                .localnet_http_host
+                .as_ref()
+                .ok_or_else(|| "time control requires `.given(network().localnet())`".to_owned())?
+                .increase_time(seconds),
             When::Control(ControlStep::PausePlatformCall { name, kind }) => {
                 self.platform_host.pause_next_platform_call(name, kind);
                 Ok(())

@@ -66,7 +66,7 @@ final class IOSWalletDriver {
 
     /// Confirms recovery backup and waits for the persisted wallet dashboard.
     func acceptRecovery() throws {
-        let confirmation = app.switches["I saved all 24 words in a safe place"]
+        let confirmation = app.switches["I saved all 12 words in a safe place"]
         try require(confirmation, description: "the recovery confirmation")
         confirmation.tap()
         let useWallet = app.buttons["Use wallet"]
@@ -181,8 +181,8 @@ final class IOSWalletDriver {
             NSPredicate(format: "label BEGINSWITH %@", "Word ")
         )
         try require(words.firstMatch, description: "the first recovery word")
-        guard words.count == 24 else {
-            throw IOSWalletDriverError.missingElement("all 24 recovery words")
+        guard words.count == 12 else {
+            throw IOSWalletDriverError.missingElement("all 12 recovery words")
         }
         guard !app.buttons["Use wallet"].isEnabled else {
             throw IOSWalletDriverError.missingElement("a disabled use-wallet action")

@@ -1,0 +1,14 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 1fd15c6467fc35d24a5a3247ad3a076b296e6d3d49e0c5298f99681ca8f0a861 # shrinks to entropy = [0, 0, 0, 0, 1, 2, 0, 0, 0, 0, 1, 7, 6, 0, 0, 0]
+cc b0e4db3573d017b619adab8dfe146bd1f52f40c62b16ba689f4522fe87a2abc3 # shrinks to entropy = [0, 0, 3, 0, 3, 0, 56, 0, 7, 0, 13, 27, 2, 105, 11, 2]
+cc 589988c078c6806ae5182a930bbbb897a0419d8e001fdabbb59873efda35f54a # shrinks to entropy = [110, 43, 87, 11, 174, 211, 117, 193, 198, 60, 103, 89, 157, 67, 16, 162], position = 3, replacement = 969
+cc 4d5947dc3f03c9c73e6410b17607356f195ff1fa97c882f863494a8fc7266fac # shrinks to entropy = [0, 0, 4, 2, 0, 0, 22, 0, 0, 4, 6, 8, 0, 0, 0, 0]
+cc 06d8574544fdf4f3f35e7d07c6408cdcd2fd642b02d2cbb61dd383a0af29b283 # shrinks to entropy = [0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0], uppercase = [false, false, false, false, false, false, false, false, false, false, false, false], spacing = [" ", " ", " ", " ", " ", " ", " ", " ", " ", " ", " ", " "]
+cc c8aa868425e761c07e75c1ff14c262e400fa2abaa5f4ab52270ef1d909fd08a3 # shrinks to anchor = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], signing = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5]
+cc cb9133d69dd464031c9a951ff1a5bf498f5723a16c5a9a544e6b7bfe1fc317a3 # shrinks to anchor = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], signing = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+cc 26ad875519b7f36b4522e7f3037c2710635679fd4ca59841090f6593d5e0fb31 # shrinks to entropy = [0, 0, 0, 53, 2, 0, 0, 0, 0, 11, 0, 0, 0, 0, 106, 0], passphrase = ""
