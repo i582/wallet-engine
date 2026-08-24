@@ -97,6 +97,8 @@ fn validate_swift(source: &str) -> Result<()> {
     if source.contains("@preconcurrency import wallet_engineFFI\n")
         && source.contains("@Sendable () async throws ->")
         && source.contains("private func uniffiTraitInterfaceCallAsync<T: Sendable>(")
+        && source.contains("\npublic protocol WalletStatuslessHost:")
+        && source.contains("\npublic static func newStatusless(")
     {
         Ok(())
     } else {

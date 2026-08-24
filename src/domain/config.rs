@@ -47,8 +47,8 @@ pub struct ProviderConfig {
     pub dns_root_address: Option<TonAddressString>,
     /// End-to-end timeout applied to every provider request, in milliseconds.
     ///
-    /// The embedding HTTP host must enforce this deadline across connection,
-    /// response headers, and response-body reads.
+    /// The selected provider host must enforce this deadline across its
+    /// complete HTTP, relay, or protocol-proxy call.
     #[serde(default = "default_provider_request_timeout_ms")]
     pub request_timeout_ms: u64,
 }

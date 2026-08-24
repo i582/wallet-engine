@@ -155,16 +155,30 @@ Node.js setup.
 
 ## Integration model
 
-Wallet Engine owns the wallet state machine. Your application implements two
-asynchronous host interfaces.
+Wallet Engine owns the wallet state machine. Your application implements one
+provider host and the platform host.
 
 | Interface | Your application provides |
 | --- | --- |
 | `WalletHttpHost` | Bounded HTTP requests and cancellation by request ID |
+| `WalletStatuslessHost` | Body-or-error requests through an opaque relay or protocol proxy |
 | `WalletPlatformHost` | Protected secrets and durable journal storage |
 
 The host callbacks let the same Rust engine run on Apple, Android, and browser
 platforms. The engine does not own platform networking or protected storage.
+
+Use the normal `WalletClient` constructor with `WalletHttpHost`. The HTTP host
+must disable redirects and return the observed `status`, headers, body, and
+`finalUrl`; the engine rejects a `finalUrl` different from the request URL and
+uses HTTP status plus numeric `Retry-After` for retry classification.
+
+Use `WalletClient::new_statusless` in Rust, or the generated `newStatusless`
+constructor, when an opaque relay or protocol proxy exposes only the response
+body or a transport error. In this mode the request URL is a logical Toncenter
+destination rather than proof of a direct origin connection. The host must not
+follow or emulate provider redirects, and it does not return a status, headers,
+or final URL. The engine can classify only explicit provider codes present in
+the body; it does not invent HTTP metadata or `Retry-After`.
 
 TON Connect uses the same wallet hosts. Native applications also own manifest
 HTTP, bridge HTTP and SSE, protected session storage, and approval screens.
@@ -172,7 +186,8 @@ Read [TON_CONNECT.md](TON_CONNECT.md) for the required delivery order.
 
 ## Basic wallet flow
 
-1. Implement `WalletHttpHost` and `WalletPlatformHost` for your platform.
+1. Implement either `WalletHttpHost` or `WalletStatuslessHost`, plus
+   `WalletPlatformHost`, for your platform.
 2. Create `WalletLifecycle` with your platform host.
 3. Create or import a wallet.
 4. Store the returned wallet descriptor in your application storage.

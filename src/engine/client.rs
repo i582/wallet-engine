@@ -4,9 +4,10 @@ use std::sync::{Arc, Mutex};
 
 use futures::channel::oneshot;
 
-use crate::transport::{HttpTransport, ProviderTransport};
+use crate::transport::{HttpTransport, ProviderTransport, StatuslessTransport};
 use crate::{
-    ResourceState, SendPhase, WalletClientConfig, WalletClientError, WalletHttpHost, WalletSnapshot,
+    ResourceState, SendPhase, WalletClientConfig, WalletClientError, WalletHttpHost,
+    WalletSnapshot, WalletStatuslessHost,
 };
 
 use super::activity::mark_loading_cancelled;
@@ -39,6 +40,24 @@ impl WalletClient {
         Self::with_transport(
             config,
             Arc::new(HttpTransport::new(http_host)),
+            platform_host,
+        )
+    }
+
+    #[uniffi::constructor]
+    /// Creates a client backed by a provider transport without HTTP metadata.
+    ///
+    /// Use this constructor for a relay or protocol proxy that can return only
+    /// a response body or an opaque transport error. The engine does not apply
+    /// HTTP status, header, redirect, or final-URL checks in this mode.
+    pub fn new_statusless(
+        config: WalletClientConfig,
+        statusless_host: Arc<dyn WalletStatuslessHost>,
+        platform_host: Arc<dyn WalletPlatformHost>,
+    ) -> Result<Arc<Self>, WalletClientError> {
+        Self::with_transport(
+            config,
+            Arc::new(StatuslessTransport::new(statusless_host)),
             platform_host,
         )
     }

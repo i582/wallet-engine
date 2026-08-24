@@ -6,13 +6,16 @@ use crate::DomainError;
 
 mod http;
 mod request;
+mod statusless;
 
 pub use http::*;
+pub use statusless::{StatuslessHostError, StatuslessHostErrorKind, WalletStatuslessHost};
 
 pub(crate) use http::HttpTransport;
 pub(crate) use request::{
     build_toncenter_url, build_toncenter_v2_request, build_toncenter_v3_request,
 };
+pub(crate) use statusless::StatuslessTransport;
 
 /// Internal boundary between wallet operations and a concrete provider transport.
 #[async_trait]

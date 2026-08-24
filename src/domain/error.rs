@@ -144,7 +144,10 @@ pub struct DomainError {
     pub provider_status: Option<u16>,
     /// The provider delay in milliseconds, if it returned a numeric `Retry-After` header.
     pub retry_after_ms: Option<u64>,
-    /// The original host failure kind, if the error came from a callback.
+    /// The normalized host failure kind, if the error came from a callback.
+    ///
+    /// Status-less host kinds map to the corresponding legacy HTTP kind so
+    /// existing consumers retain one stable classification field.
     pub host_kind: Option<HttpHostErrorKind>,
 }
 

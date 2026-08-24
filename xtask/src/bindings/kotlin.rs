@@ -50,6 +50,8 @@ fn validate_kotlin(source: &str) -> Result<()> {
     if source.contains("\npackage org.ton.wallet.engine\n")
         && source.contains("\npublic interface WalletHttpHost {")
         && source.contains("\npublic interface WalletPlatformHost {")
+        && source.contains("\npublic interface WalletStatuslessHost {")
+        && source.contains("fun `newStatusless`(")
     {
         Ok(())
     } else {

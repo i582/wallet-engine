@@ -2,10 +2,10 @@
 //!
 //! The crate owns provider request construction, response parsing, wallet
 //! derivation, transaction signing, and operation state. The embedding
-//! application owns HTTP transport, protected storage, durable journal
+//! application owns provider transport, protected storage, durable journal
 //! storage, and the user interface.
 //!
-//! The public object model has two main entry points:
+//! The public object model has three main entry points:
 //!
 //! - [`WalletLifecycle`] creates, imports, reveals, and deletes wallets.
 //! - [`WalletClient`] refreshes a wallet, loads activity, and sends transfers.
@@ -16,7 +16,8 @@
 //! 1. Implement [`WalletPlatformHost`] for protected storage and journal data.
 //! 2. Use [`WalletLifecycle`] to create or import a [`WalletDescriptor`].
 //! 3. Persist the descriptor in application storage.
-//! 4. Implement [`WalletHttpHost`] with bounded HTTP requests and cancellation.
+//! 4. Implement [`WalletHttpHost`] or [`WalletStatuslessHost`] with bounded
+//!    provider requests and cancellation.
 //! 5. Construct [`WalletClient`] from the descriptor and provider configuration.
 //! 6. Read [`WalletClient::snapshot`] or wait with [`WalletClient::wait_for_change`].
 //! 7. Call [`WalletClient::shutdown`] before the application releases host resources.

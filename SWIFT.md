@@ -24,9 +24,11 @@ cargo build --release --locked --target aarch64-apple-ios-sim
 ```
 
 The application must package the generated Swift and C modules and link the
-matching `libwallet_engine.a` for its target. The generated `WalletHttpHost`
-and `WalletPlatformHost` protocols use Swift `async` methods. The generator
-adds the annotations required by Swift 6 strict concurrency.
+matching `libwallet_engine.a` for its target. The generated `WalletHttpHost`,
+`WalletStatuslessHost`, and `WalletPlatformHost` protocols use Swift `async`
+methods. The generator adds the annotations required by Swift 6 strict
+concurrency. Use `WalletClient.newStatusless` for a relay or protocol proxy
+that returns only a body or an opaque transport error.
 
 ## Use a release package
 
