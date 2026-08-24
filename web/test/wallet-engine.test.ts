@@ -10,6 +10,7 @@ import {
   isValidTonAddress,
   mnemonicWordlist,
   parseTonAddress,
+  parseTonTransferLink,
   type HttpRequest,
   type NftTransferPreviewRequest,
   type WalletClientConfig,
@@ -162,6 +163,27 @@ describe("high-level WASM API", () => {
     expect(words).toHaveLength(2048)
     expect(words[0]).toBe("abandon")
     expect(words.at(-1)).toBe("zoo")
+  })
+
+  test("parses strict TON transfer links without form-decoding the query", async () => {
+    const recipient = "0:0000000000000000000000000000000000000000000000000000000000000000"
+    const parsed = await parseTonTransferLink(
+      `ton://transfer/${recipient}?amount=1000000000&text=hello+TON&exp=18446744073709551615`,
+    )
+
+    expect(parsed).toEqual({
+      recipient,
+      asset: {kind: "gram"},
+      amount: "1000000000",
+      payload: {kind: "text", text: "hello+TON"},
+      expiration: {kind: "exact", unixTimestamp: 18446744073709551615n},
+    })
+    await expect(
+      parseTonTransferLink(`ton://transfer/${recipient}?bin=te6ccgEBAQEAAgAAAA==`),
+    ).resolves.toMatchObject({payload: {kind: "boc"}})
+    await expect(parseTonTransferLink(`ton://transfer/${recipient}?Text=ignored`)).rejects.toThrow(
+      "unsupported",
+    )
   })
 
   afterAll(async () => {

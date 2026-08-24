@@ -13,6 +13,7 @@ mod nft;
 mod nft_send;
 mod secret;
 mod send;
+mod ton_transfer_link;
 mod wallet;
 
 pub use activity::*;
@@ -25,4 +26,5 @@ pub use nft::*;
 pub use nft_send::*;
 pub use secret::*;
 pub use send::*;
+pub use ton_transfer_link::*;
 pub use wallet::*;

@@ -106,6 +106,27 @@ const display = await convertTonAddress(raw, {
 flags. Both standard and URL-safe Base64 friendly inputs are accepted. Friendly
 output is canonical unpadded URL-safe Base64.
 
+## TON transfer links
+
+Parse a standard transfer link before showing its confirmation screen:
+
+```ts
+import {parseTonTransferLink} from "@ton/wallet-engine"
+
+const invoice = await parseTonTransferLink(
+  `ton://transfer/${recipient}?amount=1000000000&text=hello%20TON`,
+)
+```
+
+The result preserves the recipient, Gram or jetton asset, optional exact
+elementary-unit amount, text or BOC payload, and expiration policy. This
+function only parses the strict `ton://transfer/` baseline: `amount`, `text`,
+`exp`, `jetton`, and `bin`. It does not resolve chain state, check expiration,
+select bounce behavior, or authorize a send. Query parsing follows URI rules,
+so a literal `+` remains `+` and is not converted to a space. An exact
+expiration is returned as JavaScript `bigint`, preserving the complete `u64`
+range without rounding.
+
 ## Mnemonic word list
 
 Use the engine's BIP-39 word list for recovery-phrase input:

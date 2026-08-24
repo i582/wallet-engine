@@ -4,12 +4,14 @@ mod host;
 mod lifecycle;
 mod mnemonic;
 mod serde;
+mod ton_transfer_link;
 mod wallet;
 
 pub use address::{convert_ton_address, is_valid_ton_address, parse_ton_address};
 pub use host::{WalletHttpHost, WalletPlatformHost};
 pub use lifecycle::WalletLifecycle;
 pub use mnemonic::mnemonic_wordlist;
+pub use ton_transfer_link::parse_ton_transfer_link;
 pub use wallet::WalletClient;
 
 use wasm_bindgen::prelude::wasm_bindgen;

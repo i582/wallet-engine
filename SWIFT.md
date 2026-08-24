@@ -58,6 +58,22 @@ The `.userFriendly` case inside `info.format` contains the parsed `bounceable`
 and `testnet` flags. Raw input has `.raw` because the raw representation does
 not carry these flags.
 
+## TON transfer links
+
+Parse a standard transfer link before showing its confirmation screen:
+
+```swift
+let invoice = try parseTonTransferLink(
+    value: "ton://transfer/\(recipient)?amount=1000000000&text=hello%20TON"
+)
+```
+
+The result preserves the recipient, Gram or jetton asset, optional exact
+elementary-unit amount, text or BOC payload, and expiration policy. This
+function only parses the strict `ton://transfer/` baseline: `amount`, `text`,
+`exp`, `jetton`, and `bin`. It does not resolve chain state, check expiration,
+select bounce behavior, or authorize a send.
+
 ## Mnemonic word list
 
 Use the engine's BIP-39 word list for recovery-phrase input:
