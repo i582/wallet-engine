@@ -1626,7 +1626,7 @@ dependencies = [
 
 [[package]]
 name = "ton-connect-client"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "serde",
  "serde_json",
@@ -1637,7 +1637,7 @@ dependencies = [
 
 [[package]]
 name = "ton-connect-core"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "base64",
  "crc",
@@ -1866,7 +1866,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "wallet-engine"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "aes",
  "async-trait",
@@ -1893,7 +1893,7 @@ dependencies = [
 
 [[package]]
 name = "wallet-engine-wasm"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "async-trait",
  "js-sys",
