@@ -178,6 +178,10 @@ and an optional decoded plaintext `comment`. The fee is the total fee for the
 transaction. It is repeated when one transaction produces multiple activity
 rows, so do not sum it per row.
 
+An NFT that belongs to a collection includes a neutral `collection` descriptor
+with its address, standard TEP-64 fields, and complete string metadata. Keep
+product-specific classification, such as Telegram gifts, in the application.
+
 Call `close()` before you discard the client:
 
 ```ts

@@ -677,12 +677,19 @@ flowchart TD
 
 - the account balance and status.
 - recent activity and its pagination cursor.
+- owned NFTs and their resolved collection descriptors.
 - independent states for account, activity, and pagination resources.
 - the latest send state.
 - a monotonic revision number.
 
 A refresh can complete partially. Read each resource state before you replace
 previous data or show an error.
+
+When an NFT belongs to a collection, `NftItem.collection` contains a neutral
+`NftCollectionDescriptor` with the verified collection address, standard
+TEP-64 `name`, `description`, and `image` fields, plus all string-valued
+collection metadata. Product-specific kinds such as Telegram gifts, usernames,
+or numbers remain application-side classifications.
 
 Use `waitForChange(afterRevision:)` on Swift. Use
 `waitForChange(afterRevision)` on Kotlin. Both calls wait until a newer snapshot

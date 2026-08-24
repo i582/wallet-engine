@@ -15,15 +15,23 @@ describe("NFT display metadata", () => {
     expect(nftDisplayName(nft({}))).toBe("NFT #42")
   })
 
-  test("prefers enriched collection and medium artwork fields", () => {
+  test("prefers the resolved collection descriptor and medium artwork fields", () => {
     const content = Object.fromEntries([
       ["collection", "On-chain collection"],
       ["collection_name", "Indexed collection"],
       ["image", "https://example.com/original.png"],
       ["_image_medium", "https://example.com/medium.png"],
     ])
-    const item: NftItem = nft(content)
-    expect(nftCollectionName(item)).toBe("Indexed collection")
+    expect(nftCollectionName(nft(content))).toBe("Indexed collection")
+    const item: NftItem = {
+      ...nft(content),
+      collection: {
+        address: "0:collection",
+        name: "Resolved collection",
+        content: {},
+      },
+    }
+    expect(nftCollectionName(item)).toBe("Resolved collection")
     expect(nftImageUrl(item)).toBe("https://example.com/medium.png")
   })
 

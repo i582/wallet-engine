@@ -196,7 +196,7 @@ describe("high-level WASM API", () => {
     expect(update.snapshot.accountResource.error?.hostKind).toBe("connectionLost")
   })
 
-  test("preserves indexed NFT names and inline SVG artwork at the WASM boundary", async () => {
+  test("preserves NFT and collection metadata at the WASM boundary", async () => {
     const lifecycle = await WalletLifecycle.create(platform)
     lifecycles.push(lifecycle)
     const created = await lifecycle.createWallet({
@@ -204,6 +204,7 @@ describe("high-level WASM API", () => {
       network: "testnet",
     })
     const itemAddress = `0:${"2B".repeat(32)}`
+    const collectionAddress = `0:${"3C".repeat(32)}`
     const inlineSvg = "data:image/svg+xml,%3Csvg%2F%3E"
     const client = await WalletClient.create(walletConfig(created.descriptor), {
       platformHost: platform,
@@ -214,7 +215,13 @@ describe("high-level WASM API", () => {
             {
               address: itemAddress,
               code_hash: "code",
-              collection_address: null,
+              collection: {
+                address: collectionAddress,
+                collection_content: {
+                  description: "A collection from the chain.",
+                  image: "ipfs://collection/image.png",
+                },
+              },
               content: {
                 description: "Few have witnessed such magnificence.",
                 image: inlineSvg,
@@ -229,6 +236,11 @@ describe("high-level WASM API", () => {
               real_owner: created.descriptor.address,
             },
           ],
+          metadata: {
+            [collectionAddress]: {
+              token_info: [{name: "Nightfall", type: "nft_collections"}],
+            },
+          },
         })
       }),
     })
@@ -236,11 +248,21 @@ describe("high-level WASM API", () => {
 
     const update = await client.refreshNfts()
     const [item] = update.snapshot.nfts.items
+    const resolvedCollectionAddress = await convertTonAddress(collectionAddress, {
+      kind: "userFriendly",
+      bounceable: false,
+      testnet: true,
+    })
 
     expect(update.outcome).toBe("completed")
     expect(item?.content.name).toBe("Shadow Reaper")
     expect(item?.content.description).toBe("Few have witnessed such magnificence.")
     expect(item?.content.image).toBe(inlineSvg)
+    expect(item?.collectionAddress).toBe(resolvedCollectionAddress)
+    expect(item?.collection?.address).toBe(resolvedCollectionAddress)
+    expect(item?.collection?.name).toBe("Nightfall")
+    expect(item?.collection?.description).toBe("A collection from the chain.")
+    expect(item?.collection?.image).toBe("ipfs://collection/image.png")
   })
 
   test("accepts the camel-case exact expiration field at the WASM boundary", async () => {

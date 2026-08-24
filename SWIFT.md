@@ -77,6 +77,12 @@ Every nonzero transfer returned in `WalletSnapshot.activity.items` includes
 `comment`. The fee is the total fee for the transaction. It is repeated when
 one transaction produces multiple activity rows, so do not sum it per row.
 
+## NFT collection metadata
+
+An NFT that belongs to a collection includes a neutral `collection` descriptor
+with its address, standard TEP-64 fields, and complete string metadata. Keep
+product-specific classification, such as Telegram gifts, in the application.
+
 ## TON Connect
 
 The generated Swift module includes `TonConnectSession`, manifest parsing,

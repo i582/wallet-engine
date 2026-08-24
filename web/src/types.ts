@@ -166,9 +166,18 @@ export interface ActivityList {
   readonly hasMore: boolean
 }
 
+export interface NftCollectionDescriptor {
+  readonly address: string
+  readonly name?: string
+  readonly description?: string
+  readonly image?: string
+  readonly content: Readonly<Record<string, string>>
+}
+
 export interface NftItem {
   readonly address: string
   readonly collectionAddress?: string
+  readonly collection?: NftCollectionDescriptor
   readonly ownerAddress?: string
   readonly realOwner?: string
   readonly saleContractAddress?: string

@@ -23,9 +23,9 @@ export function nftDisplayName(item: NftItem): string {
   return firstText(item.content.name, item.content.domain) ?? `NFT #${item.index}`
 }
 
-/** Returns the indexed collection label when the provider supplied one. */
+/** Returns the resolved collection name with a legacy metadata fallback. */
 export function nftCollectionName(item: NftItem): string | undefined {
-  return firstText(item.content.collection_name, item.content.collection)
+  return firstText(item.collection?.name, item.content.collection_name, item.content.collection)
 }
 
 /** Selects the best indexed artwork URL and converts IPFS URIs for browsers. */

@@ -8,8 +8,8 @@ use serde_json::Value;
 use ton::ton_core::types::TonAddress;
 
 use crate::{
-    DomainError, ErrorCode, HttpRequest, HttpRequestId, Network, NftItem, ResourceState,
-    TonAddressString, UnsignedDecimalString, WalletClientConfig, WalletClientError,
+    DomainError, ErrorCode, HttpRequest, HttpRequestId, Network, NftCollectionDescriptor, NftItem,
+    ResourceState, TonAddressString, UnsignedDecimalString, WalletClientConfig, WalletClientError,
     WalletOperationOutcome, WalletUpdate,
 };
 
@@ -358,32 +358,21 @@ fn parse_nft_item(
     let item_info = token_info(metadata, &raw.address, "nft_items");
     let collection_info =
         collection_address.and_then(|address| token_info(metadata, address, "nft_collections"));
+    let collection = resolve_collection_descriptor(
+        collection_address,
+        raw.collection.as_ref(),
+        collection_info,
+        network,
+    )?;
 
-    let mut content = string_values(raw.content);
-    if let Some(info) = item_info {
-        content.extend(string_values(info.extra.clone()));
-        for key in NFT_CONTENT_KEYS {
-            if let Some(value) =
-                string_field(&info.fields, key).or_else(|| string_field(&info.extra, key))
-            {
-                let _ = content.insert((*key).to_owned(), value.to_owned());
-            }
-        }
-    }
-
-    let collection_name = collection_info
-        .and_then(|info| {
-            string_field(&info.fields, "name").or_else(|| string_field(&info.extra, "name"))
-        })
-        .or_else(|| {
-            raw.collection
-                .as_ref()
-                .and_then(|collection| string_field(&collection.collection_content, "name"))
-        });
-    if let Some(collection_name) = collection_name {
+    let mut content = enriched_metadata(&raw.content, item_info);
+    if let Some(collection_name) = collection
+        .as_ref()
+        .and_then(|descriptor| descriptor.name.as_ref())
+    {
         let _ = content
             .entry("collection_name".to_owned())
-            .or_insert_with(|| collection_name.to_owned());
+            .or_insert_with(|| collection_name.clone());
     }
     if !content.contains_key("name")
         && let Some(domain) = content.get("domain").cloned()
@@ -393,11 +382,10 @@ fn parse_nft_item(
 
     Ok(NftItem {
         address: parse_address(&raw.address, "NFT address", network)?,
-        collection_address: parse_optional_address(
-            collection_address,
-            "NFT collection address",
-            network,
-        )?,
+        collection_address: collection
+            .as_ref()
+            .map(|descriptor| descriptor.address.clone()),
+        collection,
         owner_address: parse_optional_address(
             raw.owner_address.as_deref(),
             "NFT owner address",
@@ -433,6 +421,29 @@ fn parse_nft_item(
     })
 }
 
+fn resolve_collection_descriptor(
+    address: Option<&str>,
+    raw: Option<&RawNftCollection>,
+    metadata: Option<&RawTokenInfo>,
+    network: Network,
+) -> Result<Option<NftCollectionDescriptor>, DomainError> {
+    let Some(address) = address else {
+        return Ok(None);
+    };
+
+    let empty = HashMap::new();
+    let raw_content = raw.map_or(&empty, |collection| &collection.collection_content);
+    let content = enriched_metadata(raw_content, metadata);
+
+    Ok(Some(NftCollectionDescriptor {
+        address: parse_address(address, "NFT collection address", network)?,
+        name: resolved_metadata_field(&content, "name"),
+        description: resolved_metadata_field(&content, "description"),
+        image: resolved_metadata_field(&content, "image"),
+        content,
+    }))
+}
+
 fn token_info<'a>(
     metadata: &'a HashMap<String, RawAddressMetadata>,
     address: &str,
@@ -445,11 +456,34 @@ fn token_info<'a>(
         .find(|info| info.kind.as_deref() == Some(kind))
 }
 
-fn string_values(values: HashMap<String, Value>) -> HashMap<String, String> {
+fn enriched_metadata(
+    values: &HashMap<String, Value>,
+    metadata: Option<&RawTokenInfo>,
+) -> HashMap<String, String> {
+    let mut content = string_values(values);
+    if let Some(metadata) = metadata {
+        content.extend(string_values(&metadata.extra));
+        content.extend(string_values(&metadata.fields));
+        for key in NFT_CONTENT_KEYS {
+            if let Some(value) =
+                string_field(&metadata.fields, key).or_else(|| string_field(&metadata.extra, key))
+            {
+                let _ = content.insert((*key).to_owned(), value.to_owned());
+            }
+        }
+    }
+    content
+}
+
+fn string_values(values: &HashMap<String, Value>) -> HashMap<String, String> {
     values
-        .into_iter()
-        .filter_map(|(key, value)| value.as_str().map(|value| (key, value.to_owned())))
+        .iter()
+        .filter_map(|(key, value)| value.as_str().map(|value| (key.clone(), value.to_owned())))
         .collect()
+}
+
+fn resolved_metadata_field(values: &HashMap<String, String>, key: &str) -> Option<String> {
+    values.get(key).filter(|value| !value.is_empty()).cloned()
 }
 
 fn string_field<'a>(values: &'a HashMap<String, Value>, key: &str) -> Option<&'a str> {
@@ -612,7 +646,14 @@ mod tests {
             "nft_items": [{
                 "address": ITEM,
                 "code_hash": "code",
-                "collection": { "address": COLLECTION },
+                "collection": {
+                    "address": COLLECTION,
+                    "collection_content": {
+                        "description": "On-chain collection description",
+                        "image": "ipfs://collection/image.png",
+                        "ignored": true
+                    }
+                },
                 "content": { "domain": "alice.ton", "ignored": true },
                 "data_hash": "data",
                 "index": "340282366920938463463374607431768211456",
@@ -633,7 +674,13 @@ mod tests {
                     }]
                 },
                 COLLECTION: {
-                    "token_info": [{ "type": "nft_collections", "name": "Collection" }]
+                    "token_info": [{
+                        "type": "nft_collections",
+                        "name": "Collection",
+                        "description": "Indexed collection description",
+                        "custom": "provider value",
+                        "extra": { "uri": "https://example.com/collection.json" }
+                    }]
                 }
             }
         });
@@ -669,6 +716,26 @@ mod tests {
             item.content.get("collection_name").map(String::as_str),
             Some("Collection")
         );
+        let collection = item.collection.as_ref().expect("collection descriptor");
+        assert_eq!(item.collection_address.as_ref(), Some(&collection.address));
+        assert_eq!(collection.name.as_deref(), Some("Collection"));
+        assert_eq!(
+            collection.description.as_deref(),
+            Some("Indexed collection description")
+        );
+        assert_eq!(
+            collection.image.as_deref(),
+            Some("ipfs://collection/image.png")
+        );
+        assert_eq!(
+            collection.content.get("uri").map(String::as_str),
+            Some("https://example.com/collection.json")
+        );
+        assert_eq!(
+            collection.content.get("custom").map(String::as_str),
+            Some("provider value")
+        );
+        assert!(!collection.content.contains_key("ignored"));
         assert_eq!(
             item.content.get("image_url").map(String::as_str),
             Some("https://example.com/nft.png")
@@ -677,6 +744,30 @@ mod tests {
         assert_eq!(item.is_nsfw, Some(false));
         assert_eq!(item.is_scam, Some(true));
         assert!(!page.has_more);
+    }
+
+    #[test]
+    fn resolves_an_address_only_collection_descriptor() {
+        let mut item = raw_nft(ITEM);
+        item["collection_address"] = json!(COLLECTION);
+        let body = json!({ "nft_items": [item] });
+
+        let page = parse_nft_page(
+            serde_json::to_string(&body)
+                .expect("fixture serializes")
+                .as_bytes(),
+            NFT_PAGE_SIZE,
+            Network::Testnet,
+        )
+        .expect("address-only collection must parse");
+        let item = page.items.first().expect("one NFT item");
+        let collection = item.collection.as_ref().expect("collection descriptor");
+
+        assert_eq!(item.collection_address.as_ref(), Some(&collection.address));
+        assert!(collection.name.is_none());
+        assert!(collection.description.is_none());
+        assert!(collection.image.is_none());
+        assert!(collection.content.is_empty());
     }
 
     fn raw_nft(address: &str) -> Value {
@@ -820,6 +911,7 @@ mod tests {
         NftItem {
             address: TonAddressString::try_from(address).expect("valid NFT address"),
             collection_address: None,
+            collection: None,
             owner_address: Some(TonAddressString::try_from(OWNER).expect("valid owner address")),
             real_owner: None,
             sale_contract_address: None,
