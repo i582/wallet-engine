@@ -575,7 +575,7 @@ mod tests {
 
     #[test]
     fn internal_signing_preserves_the_ordered_batch_and_deployment_state() {
-        const MNEMONIC: &str = "section garden tomato dinner season dice renew length useful spin trade intact use universe what post spike keen mandate behind concert egg doll rug";
+        const MNEMONIC: &str = "notice tortoise soup strong gun divide offer process salon siren general carry clump left year void clutch tool case burden fix income champion lounge";
 
         let source = derive_source(MNEMONIC.as_bytes(), Network::Testnet)
             .expect("fixture mnemonic derives a wallet");

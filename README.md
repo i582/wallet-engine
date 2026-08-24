@@ -183,6 +183,71 @@ The wallet descriptor contains the stable application record ID, address,
 Ed25519 public key, network, and protected-secret reference. Your application
 needs these values after a restart. The public key is not a secret.
 
+## Key derivation
+
+The engine is moving to a **Rotation mnemonic**: 24 words made of two
+independent 12-word Multichain mnemonics, defined in
+[TEP-0003 section 3.3](https://github.com/ton-blockchain/TEPs/blob/master/text/0003-wallets.md#33-rotation-mnemonic).
+
+| Half    | Words | Key         | Role                                                                            |
+|---------|-------|-------------|---------------------------------------------------------------------------------|
+| Anchor  | 1–12  | Anchor key  | Determines the wallet account address and authorizes the first rotation. Never changes. |
+| Signing | 13–24 | Signing key | Signs ordinary outgoing messages. Replaced on rotation.                         |
+
+Each half is a valid 12-word Multichain mnemonic on its own, BIP-39 checksum
+included. The halves are generated independently, converted to keys
+independently, and never joined into a single 24-word mnemonic. The TEP defines
+the derivation; this document does not repeat it.
+
+This is the only recovery scheme the engine supports. A new wallet starts
+before its one-time key rotation: the signing key equals the anchor key, so
+`createWallet` generates a single 12-word phrase. Rotation later gives the
+phrase its second, independent half. `importWallet` therefore accepts the
+phrase exactly as the user recorded it - 12 words before rotation or 24 words
+after it - and expands the 12-word form internally; applications never
+duplicate words themselves. TON mnemonics and plain Multichain mnemonics are
+rejected as invalid.
+
+### Compatibility
+
+One 24-word phrase can be valid under more than one scheme. On import an
+application should run all the checks it supports — the TON mnemonic checksum,
+the Multichain checksum, and the two Rotation checksums over words 1–12 and
+13–24 — and should not pick a scheme silently. When more than one validates,
+derive the accounts for each scheme and let the user choose. See
+[sections 7 and 8](https://github.com/ton-blockchain/TEPs/blob/master/text/0003-wallets.md#8-wallet-import-mnemonic-scheme-detection).
+
+Rotation support is optional for other wallets. One that skips it reports a
+Rotation phrase as invalid, which is the expected outcome.
+
+### Wallet contract
+
+A Rotation mnemonic needs a wallet contract whose address does not depend on
+the signing key, and which accepts only its stored signing key for ordinary
+outgoing messages
+([section 13.1](https://github.com/ton-blockchain/TEPs/blob/master/text/0003-wallets.md#131-account-requirements)).
+Wallet V3R1 through V5R1 have no rotatable signing key, and the TEP forbids
+deploying them from a Rotation mnemonic.
+
+The rotation contract is not finalized. Until it lands, the embedded
+`w5-experimental` contract stands in as a placeholder: it stores a single
+public key, so the anchor key both determines the address and signs outgoing
+messages. The signing key is already derived and takes over message signing
+when the placeholder is replaced.
+
+On import the signing key derived from words 13–24 is compared with the key
+stored in the account. A mismatch means the phrase carries an outdated signing
+half and is treated as invalid
+([section 13.2](https://github.com/ton-blockchain/TEPs/blob/master/text/0003-wallets.md#132-import-and-recovery)).
+
+### Host and API impact
+
+`WalletDescriptor.publicKey` holds the anchor public key: it determines the
+account address and never changes, so persisted descriptors survive rotation.
+The current signing key is on-chain state, not descriptor state.
+`revealRecoveryPhrase` returns the full 24 words, and protected storage holds
+one secret.
+
 ## Wallet flow diagrams
 
 The diagrams below cover the wallet lifecycle and transfer flows. Terminal

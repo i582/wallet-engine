@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Map;
 use ton::block_tlb::StateInit;
 use ton::ton_core::traits::tlb::TLB as _;
-use ton::ton_wallet::{Mnemonic, WALLET_V5R1_ID_DEFAULT_TESTNET, WalletVersion};
+use ton::ton_wallet::{WALLET_V5R1_ID_DEFAULT_TESTNET, WalletVersion};
 use ton_connect_client::{IncomingRequest, TonConnectClient, TonConnectClientConfig};
 use ton_connect_core::{
     ConnectEvent, ConnectEventPayload, ConnectItem, ConnectItemReply, ConnectLink, DeviceInfo,
@@ -2904,7 +2904,7 @@ fn test_deployment_target() -> TestResult<DeploymentTarget> {
 /// Builds the testnet wallet `StateInit` and public key from one mnemonic.
 fn test_wallet_state(mnemonic: &[u8]) -> TestResult<(WalletStateInit, Vec<u8>)> {
     let mnemonic = std::str::from_utf8(mnemonic)?;
-    let key_pair = Mnemonic::from_str(mnemonic, None)?.to_key_pair()?;
+    let key_pair = test_wallet::rotation_anchor_key_pair(mnemonic)?;
     let code = WalletVersion::get_code(WalletVersion::Wallet)?.clone();
     let data = WalletVersion::get_default_data(
         WalletVersion::Wallet,
