@@ -5,6 +5,7 @@
 
 mod activity;
 mod config;
+mod encrypted_comment;
 mod error;
 mod http;
 mod journal;
@@ -16,6 +17,7 @@ mod wallet;
 
 pub use activity::*;
 pub use config::*;
+pub use encrypted_comment::*;
 pub use error::*;
 pub use http::*;
 pub use journal::*;

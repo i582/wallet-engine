@@ -410,6 +410,14 @@ Each nonzero transfer in `ActivityItem` includes the total transaction fee in
 produces multiple activity rows, its total fee is repeated on every row and
 must not be summed per row.
 
+An item with opcode `0x2167da4b` instead exposes its complete message-body BOC
+as `encryptedComment`. Decryption is deliberately explicit: pass that BOC and
+the sender address to `WalletClient.decryptComment`. For a received item the
+sender is `counterparty`; for a sent item it is the configured wallet address.
+The call asks `WalletPlatformHost` for the protected mnemonic with
+`SecretAccessReason.decryptComment`, so an ordinary refresh never opens an
+authentication prompt.
+
 ```mermaid
 flowchart TD
     Refresh["refresh"]
@@ -779,6 +787,16 @@ same immutable `SendIntent` that the user approved.
 `SendMessage` values. Each message contains its destination, amount, body, and
 optional destination `StateInit`. A body is empty, a plaintext comment, or one
 caller-built payload cell.
+
+For an encrypted transfer comment, call `createEncryptedComment` before
+preview. The engine calls `get_public_key` on the recipient wallet, authorizes
+the protected sender mnemonic through the platform host, applies the TON
+Ed25519/X25519, HMAC-SHA512, AES-256-CBC, and snake-cell format, and returns a
+complete BOC. Put that BOC in `SendMessageBody.rawPayload`, then preview and
+send the same immutable intent. Plaintext is limited to 960 UTF-8 bytes. A
+recipient without an available on-chain `get_public_key` cannot receive this
+format through this API. See the [TON encrypted-comments
+format](https://docs.ton.org/llms/contracts/standard/wallets/interact/content.md#encrypted-comments).
 
 `SendAmount.all` must be the only message in its batch. Wallet V5 applies the
 batch in order.

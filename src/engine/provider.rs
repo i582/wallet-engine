@@ -16,7 +16,7 @@ use ton::ton_core::types::TonAddress;
 use crate::domain::bounded_diagnostic;
 use crate::{
     AccountSnapshot, AccountStatus, ActivityCursor, ActivityDirection, ActivityItem,
-    ActivityStatus, Base64Hash, DomainError, ErrorCategory, ErrorCode, HttpHeader, Network,
+    ActivityStatus, Base64Hash, Boc, DomainError, ErrorCategory, ErrorCode, HttpHeader, Network,
     RetryAdvice, TonAddressString,
 };
 
@@ -109,6 +109,9 @@ pub(crate) struct ActivityRecord {
     /// A zero-opcode plaintext comment decoded from the message body.
     pub comment: Option<String>,
 
+    /// A complete encrypted-comment body retained for explicit decryption.
+    pub encrypted_comment: Option<Boc>,
+
     /// The source of a received transfer or the destination of a sent transfer.
     /// The Toncenter parser rejects a nonzero transfer when this address is absent or invalid.
     /// The optional form permits future providers that cannot supply a counterparty.
@@ -131,6 +134,7 @@ impl ActivityRecord {
             transaction_fee_nanograms: (&self.transaction_fee_nanograms).into(),
             status: self.status,
             comment: self.comment.clone(),
+            encrypted_comment: self.encrypted_comment.clone(),
             counterparty: self
                 .counterparty
                 .as_ref()
@@ -351,6 +355,7 @@ fn activity_from_message(
             ActivityStatus::Success
         },
         comment: chain_message.comment.clone(),
+        encrypted_comment: chain_message.encrypted_comment.clone(),
         counterparty: Some(counterparty),
     }))
 }
@@ -364,6 +369,7 @@ struct ChainTransaction {
 struct ChainMessage {
     bounced: bool,
     comment: Option<String>,
+    encrypted_comment: Option<Boc>,
 }
 
 fn parse_transaction_chain_data(
@@ -403,7 +409,15 @@ fn chain_message(message: &TonMessage) -> ChainMessage {
     ChainMessage {
         bounced: matches!(&message.info, CommonMsgInfo::Int(info) if info.bounced),
         comment: plaintext_comment(&message.body.value),
+        encrypted_comment: encrypted_comment_body(&message.body.value),
     }
+}
+
+fn encrypted_comment_body(body: &TonCell) -> Option<Boc> {
+    if !crate::wallet::encrypted_comment::is_encrypted_comment_body(body) {
+        return None;
+    }
+    Boc::try_from(body.to_boc().ok()?).ok()
 }
 
 fn plaintext_comment(body: &TonCell) -> Option<String> {
@@ -915,6 +929,35 @@ mod tests {
     }
 
     #[test]
+    fn retains_encrypted_comment_bodies_for_explicit_decryption() {
+        let body = json!({
+            "ok": true,
+            "result": [{
+                "utime": 1,
+                "data": transaction_data(
+                    false,
+                    Some(encrypted_comment_message(false)),
+                    Vec::new(),
+                ),
+                "fee": "1",
+                "transaction_id": { "lt": "1", "hash": hash(9) },
+                "in_msg": { "source": ADDRESS, "value": "10" },
+            }]
+        });
+
+        let page = parse_activity(&encode(body), 10).expect("encrypted activity must parse");
+        let item = page.items.first().expect("one activity item");
+        assert!(item.comment.is_none());
+        let encrypted = item
+            .encrypted_comment
+            .as_ref()
+            .expect("encrypted body must be retained");
+        let cell = TonCell::from_boc(encrypted.as_bytes().to_vec()).expect("body BOC parses");
+        let mut parser = cell.parser();
+        assert_eq!(parser.read_num::<u32>(32).expect("opcode"), 0x2167_da4b);
+    }
+
+    #[test]
     fn rejects_missing_results_and_invalid_transfer_fields() {
         let missing =
             parse_account(&encode(json!({ "ok": true }))).expect_err("missing result must fail");
@@ -1001,6 +1044,19 @@ mod tests {
             .write(&mut body)
             .expect("comment snake fixture must write");
         let body = body.build().expect("comment body fixture must build");
+        message(bounced, body)
+    }
+
+    fn encrypted_comment_message(bounced: bool) -> TonMessage {
+        let mut body = TonCell::builder();
+        body.write_bits(0x2167_da4b_u32.to_be_bytes(), 32)
+            .expect("encrypted-comment opcode fixture must write");
+        SnakeData::new(vec![0_u8; 64])
+            .write(&mut body)
+            .expect("encrypted-comment snake fixture must write");
+        let body = body
+            .build()
+            .expect("encrypted-comment body fixture must build");
         message(bounced, body)
     }
 

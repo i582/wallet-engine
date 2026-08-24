@@ -78,6 +78,20 @@ Every nonzero transfer returned in `WalletSnapshot.activity.items` includes
 `comment`. The fee is the total fee for the transaction. It is repeated when
 one transaction produces multiple activity rows, so do not sum it per row.
 
+## Encrypted comments
+
+Call `WalletClient.createEncryptedComment` with the recipient and UTF-8 text.
+It loads the recipient's `get_public_key`, requests the protected mnemonic with
+`SecretAccessReason.encryptComment`, and returns a BOC. Use that BOC as a
+`SendMessageBody.rawPayload`, then preview and send the same intent.
+
+Encrypted activity has `encryptedComment` instead of `comment`. Decrypt it
+explicitly with `WalletClient.decryptComment`, passing the sender address. For
+received activity the sender is `counterparty`; for sent activity it is the
+wallet address. This read uses `SecretAccessReason.decryptComment`, so refresh
+does not trigger device authentication. Plaintext is limited to 960 UTF-8
+bytes.
+
 ## NFT collection metadata
 
 An NFT that belongs to a collection includes a neutral `collection` descriptor

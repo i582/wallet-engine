@@ -1,5 +1,6 @@
 //! Toncenter JSON-RPC requests and responses used by send.
 
+use num_bigint::BigUint;
 use serde_json::Value;
 
 use crate::domain::bounded_diagnostic;
@@ -27,6 +28,23 @@ pub(super) fn build_seqno_request(
         &serde_json::json!({
             "address": config.address,
             "method": "seqno",
+            "stack": []
+        }),
+    )
+}
+
+pub(super) fn build_public_key_request(
+    config: &WalletClientConfig,
+    id: HttpRequestId,
+    address: &crate::TonAddressString,
+) -> Result<HttpRequest, WalletClientError> {
+    build_json_rpc_request(
+        config,
+        id,
+        "runGetMethod",
+        &serde_json::json!({
+            "address": address,
+            "method": "get_public_key",
             "stack": []
         }),
     )
@@ -71,6 +89,56 @@ pub(super) fn parse_seqno(body: &[u8]) -> Result<u32, DomainError> {
             .parse::<u32>()
             .map_err(|error| invalid_json(error.to_string()))
     }
+}
+
+pub(super) fn parse_public_key(body: &[u8]) -> Result<[u8; 32], DomainError> {
+    let value: Value =
+        serde_json::from_slice(body).map_err(|error| invalid_json(error.to_string()))?;
+
+    if let Some(error) = value.get("error") {
+        return Err(invalid_json(error.to_string()));
+    }
+
+    let first = value
+        .pointer("/result/stack/0")
+        .ok_or_else(|| invalid_json("missing public-key stack"))?;
+    let encoded =
+        stack_number(first).ok_or_else(|| invalid_json("invalid public-key stack value"))?;
+    let number = if let Some(hex) = encoded.strip_prefix("0x") {
+        BigUint::parse_bytes(hex.as_bytes(), 16)
+    } else {
+        BigUint::parse_bytes(encoded.as_bytes(), 10)
+    }
+    .ok_or_else(|| invalid_json("invalid public-key integer"))?;
+    if number == BigUint::default() {
+        return Err(invalid_json("public key is not a nonzero uint256"));
+    }
+    let bytes = number.to_bytes_be();
+    if bytes.is_empty() || bytes.len() > 32 {
+        return Err(invalid_json("public key is not a nonzero uint256"));
+    }
+
+    let mut public_key = [0_u8; 32];
+    let offset = 32_usize.saturating_sub(bytes.len());
+    public_key
+        .get_mut(offset..)
+        .ok_or_else(|| invalid_json("public key is not a uint256"))?
+        .copy_from_slice(&bytes);
+    Ok(public_key)
+}
+
+fn stack_number(value: &Value) -> Option<&str> {
+    value
+        .as_array()
+        .and_then(|items| match items.as_slice() {
+            [kind, value] if kind.as_str() == Some("num") => value.as_str(),
+            _ => None,
+        })
+        .or_else(|| {
+            (value.get("type").and_then(Value::as_str) == Some("num"))
+                .then(|| value.get("value").and_then(Value::as_str))
+                .flatten()
+        })
 }
 
 pub(super) fn parse_send_response(body: &[u8]) -> Result<SendBocResponse, DomainError> {
@@ -153,8 +221,8 @@ mod tests {
     use ton::ton_core::cell::TonCell;
 
     use super::{
-        SendBocResponse, build_send_boc_request, is_explicit_send_rejection, parse_send_response,
-        parse_seqno,
+        SendBocResponse, build_public_key_request, build_send_boc_request,
+        is_explicit_send_rejection, parse_public_key, parse_send_response, parse_seqno,
     };
     use crate::{
         Boc, DomainError, ErrorCategory, ErrorCode, HttpRequestId, Network, NonEmptyString,
@@ -188,6 +256,51 @@ mod tests {
 
         for (body, expected) in cases {
             assert_eq!(parse_seqno(body.as_bytes()), Ok(expected));
+        }
+    }
+
+    #[test]
+    fn builds_and_parses_get_public_key_requests() {
+        let address = TonAddressString::try_from(ADDRESS).expect("valid recipient");
+        let request = build_public_key_request(&config(), HttpRequestId { value: 8 }, &address)
+            .expect("get-public-key request must build");
+        let body: serde_json::Value =
+            serde_json::from_slice(&request.body).expect("request body must be JSON");
+        assert_eq!(body["method"], "runGetMethod");
+        assert_eq!(body["params"]["address"], ADDRESS);
+        assert_eq!(body["params"]["method"], "get_public_key");
+
+        let encoded = format!(
+            r#"{{"result":{{"stack":[["num","0x{}"]]}}}}"#,
+            "11".repeat(32)
+        );
+        assert_eq!(
+            parse_public_key(encoded.as_bytes()).expect("uint256 key parses"),
+            [0x11; 32]
+        );
+        assert_eq!(
+            parse_public_key(br#"{"result":{"stack":[["num","1"]]}}"#)
+                .expect("short decimal key is left padded"),
+            {
+                let mut expected = [0_u8; 32];
+                expected[31] = 1;
+                expected
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_public_keys() {
+        for body in [
+            r#"{"result":{"stack":[["num","0"]]}}"#.to_owned(),
+            format!(
+                r#"{{"result":{{"stack":[["num","0x{}"]]}}}}"#,
+                "11".repeat(33)
+            ),
+            r#"{"result":{"stack":[["cell","1"]]}}"#.to_owned(),
+        ] {
+            let error = parse_public_key(body.as_bytes()).expect_err("public key must fail");
+            assert_eq!(error.code, ErrorCode::InvalidProviderResponse);
         }
     }
 

@@ -188,6 +188,12 @@ pub enum WalletClientError {
         /// Bounded provider or validation diagnostic.
         diagnostic: String,
     },
+    /// Encrypted-comment preparation or decryption failed safely.
+    #[error("encrypted comment is unavailable: {diagnostic}")]
+    EncryptedCommentUnavailable {
+        /// Bounded developer-facing reason that contains no secret material.
+        diagnostic: String,
+    },
     /// The wallet has public identity but no protected secret configured for local signing.
     #[error("the wallet is not configured for local signing")]
     LocalSigningUnavailable,

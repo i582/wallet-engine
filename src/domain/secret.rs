@@ -18,6 +18,10 @@ pub enum SecretAccessReason {
     SignTransfer,
     /// The engine needs the mnemonic for an off-chain TON Connect ownership proof.
     SignTonConnectProof,
+    /// The engine needs the mnemonic to encrypt a transfer comment.
+    EncryptComment,
+    /// The engine needs the mnemonic to decrypt a transfer comment.
+    DecryptComment,
     /// The user requested the recovery phrase.
     RevealRecoveryPhrase,
 }

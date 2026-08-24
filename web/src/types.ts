@@ -71,7 +71,21 @@ export interface ActivityItem {
   readonly transactionFeeNanograms: string
   readonly status: "success" | "failed" | "bounced"
   readonly comment?: string
+  /** Complete Base64 BOC for an explicitly decryptable TON encrypted comment. */
+  readonly encryptedComment?: string
   readonly counterparty?: string
+}
+
+/** Builds an encrypted-comment BOC after provider lookup and key authorization. */
+export interface CreateEncryptedCommentRequest {
+  readonly recipient: string
+  readonly comment: string
+}
+
+/** Decrypts an encrypted-comment BOC from the specified sender. */
+export interface DecryptCommentRequest {
+  readonly sender: string
+  readonly body: string
 }
 
 export interface ActivityCursor {
@@ -232,7 +246,13 @@ export interface ProtectedSecretRef {
 
 export interface ProtectedSecretRead {
   readonly secretRef: ProtectedSecretRef
-  readonly reason: "createWallet" | "signTransfer" | "revealRecoveryPhrase"
+  readonly reason:
+    | "createWallet"
+    | "signTransfer"
+    | "signTonConnectProof"
+    | "encryptComment"
+    | "decryptComment"
+    | "revealRecoveryPhrase"
   readonly prompt: string
 }
 

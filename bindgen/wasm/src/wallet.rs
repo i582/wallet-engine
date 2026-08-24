@@ -136,6 +136,30 @@ impl WalletClient {
         to_value(&result)
     }
 
+    /// Builds an authorized TON encrypted-comment body.
+    #[wasm_bindgen(js_name = createEncryptedComment)]
+    pub async fn create_encrypted_comment(&self, request: JsValue) -> Result<JsValue, JsValue> {
+        let request = from_value(request)?;
+        let body = self
+            .inner
+            .create_encrypted_comment(request)
+            .await
+            .map_err(|error| engine_error(&error))?;
+        to_value(&body)
+    }
+
+    /// Explicitly authorizes and decrypts a TON encrypted-comment body.
+    #[wasm_bindgen(js_name = decryptComment)]
+    pub async fn decrypt_comment(&self, request: JsValue) -> Result<JsValue, JsValue> {
+        let request = from_value(request)?;
+        let comment = self
+            .inner
+            .decrypt_comment(request)
+            .await
+            .map_err(|error| engine_error(&error))?;
+        to_value(&comment)
+    }
+
     #[wasm_bindgen(js_name = sendNftTransfer)]
     pub async fn send_nft_transfer(&self, request: JsValue) -> Result<JsValue, JsValue> {
         let request = from_value(request)?;

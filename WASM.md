@@ -179,6 +179,37 @@ and an optional decoded plaintext `comment`. The fee is the total fee for the
 transaction. It is repeated when one transaction produces multiple activity
 rows, so do not sum it per row.
 
+Create an encrypted-comment BOC before previewing the transfer:
+
+```ts
+const boc = await client.createEncryptedComment({
+  recipient: destination,
+  comment: "private hello",
+})
+
+const body = {kind: "rawPayload" as const, boc}
+```
+
+The engine loads the recipient's `get_public_key` and asks the platform host
+for the protected mnemonic with reason `"encryptComment"`. Put `body` into the
+same immutable intent passed to `previewSend` and `send`.
+
+Encrypted activity exposes `encryptedComment` instead of `comment`. Decryption
+is explicit, so refresh never opens an authentication prompt:
+
+```ts
+const sender = item.direction === "received" ? item.counterparty : config.address
+if (item.encryptedComment && sender) {
+  const comment = await client.decryptComment({
+    sender,
+    body: item.encryptedComment,
+  })
+}
+```
+
+This protected-secret read uses reason `"decryptComment"`. Plaintext is
+limited to 960 UTF-8 bytes.
+
 An NFT that belongs to a collection includes a neutral `collection` descriptor
 with its address, standard TEP-64 fields, and complete string metadata. Keep
 product-specific classification, such as Telegram gifts, in the application.

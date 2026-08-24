@@ -1,6 +1,6 @@
 //! Account state and paginated wallet activity.
 
-use crate::{Base64Hash, TonAddressString, UnsignedDecimalString};
+use crate::{Base64Hash, Boc, TonAddressString, UnsignedDecimalString};
 
 /// The lifecycle state of a TON account.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Enum)]
@@ -78,6 +78,10 @@ pub struct ActivityItem {
     pub status: ActivityStatus,
     /// A decoded zero-opcode plaintext comment, including an empty comment.
     pub comment: Option<String>,
+    /// An opaque encrypted-comment body that can be passed to
+    /// [`crate::WalletClient::decrypt_comment`].
+    #[serde(default)]
+    pub encrypted_comment: Option<Boc>,
     /// The source or destination address, if the provider supplies it.
     pub counterparty: Option<TonAddressString>,
 }

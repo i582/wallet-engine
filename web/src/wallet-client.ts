@@ -14,7 +14,13 @@ import type {
   SignMessagePreview,
   SignMessageResult,
 } from "./send-types"
-import type {WalletClientConfig, WalletSnapshot, WalletUpdate} from "./types"
+import type {
+  CreateEncryptedCommentRequest,
+  DecryptCommentRequest,
+  WalletClientConfig,
+  WalletSnapshot,
+  WalletUpdate,
+} from "./types"
 
 export interface CreateClientOptions extends BrowserHttpHostOptions {
   readonly platformHost: BrowserPlatformHost
@@ -95,6 +101,18 @@ export class WalletClient {
   async send(request: SendRequest): Promise<SendResult> {
     this.assertOpen()
     return (await this.raw.send(request)) as SendResult
+  }
+
+  /** Returns a Base64 BOC suitable for SendMessageBody.rawPayload. */
+  async createEncryptedComment(request: CreateEncryptedCommentRequest): Promise<string> {
+    this.assertOpen()
+    return (await this.raw.createEncryptedComment(request)) as string
+  }
+
+  /** Explicitly authorizes and decrypts one TON encrypted-comment BOC. */
+  async decryptComment(request: DecryptCommentRequest): Promise<string> {
+    this.assertOpen()
+    return (await this.raw.decryptComment(request)) as string
   }
 
   /** Revalidates ownership and signs/submits one TEP-62 NFT transfer. */

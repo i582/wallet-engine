@@ -7,6 +7,7 @@
 mod activity;
 mod client;
 mod emulation;
+mod encrypted_comment;
 mod expiration;
 mod host;
 mod http;

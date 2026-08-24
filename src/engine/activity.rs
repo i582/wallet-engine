@@ -419,6 +419,7 @@ mod tests {
             transaction_fee_nanograms: BigUint::default(),
             status: crate::ActivityStatus::Success,
             comment: None,
+            encrypted_comment: None,
             counterparty: Some(
                 TonAddress::from_str(ADDRESS).expect("activity test address must be valid"),
             ),

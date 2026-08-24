@@ -373,7 +373,56 @@ describe("high-level WASM API", () => {
     await lifecycle.deleteWallet(created.descriptor)
     await expect(lifecycle.revealRecoveryPhrase(created.descriptor)).rejects.toBeInstanceOf(Error)
   })
+
+  test("creates and decrypts TON encrypted comments through the WASM boundary", async () => {
+    const secrets = new RecordingSecrets()
+    const encryptedPlatform = new BrowserPlatformHost({
+      secrets,
+      journal: new MemoryJournal(),
+    })
+    const lifecycle = await WalletLifecycle.create(encryptedPlatform)
+    lifecycles.push(lifecycle)
+    const created = await lifecycle.createWallet({
+      recordId: "encrypted-comment-wallet",
+      network: "testnet",
+    })
+    const peerPublicKey = "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"
+    const client = await WalletClient.create(
+      {
+        ...walletConfig(created.descriptor),
+        localSecretRef: created.descriptor.secretRef,
+      },
+      {
+        platformHost: encryptedPlatform,
+        fetch: mockFetch(async () =>
+          Response.json({result: {stack: [["num", `0x${peerPublicKey}`]]}}),
+        ),
+      },
+    )
+    clients.push(client)
+
+    const body = await client.createEncryptedComment({
+      recipient: `0:${"22".repeat(32)}`,
+      comment: "private hello",
+    })
+    const comment = await client.decryptComment({
+      sender: created.descriptor.address,
+      body,
+    })
+
+    expect(comment).toBe("private hello")
+    expect(secrets.reasons).toEqual(["encryptComment", "decryptComment"])
+  })
 })
+
+class RecordingSecrets extends MemorySecrets {
+  readonly reasons: string[] = []
+
+  override async read(request: Parameters<MemorySecrets["read"]>[0]): Promise<Uint8Array> {
+    this.reasons.push(request.reason)
+    return super.read(request)
+  }
+}
 
 function httpRequest(id: number, overrides: Partial<HttpRequest> = {}): HttpRequest {
   return {

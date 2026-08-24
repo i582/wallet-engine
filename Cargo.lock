@@ -13,6 +13,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "aes"
+version = "0.8.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b169f7a6d4742236a0a00c541b845991d0ac43e546831af1249753ab4c3aa3a0"
+dependencies = [
+ "cfg-if",
+ "cipher",
+ "cpufeatures 0.2.17",
+]
+
+[[package]]
 name = "android_system_properties"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2492,9 +2503,11 @@ dependencies = [
 name = "wallet-engine"
 version = "0.0.3"
 dependencies = [
+ "aes",
  "async-trait",
  "base64",
  "bip39",
+ "curve25519-dalek",
  "ed25519-dalek",
  "futures",
  "getrandom 0.3.4",
@@ -2507,6 +2520,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "similar",
+ "subtle",
  "tempfile",
  "thiserror",
  "ton",
