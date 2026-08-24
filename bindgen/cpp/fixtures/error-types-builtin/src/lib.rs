@@ -163,6 +163,7 @@ pub enum FlatInner {
 
 // Enums have good coverage elsewhere, but simple coverage here is good.
 #[derive(thiserror::Error, uniffi::Error, Debug)]
+#[uniffi::export(Display)]
 pub enum Error {
     #[error("Oops")]
     Oops,

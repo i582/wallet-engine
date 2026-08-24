@@ -96,7 +96,7 @@ int main() {
         error_types_builtin::oops_enum(0);
         ASSERT_TRUE(false);
     } catch (error_types_builtin::error::Oops& e) {
-        ASSERT_EQ(e.what(), std::string("Error::Oops"));
+        ASSERT_EQ(e.what(), std::string("Oops"));
     } catch (...) {
         ASSERT_TRUE(false);
     }
@@ -105,7 +105,7 @@ int main() {
         error_types_builtin::oops_enum(1);
         ASSERT_TRUE(false);
     } catch (error_types_builtin::error::Value& e) {
-        ASSERT_EQ(e.what(), std::string("Error::Value"));
+        ASSERT_EQ(e.what(), std::string("Value: value"));
         ASSERT_EQ(e.value, "value");
     } catch (...) {
         ASSERT_TRUE(false);

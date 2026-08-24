@@ -63,6 +63,7 @@ pub struct TonAddressInfo {
     serde::Deserialize,
     uniffi::Error,
 )]
+#[uniffi::export(Display)]
 #[serde(rename_all = "camelCase")]
 pub enum TonAddressError {
     /// The input is neither a valid raw address nor a valid TEP-2 friendly address.

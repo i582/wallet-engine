@@ -1,4 +1,5 @@
 {%- let class_name = typ|canonical_name %}
+{%- let display_fmt = e.uniffi_trait_methods().display_fmt %}
 {{ type_name }} {{ ffi_converter_name }}::lift(RustBuffer buf) {
     auto stream = RustStream(&buf);
     auto ret = {{ ffi_converter_name }}::read(stream);
@@ -33,7 +34,23 @@ RustBuffer {{ ffi_converter_name }}::lower(const {{ class_name }} &val) {
         {%- for field in variant.fields() %}
         var.{% call macros::field_name(field, loop.index) %} = {{ field|read_fn }}(stream);
         {%- endfor %}
+        {%- match display_fmt %}
+        {%- when Some with (fmt) %}
+        auto what_arg = {{ Type::String.borrow()|lift_fn }}(
+            rust_call(
+                {{ fmt.ffi_func().name() }},
+                nullptr,
+                {{ ffi_converter_name }}::lower(var)
+            )
+        );
+        auto ret = std::make_shared<{{ class_name|to_lower_snake_case }}::{{ variant.name() }}>(what_arg);
+        {%- for field in variant.fields() %}
+        ret->{% call macros::field_name(field, loop.index) %} = std::move(var.{% call macros::field_name(field, loop.index) %});
+        {%- endfor %}
+        return ret;
+        {%- when None %}
         return std::make_shared<{{ class_name|to_lower_snake_case }}::{{ variant.name() }}>(var);
+        {%- endmatch %}
     }
     {%- endif %}
     {%- endfor %}

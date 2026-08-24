@@ -67,6 +67,7 @@ pub enum JournalHostErrorKind {
     serde::Deserialize,
     uniffi::Error,
 )]
+#[uniffi::export(Display)]
 #[serde(rename_all = "camelCase")]
 pub enum JournalHostError {
     /// Reports a classified journal failure with a safe diagnostic message.

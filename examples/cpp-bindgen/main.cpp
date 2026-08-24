@@ -435,27 +435,6 @@ bool append_wallet_metadata(const WalletDescriptor &descriptor) {
     return static_cast<bool>(file);
 }
 
-QString describe_lifecycle_error(const WalletLifecycleError &error) {
-    if (dynamic_cast<const wallet_lifecycle_error::InvalidRecordId *>(&error)) {
-        return QStringLiteral("The record ID is invalid.");
-    }
-    if (
-        dynamic_cast<const wallet_lifecycle_error::AddressDerivationFailed *>(
-            &error
-        )
-    ) {
-        return QStringLiteral("Wallet address derivation failed.");
-    }
-    if (const auto *host_error =
-            dynamic_cast<const wallet_lifecycle_error::ProtectedSecretHost *>(
-                &error
-            )) {
-        return QStringLiteral("Protected-storage error: %1")
-            .arg(QString::fromStdString(host_error->diagnostic));
-    }
-    return QStringLiteral("Wallet lifecycle operation failed.");
-}
-
 struct CreateResult {
     std::optional<CreatedWallet> wallet;
     QString error;
@@ -550,7 +529,7 @@ CreateResult create_wallet(
     try {
         return {lifecycle->create_wallet(request), {}};
     } catch (const WalletLifecycleError &error) {
-        return {std::nullopt, describe_lifecycle_error(error)};
+        return {std::nullopt, QString::fromUtf8(error.what())};
     } catch (const std::exception &error) {
         return {
             std::nullopt,
@@ -674,218 +653,6 @@ QString describe_domain_error(const DomainError &error) {
     return with_diagnostic(message, error.developer_message);
 }
 
-QString describe_client_error(const WalletClientError &error) {
-    if (
-        dynamic_cast<
-            const wallet_client_error::InvalidLocalSecretReference *
-        >(&error)
-    ) {
-        return QStringLiteral(
-            "The wallet metadata does not contain a valid secret reference."
-        );
-    }
-    if (
-        dynamic_cast<const wallet_client_error::InvalidWalletPublicKey *>(
-            &error
-        )
-    ) {
-        return QStringLiteral("The saved wallet public key is invalid.");
-    }
-    if (
-        dynamic_cast<const wallet_client_error::WalletIdentityMismatch *>(
-            &error
-        )
-    ) {
-        return QStringLiteral(
-            "The wallet address does not match its public key and selected network."
-        );
-    }
-    if (
-        dynamic_cast<const wallet_client_error::InvalidProviderBaseUrl *>(
-            &error
-        )
-    ) {
-        return QStringLiteral("The configured Toncenter endpoint is invalid.");
-    }
-    if (
-        dynamic_cast<const wallet_client_error::InvalidSendRequest *>(&error)
-    ) {
-        return QStringLiteral(
-            "The transfer request is invalid. Check the destination address, amount, and comment."
-        );
-    }
-    if (
-        dynamic_cast<const wallet_client_error::LocalSigningUnavailable *>(
-            &error
-        )
-    ) {
-        return QStringLiteral(
-            "Local signing is unavailable because this wallet has no stored recovery phrase."
-        );
-    }
-    if (
-        dynamic_cast<const wallet_client_error::IdentifierExhausted *>(&error)
-    ) {
-        return QStringLiteral(
-            "Wallet Engine could not allocate another operation identifier. Restart the session."
-        );
-    }
-    if (
-        dynamic_cast<const wallet_client_error::StateUnavailable *>(&error)
-    ) {
-        return QStringLiteral(
-            "Wallet state is temporarily unavailable. Wait for the current operation and retry."
-        );
-    }
-    if (
-        dynamic_cast<const wallet_client_error::SendAlreadyInProgress *>(
-            &error
-        )
-    ) {
-        return QStringLiteral("Another transfer is already in progress.");
-    }
-    if (
-        dynamic_cast<
-            const wallet_client_error::SendPreviewAlreadyInProgress *
-        >(&error)
-    ) {
-        return QStringLiteral("Another transfer preview is already in progress.");
-    }
-    if (const auto *balance =
-            dynamic_cast<const wallet_client_error::InsufficientBalance *>(
-                &error
-            )) {
-        return QStringLiteral("Insufficient balance: %1 TON available.")
-            .arg(format_ton(balance->available_nanograms));
-    }
-    if (const auto *fees =
-            dynamic_cast<
-                const wallet_client_error::InsufficientBalanceForFees *
-            >(&error)) {
-        return QStringLiteral(
-            "The balance covers the amount but not the estimated %1 TON fee."
-        ).arg(format_ton(fees->estimated_fee_nanograms, 9));
-    }
-    if (
-        dynamic_cast<const wallet_client_error::PreviousSubmissionUnresolved *>(
-            &error
-        )
-    ) {
-        return QStringLiteral(
-            "A previous transfer is still unresolved. Refresh, or use the explicit override in the send form."
-        );
-    }
-    if (
-        dynamic_cast<const wallet_client_error::WalletSeqnoNotAdvanced *>(
-            &error
-        )
-    ) {
-        return QStringLiteral(
-            "The previous transfer sequence number is still active. Refresh and wait for confirmation."
-        );
-    }
-    if (const auto *account =
-            dynamic_cast<const wallet_client_error::SendAccountUnavailable *>(
-                &error
-            )) {
-        return QStringLiteral("The account cannot send in its current state: %1.")
-            .arg(account_status_text(account->status));
-    }
-    if (
-        dynamic_cast<const wallet_client_error::InvalidProtectedSecret *>(
-            &error
-        )
-    ) {
-        return QStringLiteral(
-            "The stored recovery phrase is invalid or belongs to another wallet."
-        );
-    }
-    if (const auto *preview =
-            dynamic_cast<const wallet_client_error::SendPreviewFailed *>(
-                &error
-            )) {
-        return with_diagnostic(
-            QStringLiteral("Could not prepare the transfer preview."),
-            preview->diagnostic
-        );
-    }
-    if (const auto *emulation =
-            dynamic_cast<const wallet_client_error::EmulationFailed *>(
-                &error
-            )) {
-        return with_diagnostic(
-            QStringLiteral("Toncenter could not emulate the transfer."),
-            emulation->diagnostic
-        );
-    }
-    if (const auto *message =
-            dynamic_cast<
-                const wallet_client_error::EmulationMessageNotAccepted *
-            >(&error)) {
-        return with_diagnostic(
-            QStringLiteral(
-                "The wallet contract did not accept the emulated message. Refresh and retry."
-            ),
-            message->diagnostic
-        );
-    }
-    if (const auto *rejected =
-            dynamic_cast<const wallet_client_error::EmulationRejected *>(
-                &error
-            )) {
-        auto message = QStringLiteral(
-            "The emulated transaction would fail, so it was not submitted."
-        );
-        if (rejected->compute_exit_code.has_value()) {
-            message += QStringLiteral("\nCompute exit code: %1")
-                .arg(rejected->compute_exit_code.value());
-        }
-        if (rejected->action_result_code.has_value()) {
-            message += QStringLiteral("\nAction result code: %1")
-                .arg(rejected->action_result_code.value());
-        }
-        return with_diagnostic(message, rejected->diagnostic);
-    }
-    if (const auto *send =
-            dynamic_cast<const wallet_client_error::SendFailed *>(&error)) {
-        return with_diagnostic(
-            QStringLiteral("The transfer failed before it was submitted."),
-            send->diagnostic
-        );
-    }
-    if (const auto *unknown =
-            dynamic_cast<const wallet_client_error::SubmissionUnknown *>(
-                &error
-            )) {
-        return with_diagnostic(
-            QStringLiteral(
-                "Submission outcome is unknown. Do not repeat the transfer."
-            ),
-            unknown->diagnostic
-        );
-    }
-    if (
-        dynamic_cast<const wallet_client_error::SendCancellationTooLate *>(
-            &error
-        )
-    ) {
-        return QStringLiteral(
-            "The transfer is already durable and can no longer be cancelled. Wait for its result."
-        );
-    }
-    if (dynamic_cast<const wallet_client_error::Shutdown *>(&error)) {
-        return QStringLiteral(
-            "This wallet session has already been closed. Open the wallet again."
-        );
-    }
-    const auto message = QString::fromUtf8(error.what()).trimmed();
-    return message.isEmpty() ?
-        QStringLiteral(
-            "Wallet Engine returned an unrecognized operational error. "
-            "Regenerate the C++ bindings and rebuild the application."
-        ) : message;
-}
-
 struct ClientUpdateResult {
     std::optional<WalletUpdate> update;
     QString error;
@@ -900,8 +667,6 @@ ClientUpdateResult update_wallet(
             load_more ? client->load_more_activity() : client->refresh(),
             {},
         };
-    } catch (const WalletClientError &error) {
-        return {std::nullopt, describe_client_error(error)};
     } catch (const std::exception &error) {
         return {std::nullopt, QString::fromUtf8(error.what())};
     }
@@ -960,8 +725,6 @@ PreviewResult preview_transfer(
             }),
             {},
         };
-    } catch (const WalletClientError &error) {
-        return {std::nullopt, describe_client_error(error)};
     } catch (const std::exception &error) {
         return {std::nullopt, QString::fromUtf8(error.what())};
     }
@@ -986,8 +749,6 @@ SubmitResult submit_transfer(
             }),
             {},
         };
-    } catch (const WalletClientError &error) {
-        return {std::nullopt, describe_client_error(error)};
     } catch (const std::exception &error) {
         return {std::nullopt, QString::fromUtf8(error.what())};
     }
@@ -2169,15 +1930,6 @@ private:
                 )
         );
 
-        if (client_) {
-            try {
-                client_->shutdown();
-            } catch (const std::exception &) {
-                // The old demo session is discarded even if shutdown reports an error.
-            }
-            client_.reset();
-        }
-
         const auto network = wallet.network == QStringLiteral("mainnet") ?
             Network::kMainnet : Network::kTestnet;
         const ProviderConfig providers {
@@ -2185,8 +1937,9 @@ private:
                 "https://toncenter.com" : "https://testnet.toncenter.com",
             15'000,
         };
+        std::shared_ptr<WalletClient> next_client;
         try {
-            client_ = WalletClient::init(
+            next_client = WalletClient::init(
                 {
                     wallet.record_id.toStdString(),
                     wallet.address.toStdString(),
@@ -2205,12 +1958,12 @@ private:
                 AppLogLevel::Error,
                 QStringLiteral("wallet"),
                 QStringLiteral("open failed error=%1")
-                    .arg(describe_client_error(error))
+                    .arg(QString::fromUtf8(error.what()))
             );
             QMessageBox::critical(
                 this,
                 QStringLiteral("Could not open wallet"),
-                describe_client_error(error)
+                QString::fromUtf8(error.what())
             );
             return;
         } catch (const std::exception &error) {
@@ -2228,6 +1981,14 @@ private:
             return;
         }
 
+        if (client_) {
+            try {
+                client_->shutdown();
+            } catch (const std::exception &) {
+                // The old demo session is discarded after its replacement is ready.
+            }
+        }
+        client_ = std::move(next_client);
         active_wallet_ = wallet;
         app_log(
             AppLogLevel::Info,
@@ -2296,12 +2057,12 @@ private:
                 AppLogLevel::Error,
                 QStringLiteral("lifecycle"),
                 QStringLiteral("legacy metadata upgrade failed error=%1")
-                    .arg(describe_lifecycle_error(error))
+                    .arg(QString::fromUtf8(error.what()))
             );
             QMessageBox::critical(
                 this,
                 QStringLiteral("Could not upgrade wallet"),
-                describe_lifecycle_error(error)
+                QString::fromUtf8(error.what())
             );
         } catch (const ProtectedSecretHostError &error) {
             QMessageBox::critical(

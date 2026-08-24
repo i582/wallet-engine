@@ -158,6 +158,7 @@ pub struct DomainError {
     serde::Deserialize,
     uniffi::Error,
 )]
+#[uniffi::export(Display)]
 #[serde(rename_all = "camelCase")]
 /// An operational failure returned by [`crate::WalletClient`].
 pub enum WalletClientError {

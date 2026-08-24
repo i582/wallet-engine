@@ -75,6 +75,7 @@ pub enum ProtectedSecretHostErrorKind {
     serde::Deserialize,
     uniffi::Error,
 )]
+#[uniffi::export(Display)]
 #[serde(rename_all = "camelCase")]
 pub enum ProtectedSecretHostError {
     /// Reports a classified host failure with a safe diagnostic message.

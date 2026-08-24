@@ -146,6 +146,7 @@ pub struct CreatedWallet {
     serde::Deserialize,
     uniffi::Error,
 )]
+#[uniffi::export(Display)]
 #[serde(rename_all = "camelCase")]
 pub enum WalletLifecycleError {
     /// The record ID is empty, too long, or contains unsupported characters.
