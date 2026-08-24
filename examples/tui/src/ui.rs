@@ -220,9 +220,12 @@ fn render_recovery(frame: &mut Frame<'_>, area: Rect, created: &CreatedWallet) {
         .phrase
         .split_ascii_whitespace()
         .collect::<Vec<_>>();
-    let rows = (0..8).map(|row_index| {
+    // A pre-rotation phrase has 12 words and a rotated one 24, so the column
+    // height follows the phrase instead of a fixed 8.
+    let column_height = phrase.len().div_ceil(3);
+    let rows = (0..column_height).map(|row_index| {
         let cells = (0..3).map(|column_index| {
-            let index = row_index + column_index * 8;
+            let index = row_index + column_index * column_height;
             let value = phrase
                 .get(index)
                 .map_or_else(String::new, |word| format!("{:>2}  {word}", index + 1));
