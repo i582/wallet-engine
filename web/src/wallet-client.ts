@@ -63,6 +63,12 @@ export class WalletClient {
     return (await this.raw.resolvePending()) as WalletSnapshot["send"]
   }
 
+  /** Resolves the standard TON DNS wallet record for a `.ton` name. */
+  async resolveDns(name: string): Promise<string | null> {
+    this.assertOpen()
+    return (await this.raw.resolveDns(name)) as string | null
+  }
+
   async cancelRefresh(): Promise<void> {
     this.assertOpen()
     await this.raw.cancelRefresh()

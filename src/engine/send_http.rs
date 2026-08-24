@@ -166,7 +166,7 @@ pub(super) fn is_explicit_send_rejection(error: &DomainError) -> bool {
         .is_some_and(|status| matches!(status, 400 | 401 | 403 | 404 | 405 | 413 | 422 | 429))
 }
 
-fn build_json_rpc_request(
+pub(super) fn build_json_rpc_request(
     config: &WalletClientConfig,
     id: HttpRequestId,
     method: &str,
@@ -375,6 +375,7 @@ mod tests {
             resolution_margin_seconds: 60,
             providers: ProviderConfig {
                 toncenter_base_url: "https://provider.example".to_owned(),
+                dns_root_address: None,
                 request_timeout_ms: 15_000,
             },
         }

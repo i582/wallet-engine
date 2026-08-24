@@ -160,6 +160,7 @@ class WalletRepository(private val store: SecureWalletStore) {
                     resolutionMarginSeconds = 60uL,
                     providers = ProviderConfig(
                         toncenterBaseUrl = if (wallet.testnet) TESTNET_BASE_URL else MAINNET_BASE_URL,
+                        dnsRootAddress = null,
                         requestTimeoutMs = PROVIDER_REQUEST_TIMEOUT_MILLIS.toULong(),
                     ),
                 ),

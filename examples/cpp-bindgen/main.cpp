@@ -2187,6 +2187,7 @@ private:
         const ProviderConfig providers {
             network == Network::kMainnet ?
                 "https://toncenter.com" : "https://testnet.toncenter.com",
+            std::nullopt,
             15'000,
         };
         try {

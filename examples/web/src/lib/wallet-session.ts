@@ -301,6 +301,7 @@ async function createClient(
       resolutionMarginSeconds: 60,
       providers: {
         toncenterBaseUrl: TESTNET_BASE_URL,
+        dnsRootAddress: null,
         requestTimeoutMs: 15_000,
       },
     },

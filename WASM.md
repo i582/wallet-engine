@@ -163,6 +163,7 @@ const client = await WalletClient.create(
     network: descriptor.network,
     providers: {
       toncenterBaseUrl: "https://testnet.toncenter.com",
+      dnsRootAddress: null,
       requestTimeoutMs: 15_000,
     },
   },
@@ -209,6 +210,23 @@ if (item.encryptedComment && sender) {
 
 This protected-secret read uses reason `"decryptComment"`. Plaintext is
 limited to 960 UTF-8 bytes.
+
+Resolve the standard `wallet` record for a `.ton` name before you build a send
+intent:
+
+```ts
+const address = await client.resolveDns("foundation.ton")
+if (address !== null) {
+  // Use address as the SendMessage destination.
+}
+```
+
+The engine normalizes the name to lowercase and follows TON DNS delegation
+through the provider. Set `providers.dnsRootAddress` to override the root;
+omitting it or passing `null` uses the built-in current root for the wallet
+network. The result is `null` when the name has no wallet record. Invalid names
+and malformed provider data reject with `DnsResolutionUnavailable`. This
+read-only call does not request the protected mnemonic.
 
 An NFT that belongs to a collection includes a neutral `collection` descriptor
 with its address, standard TEP-64 fields, and complete string metadata. Keep

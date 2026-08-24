@@ -319,6 +319,7 @@ mod tests {
             resolution_margin_seconds: 60,
             providers: ProviderConfig {
                 toncenter_base_url: "https://provider.example/custom/".to_owned(),
+                dns_root_address: None,
                 request_timeout_ms: 12_345,
             },
         };
@@ -363,6 +364,7 @@ mod tests {
             resolution_margin_seconds: 60,
             providers: ProviderConfig {
                 toncenter_base_url: "mailto:provider@example.com".to_owned(),
+                dns_root_address: None,
                 request_timeout_ms: 15_000,
             },
         };

@@ -99,6 +99,22 @@ wallet address. This read uses `SecretAccessReason.DECRYPT_COMMENT`, so refresh
 does not trigger device authentication. Plaintext is limited to 960 UTF-8
 bytes.
 
+## TON DNS
+
+Resolve the standard `wallet` record for a `.ton` name before you build a send
+intent:
+
+```kotlin
+val address: String? = client.resolveDns("foundation.ton")
+```
+
+The engine normalizes the name to lowercase and follows TON DNS delegation
+through the provider. `ProviderConfig.dnsRootAddress` can override the root;
+`null` uses the built-in current root for the wallet network. The result is
+`null` when the name has no wallet record. Invalid names and malformed provider
+data throw `DnsResolutionUnavailable`. This read-only call does not request the
+protected mnemonic.
+
 ## NFT collection metadata
 
 An NFT that belongs to a collection includes a neutral `collection` descriptor

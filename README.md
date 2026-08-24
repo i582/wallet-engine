@@ -768,6 +768,26 @@ Use `waitForChange(afterRevision:)` on Swift. Use
 `waitForChange(afterRevision)` on Kotlin. Both calls wait until a newer snapshot
 is available.
 
+## TON DNS
+
+Call `WalletClient.resolveDns` with a `.ton` name before building a send intent.
+The engine validates and lowercases the name, follows provider-side DNS
+delegation, and selects the standard `wallet` category. It returns a
+network-correct `TonAddressString`, or `None`/`nil`/`null` when the name has no
+wallet record. It does not read the protected mnemonic.
+
+`ProviderConfig.dnsRootAddress` is an optional resolver override. When it is
+absent, the engine uses the current root address for the wallet network that was
+snapshotted from blockchain config `#4`. This avoids an extra provider request
+per lookup while allowing an application to update the resolver immediately.
+
+DNS resolution is explicit and does not rewrite `SendIntent` destinations.
+Malformed names, provider failures, or invalid provider records return the
+typed `DnsResolutionUnavailable` error. The current API resolves ASCII `.ton`
+names and wallet records only; product-specific naming and presentation stay
+in the host. See the [TON DNS documentation](https://docs.ton.org/llms/foundations/web3/ton-dns/content.md)
+and [TEP-81](https://github.com/ton-blockchain/TEPs/blob/master/text/0081-dns-standard.md).
+
 ## Sending GRAM
 
 Call `previewSend` to show fees, actions, and execution warnings before the

@@ -9,6 +9,8 @@ export type Base64Hash = string & {
 
 export interface ProviderConfig {
   readonly toncenterBaseUrl: string
+  /** Optional TON DNS root override; omitted uses the current network default. */
+  readonly dnsRootAddress?: string | null
   /** End-to-end timeout for each provider request, in milliseconds. */
   readonly requestTimeoutMs: number
 }

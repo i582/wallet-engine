@@ -75,6 +75,7 @@ nonisolated struct AppleWalletEnvironment: Sendable {
             providers: ProviderConfig(
                 toncenterBaseUrl: runtime.toncenterBaseURL
                     ?? (isMainnet ? "https://toncenter.com" : "https://testnet.toncenter.com"),
+                dnsRootAddress: nil,
                 requestTimeoutMs: 15_000
             )
         )

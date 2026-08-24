@@ -475,7 +475,7 @@ fn ordered_out_messages(transaction: &Transaction) -> Result<Vec<OrderedMessage<
     Ok(messages)
 }
 
-fn decode_envelope<T: DeserializeOwned>(body: &[u8]) -> Result<T, DomainError> {
+pub(super) fn decode_envelope<T: DeserializeOwned>(body: &[u8]) -> Result<T, DomainError> {
     let envelope: RawEnvelope =
         serde_json::from_slice(body).map_err(|error| invalid_response(error.to_string()))?;
     if !envelope.ok {

@@ -64,6 +64,17 @@ impl WalletClient {
         to_value(&snapshot)
     }
 
+    /// Resolves the standard TON DNS wallet record for a `.ton` name.
+    #[wasm_bindgen(js_name = resolveDns)]
+    pub async fn resolve_dns(&self, name: String) -> Result<JsValue, JsValue> {
+        let address = self
+            .inner
+            .resolve_dns(name)
+            .await
+            .map_err(|error| engine_error(&error))?;
+        to_value(&address)
+    }
+
     #[wasm_bindgen(js_name = cancelRefresh)]
     pub async fn cancel_refresh(&self) -> Result<(), JsValue> {
         self.inner

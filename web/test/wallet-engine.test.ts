@@ -374,6 +374,57 @@ describe("high-level WASM API", () => {
     await expect(lifecycle.revealRecoveryPhrase(created.descriptor)).rejects.toBeInstanceOf(Error)
   })
 
+  test("resolves a .ton wallet record with the network-default root", async () => {
+    const walletAddress = "EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N"
+    const methods: string[] = []
+    const lifecycle = await WalletLifecycle.create(platform)
+    lifecycles.push(lifecycle)
+    const created = await lifecycle.createWallet({
+      recordId: "dns-wallet",
+      network: "testnet",
+    })
+    const client = await WalletClient.create(walletConfig(created.descriptor), {
+      platformHost: platform,
+      fetch: mockFetch(async (_input, init) => {
+        const body = new TextDecoder().decode(init?.body as Uint8Array)
+        const request = JSON.parse(body) as {method: string; params: Record<string, unknown>}
+        methods.push(request.method)
+        expect(request.method).toBe("dnsResolve")
+        expect(request.params.name).toBe("foundation.ton")
+        expect(request.params.address).toBe(
+          "-1:efe71d13860afaa6aeaeaf636f9168487f80f1031b0bf8d939ae49d3ea7f7da0",
+        )
+        return Response.json({
+          ok: true,
+          result: {
+            "@type": "dns.resolved",
+            entries: [
+              {
+                category: "6NRAUIc9uoZap8Fwq0zOZNkIOaNNz9bPcdFOAgVEOxs=",
+                entry: {
+                  "@type": "dns.entryDataSmcAddress",
+                  smc_address: {
+                    "@type": "accountAddress",
+                    account_address: walletAddress,
+                  },
+                },
+              },
+            ],
+          },
+        })
+      }),
+    })
+    clients.push(client)
+
+    const resolved = await client.resolveDns("Foundation.TON")
+
+    expect(resolved).toStartWith("0Q")
+    expect(await convertTonAddress(resolved ?? "", {kind: "raw"})).toBe(
+      await convertTonAddress(walletAddress, {kind: "raw"}),
+    )
+    expect(methods).toEqual(["dnsResolve"])
+  })
+
   test("creates and decrypts TON encrypted comments through the WASM boundary", async () => {
     const secrets = new RecordingSecrets()
     const encryptedPlatform = new BrowserPlatformHost({

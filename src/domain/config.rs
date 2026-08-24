@@ -9,6 +9,12 @@ pub const DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS: u64 = 15_000;
 /// Default indexer-lag margin after a signed message validity window.
 pub const DEFAULT_RESOLUTION_MARGIN_SECONDS: u64 = 60;
 
+// Root snapshots read from blockchain configuration parameter #4 on 2026-08-24.
+const MAINNET_DNS_ROOT_ADDRESS: &str =
+    "-1:e56754f83426f69b09267bd876ac97c44821345b7e266bd956a7bfbfb98df35c";
+const TESTNET_DNS_ROOT_ADDRESS: &str =
+    "-1:efe71d13860afaa6aeaeaf636f9168487f80f1031b0bf8d939ae49d3ea7f7da0";
+
 /// Selects the TON network used for addresses, providers, and wallet derivation.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, uniffi::Enum,
@@ -32,6 +38,13 @@ pub struct ProviderConfig {
     /// produces paths below `/toncenter/api/...`.
     /// Loopback HTTP URLs are accepted for local development networks.
     pub toncenter_base_url: String,
+    /// Optional TON DNS root resolver override.
+    ///
+    /// When absent, the engine selects the built-in current root for the wallet
+    /// network. Set an explicit address to update the resolver without changing
+    /// the engine.
+    #[serde(default)]
+    pub dns_root_address: Option<TonAddressString>,
     /// End-to-end timeout applied to every provider request, in milliseconds.
     ///
     /// The embedding HTTP host must enforce this deadline across connection,
@@ -55,8 +68,23 @@ impl ProviderConfig {
         };
         Self {
             toncenter_base_url: toncenter_base_url.to_owned(),
+            dns_root_address: None,
             request_timeout_ms: DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS,
         }
+    }
+
+    pub(crate) fn effective_dns_root_address(&self, network: Network) -> &str {
+        self.dns_root_address.as_ref().map_or_else(
+            || default_dns_root_address(network),
+            TonAddressString::as_str,
+        )
+    }
+}
+
+const fn default_dns_root_address(network: Network) -> &'static str {
+    match network {
+        Network::Mainnet => MAINNET_DNS_ROOT_ADDRESS,
+        Network::Testnet => TESTNET_DNS_ROOT_ADDRESS,
     }
 }
 
@@ -106,8 +134,9 @@ const fn default_resolution_margin_seconds() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS, DEFAULT_RESOLUTION_MARGIN_SECONDS, Network,
-        ProviderConfig, WalletClientConfig,
+        DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS, DEFAULT_RESOLUTION_MARGIN_SECONDS,
+        MAINNET_DNS_ROOT_ADDRESS, Network, ProviderConfig, TESTNET_DNS_ROOT_ADDRESS,
+        WalletClientConfig,
     };
 
     #[test]
@@ -124,10 +153,20 @@ mod tests {
             ProviderConfig::standard(Network::Mainnet).request_timeout_ms,
             DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS
         );
+        assert_eq!(
+            ProviderConfig::standard(Network::Mainnet).effective_dns_root_address(Network::Mainnet),
+            MAINNET_DNS_ROOT_ADDRESS
+        );
+        assert_eq!(
+            ProviderConfig::standard(Network::Testnet).effective_dns_root_address(Network::Testnet),
+            TESTNET_DNS_ROOT_ADDRESS
+        );
+        assert!(crate::TonAddressString::try_from(MAINNET_DNS_ROOT_ADDRESS).is_ok());
+        assert!(crate::TonAddressString::try_from(TESTNET_DNS_ROOT_ADDRESS).is_ok());
     }
 
     #[test]
-    fn provider_json_from_before_timeout_support_uses_the_standard_deadline() {
+    fn previous_provider_json_uses_timeout_and_dns_defaults() {
         let provider: ProviderConfig =
             serde_json::from_str(r#"{"toncenterBaseUrl":"https://testnet.toncenter.com"}"#)
                 .expect("the previous provider JSON shape must remain readable");
@@ -136,8 +175,13 @@ mod tests {
             provider,
             ProviderConfig {
                 toncenter_base_url: "https://testnet.toncenter.com".to_owned(),
+                dns_root_address: None,
                 request_timeout_ms: DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS,
             }
+        );
+        assert_eq!(
+            provider.effective_dns_root_address(Network::Testnet),
+            TESTNET_DNS_ROOT_ADDRESS
         );
     }
 

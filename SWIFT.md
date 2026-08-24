@@ -92,6 +92,22 @@ wallet address. This read uses `SecretAccessReason.decryptComment`, so refresh
 does not trigger device authentication. Plaintext is limited to 960 UTF-8
 bytes.
 
+## TON DNS
+
+Resolve the standard `wallet` record for a `.ton` name before you build a send
+intent:
+
+```swift
+let address: String? = try await client.resolveDns(name: "foundation.ton")
+```
+
+The engine normalizes the name to lowercase and follows TON DNS delegation
+through the provider. `ProviderConfig.dnsRootAddress` can override the root;
+`nil` uses the built-in current root for the wallet network. The result is `nil`
+when the name has no wallet record. Invalid names and malformed provider data
+throw `DnsResolutionUnavailable`. This read-only call does not request the
+protected mnemonic.
+
 ## NFT collection metadata
 
 An NFT that belongs to a collection includes a neutral `collection` descriptor

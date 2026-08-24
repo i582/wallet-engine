@@ -240,7 +240,7 @@ mod tests {
         ProviderConfig, TonAddressString, WalletClientConfig, WalletHttpHost, WalletPlatformHost,
     };
 
-    const MNEMONIC: &str = "section garden tomato dinner season dice renew length useful spin trade intact use universe what post spike keen mandate behind concert egg doll rug";
+    const MNEMONIC: &str = "notice tortoise soup strong gun divide offer process salon siren general carry clump left year void clutch tool case burden fix income champion lounge";
     const RECIPIENT: &str = "0:2222222222222222222222222222222222222222222222222222222222222222";
 
     struct PublicKeyHost {
@@ -331,6 +331,7 @@ mod tests {
             resolution_margin_seconds: 60,
             providers: ProviderConfig {
                 toncenter_base_url: "https://provider.example".to_owned(),
+                dns_root_address: None,
                 request_timeout_ms: 15_000,
             },
         };

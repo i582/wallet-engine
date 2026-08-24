@@ -1564,6 +1564,7 @@ impl ScenarioRunner {
             resolution_margin_seconds: 60,
             providers: ProviderConfig {
                 toncenter_base_url: provider_base_url,
+                dns_root_address: None,
                 request_timeout_ms: 15_000,
             },
         };

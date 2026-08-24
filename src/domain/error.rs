@@ -194,6 +194,12 @@ pub enum WalletClientError {
         /// Bounded developer-facing reason that contains no secret material.
         diagnostic: String,
     },
+    /// TON DNS validation, provider resolution, or wallet-record parsing failed.
+    #[error("TON DNS resolution is unavailable: {diagnostic}")]
+    DnsResolutionUnavailable {
+        /// Bounded developer-facing reason that contains no secret material.
+        diagnostic: String,
+    },
     /// The wallet has public identity but no protected secret configured for local signing.
     #[error("the wallet is not configured for local signing")]
     LocalSigningUnavailable,
