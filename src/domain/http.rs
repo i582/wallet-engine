@@ -107,6 +107,7 @@ pub enum HttpHostErrorKind {
     serde::Deserialize,
     uniffi::Error,
 )]
+#[uniffi::export(Display)]
 #[serde(rename_all = "camelCase")]
 pub enum HttpHostError {
     /// Reports a classified host failure with a safe diagnostic message.

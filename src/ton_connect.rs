@@ -193,6 +193,7 @@ pub enum TonConnectIncomingRequest {
 
 /// Failure at the FFI-safe TON Connect session boundary.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, uniffi::Error)]
+#[uniffi::export(Display)]
 pub enum TonConnectSessionError {
     /// The session or protocol input is invalid.
     #[error("TON Connect session failed: {diagnostic}")]
