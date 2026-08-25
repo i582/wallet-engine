@@ -22,7 +22,7 @@ use ton::ton_core::traits::tlb::TLB;
 use ton::ton_core::types::TonAddress;
 use ton::ton_core::types::tlb_core::TLBCoins;
 use ton::ton_wallet::{
-    TonWallet, WALLET_V5R1_ID_DEFAULT_TESTNET, WalletV5ExtMsgBody, WalletVersion,
+    TonWallet, WALLET_SUBWALLET_ID_DEFAULT_TESTNET, WalletExtMsgBody, WalletVersion,
 };
 use wallet_engine::{
     Boc, HttpHeader, HttpHostError, HttpHostErrorKind, HttpMethod, HttpRequest, HttpRequestId,
@@ -260,7 +260,7 @@ impl LocalnetHttpHost {
         let mnemonic = std::str::from_utf8(test_wallet().other_recovery_phrase_bytes())
             .map_err(|error| error.to_string())?;
         let key_pair = test_wallet::rotation_anchor_key_pair(mnemonic)?;
-        let relayer_wallet_id = WALLET_V5R1_ID_DEFAULT_TESTNET
+        let relayer_wallet_id = WALLET_SUBWALLET_ID_DEFAULT_TESTNET
             .checked_add(1)
             .ok_or_else(|| "localnet relayer wallet ID overflowed".to_owned())?;
         let relayer =
@@ -326,7 +326,7 @@ impl LocalnetHttpHost {
             WalletVersion::Wallet,
             key_pair,
             0,
-            WALLET_V5R1_ID_DEFAULT_TESTNET,
+            WALLET_SUBWALLET_ID_DEFAULT_TESTNET,
         )
         .map_err(|error| error.to_string())?;
         let destination = TonAddress::from_str(&self.address).map_err(|error| error.to_string())?;
@@ -482,7 +482,7 @@ impl LocalnetHttpHost {
                 .cell_hash_normalized()
                 .map(|hash| STANDARD.encode(hash.as_slice()))
                 .map_err(|error| host_error(HttpHostErrorKind::Other, &error.to_string()))?;
-            let body = WalletV5ExtMsgBody::from_cell(&message.body)
+            let (body, _) = WalletExtMsgBody::read_signed(&mut message.body.parser())
                 .map_err(|error| host_error(HttpHostErrorKind::Other, &error.to_string()))?;
             let comment = decode_submitted_comment(&body)?;
             *lock(&self.submitted_message) = Some(SubmittedMessage {

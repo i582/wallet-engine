@@ -15,7 +15,7 @@ impl TestWalletFixture {
     /// half, per TEP-0003 section 3.3.
     const RECOVERY_PHRASE: &'static str = "notice tortoise soup strong gun divide offer process salon siren general carry clump left year void clutch tool case burden fix income champion lounge";
 
-    const TESTNET_ADDRESS: &'static str = "0QBKa7RDhGX6xHlEmqaA275NPQyP_am575E8xJ9W2t3HiB3E";
+    const TESTNET_ADDRESS: &'static str = "0QCecG6hpl_o16_bYZO_x3rNzyfbhH7Ur6jTh49taojyvNCE";
 
     const OTHER_RECOVERY_PHRASE: &'static str = "april style market avoid find artist van spy salute broccoli daughter imitate lunch peasant crazy floor priority still aunt proof cradle fork afford blouse";
 

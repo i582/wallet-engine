@@ -13,7 +13,7 @@ use ton::tep::snake_data::SnakeData;
 use ton::ton_core::cell::TonCell;
 use ton::ton_core::traits::tlb::TLB;
 use ton::ton_core::types::TonAddress;
-use ton::ton_wallet::WalletV5ExtMsgBody;
+use ton::ton_wallet::WalletExtMsgBody;
 use wallet_engine::{
     HttpHeader, HttpHostError, HttpHostErrorKind, HttpRequest, HttpRequestId, HttpResponse,
     JournalCompareExchange, JournalCompareExchangeResult, JournalHostError, JournalHostErrorKind,
@@ -93,7 +93,7 @@ pub(super) struct SubmittedMessage {
 }
 
 pub(super) fn decode_submitted_comment(
-    body: &WalletV5ExtMsgBody,
+    body: &WalletExtMsgBody,
 ) -> Result<Option<String>, HttpHostError> {
     let Some(message) = body.msgs.first() else {
         return Ok(None);
@@ -556,7 +556,7 @@ impl ScenarioHttpHost {
             .cell_hash_normalized()
             .map(|hash| STANDARD.encode(hash.as_slice()))
             .map_err(|error| host_error(HttpHostErrorKind::Other, error.to_string()))?;
-        let body = WalletV5ExtMsgBody::from_cell(&message.body)
+        let (body, _) = WalletExtMsgBody::read_signed(&mut message.body.parser())
             .map_err(|error| host_error(HttpHostErrorKind::Other, error.to_string()))?;
         let comment = decode_submitted_comment(&body)?;
 

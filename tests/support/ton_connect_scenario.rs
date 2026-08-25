@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Map;
 use ton::block_tlb::StateInit;
 use ton::ton_core::traits::tlb::TLB as _;
-use ton::ton_wallet::{WALLET_V5R1_ID_DEFAULT_TESTNET, WalletVersion};
+use ton::ton_wallet::{WALLET_SUBWALLET_ID_DEFAULT_TESTNET, WalletVersion};
 use ton_connect_client::{IncomingRequest, TonConnectClient, TonConnectClientConfig};
 use ton_connect_core::{
     ConnectEvent, ConnectEventPayload, ConnectItem, ConnectItemReply, ConnectLink, DeviceInfo,
@@ -2910,7 +2910,7 @@ fn test_wallet_state(mnemonic: &[u8]) -> TestResult<(WalletStateInit, Vec<u8>)> 
     let data = WalletVersion::get_default_data(
         WalletVersion::Wallet,
         &key_pair,
-        WALLET_V5R1_ID_DEFAULT_TESTNET,
+        WALLET_SUBWALLET_ID_DEFAULT_TESTNET,
     )?;
     let state = StateInit::new(code, data);
     let state = WalletStateInit::from_boc(state.to_boc()?)?;

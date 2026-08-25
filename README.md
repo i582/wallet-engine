@@ -295,11 +295,10 @@ outgoing messages
 Wallet V3R1 through V5R1 have no rotatable signing key, and the TEP forbids
 deploying them from a Rotation mnemonic.
 
-The rotation contract is not finalized. Until it lands, the embedded
-`w5-experimental` contract stands in as a placeholder: it stores a single
-public key, so the anchor key both determines the address and signs outgoing
-messages. The signing key is already derived and takes over message signing
-when the placeholder is replaced.
+The engine embeds Wallet rev00. This revision is not declared final. The
+current lifecycle initializes it with the anchor public key and uses the anchor
+key to sign outgoing messages. The signing key is already derived but remains
+unused until key rotation is wired into the engine.
 
 On import the signing key derived from words 13–24 is compared with the key
 stored in the account. A mismatch means the phrase carries an outdated signing

@@ -17,7 +17,9 @@ use ton::ton_core::errors::TonCoreError;
 use ton::ton_core::traits::tlb::TLB;
 use ton::ton_core::types::TonAddress;
 use ton::ton_core::types::tlb_core::{MsgAddressExt, TLBCoins, TLBEitherRef};
-use ton::ton_wallet::{WALLET_V5R1_ID_DEFAULT, WALLET_V5R1_ID_DEFAULT_TESTNET, WalletVersion};
+use ton::ton_wallet::{
+    WALLET_SUBWALLET_ID_DEFAULT, WALLET_SUBWALLET_ID_DEFAULT_TESTNET, WalletVersion,
+};
 
 use crate::types::{Boc, BocError};
 use crate::{
@@ -187,8 +189,8 @@ pub(crate) fn prepare_transfer_emulation(
     let _ = request.intent.exact_value_total()?;
     let (internal, send_modes) = build_internal_messages(&request.intent.messages)?;
     let wallet_id = match network {
-        Network::Mainnet => WALLET_V5R1_ID_DEFAULT,
-        Network::Testnet => WALLET_V5R1_ID_DEFAULT_TESTNET,
+        Network::Mainnet => WALLET_SUBWALLET_ID_DEFAULT,
+        Network::Testnet => WALLET_SUBWALLET_ID_DEFAULT_TESTNET,
     };
 
     // Keep the preview path identical to real signing: only wallet message
@@ -206,14 +208,14 @@ pub(crate) fn prepare_transfer_emulation(
     )
     .map_err(TransferError::ExternalMessage)?;
 
-    // V5 stores the signature after the body. Zero bytes are deliberate: the
-    // Emulate API skips only this cryptographic check and executes everything else.
+    // Wallet stores the signature before the request. Zero bytes are deliberate:
+    // the Emulate API skips only this cryptographic check and executes everything else.
     let mut signed = TonCell::builder();
     signed
-        .write_cell(&body)
+        .write_bits([0_u8; 64], 512)
         .map_err(TransferError::InternalMessage)?;
     signed
-        .write_bits([0_u8; 64], 512)
+        .write_cell(&body)
         .map_err(TransferError::InternalMessage)?;
     let signed = signed.build().map_err(TransferError::InternalMessage)?;
     let info = CommonMsgInfo::ExtIn(CommonMsgInfoExtIn {
@@ -628,10 +630,9 @@ mod tests {
         assert!(!info.bounce);
         assert!(outer.init.is_some());
 
-        let (body, signature) = ton::ton_wallet::WalletV5InternalSignedBody::read_signed(
-            &mut outer.body.value.parser(),
-        )
-        .expect("signed body decodes");
+        let (body, signature) =
+            ton::ton_wallet::WalletInternalSignedBody::read_signed(&mut outer.body.value.parser())
+                .expect("signed body decodes");
         assert_eq!(body.valid_until, 1_900_000_000);
         assert_eq!(body.msg_seqno, 0);
         assert_eq!(body.msgs_modes, vec![EXACT_AMOUNT_SEND_MODE; 2]);
