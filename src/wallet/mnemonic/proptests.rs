@@ -17,6 +17,7 @@ use proptest::test_runner::FileFailurePersistence;
 
 use super::*;
 use crate::wallet::crypto::derive_rotation_keys;
+use crate::wallet::mnemonic_scheme::{MnemonicScheme, detect_mnemonic_schemes};
 use crate::wallet::slip_0010::{TON_ACCOUNT_PATH, derive_path, signing_key};
 
 /// Cases for a property that goes through word encoding.
@@ -43,6 +44,20 @@ const ENTROPY_BYTE_CASES: u32 = 111;
 /// 24-word phrase carries an 8-bit checksum. That event is missed by `n`
 /// draws with `(255/256)^n`, which needs this many cases at `d = 0.001`.
 const BIP39_24_SWAP_CASES: u32 = 1765;
+
+/// Cases for a property that goes through 24-word encoding.
+///
+/// Same fault model as [`WORD_SLOT_CASES`] with twenty-four drawn words
+/// reaching a given slot of the 2048-word list:
+/// `p = 1 - (2047/2048)^24`, which needs this many cases.
+const WORD_SLOT_24_CASES: u32 = 590;
+
+/// Cases for the other-length rejection property.
+///
+/// Rejection happens on the word count alone, so the narrowest fault is one
+/// mishandled length of the three drawn: `p = 1/3`, which needs this many
+/// cases.
+const OTHER_LENGTH_CASES: u32 = 18;
 
 /// Cases for a seed property whose case draws both halves.
 ///
@@ -241,6 +256,16 @@ proptest! {
         prop_assert_eq!(rejoined.as_str(), format!("{phrase} {phrase}"));
     }
 
+    /// A 12-word oracle phrase is exactly a pre-rotation phrase: the TON and
+    /// 24-word BIP-39 schemes need 24 words, so they can never match it.
+    #[test]
+    fn detection_reports_rotation_alone_for_every_oracle_half(entropy in entropy()) {
+        prop_assert_eq!(
+            detect_mnemonic_schemes(oracle_words(&entropy)),
+            vec![MnemonicScheme::Rotation]
+        );
+    }
+
     /// No other length is a rotation phrase, however valid the words are.
     #[test]
     fn rejects_every_other_word_count(
@@ -291,6 +316,58 @@ proptest! {
         let theirs = Mnemonic::parse_normalized(&words.join(" ")).is_ok();
 
         prop_assert_eq!(ours, theirs, "{}", words.join(" "));
+    }
+}
+
+proptest! {
+    #![proptest_config(config(WORD_SLOT_24_CASES))]
+
+    /// Every 24-word phrase the oracle emits is detected as BIP-39 at the
+    /// public scheme level, however the words are cased and padded.
+    #[test]
+    fn detection_reports_bip39_for_every_oracle_24_word_phrase(
+        entropy in any::<[u8; BIP39_24_ENTROPY_LEN]>(),
+        uppercase in prop::collection::vec(any::<bool>(), BIP39_24_WORD_COUNT),
+        padding in prop::collection::vec(
+            prop::sample::select(&["", " ", "  ", "\t"][..]),
+            BIP39_24_WORD_COUNT,
+        ),
+    ) {
+        let oracle = Mnemonic::from_entropy(&entropy)
+            .expect("256 bits is a valid BIP-39 entropy length");
+        let words = oracle
+            .words()
+            .zip(uppercase)
+            .zip(padding)
+            .map(|((word, upper), pad)| {
+                let cased = if upper { word.to_uppercase() } else { word.to_owned() };
+                format!("{pad}{cased}{pad}")
+            })
+            .collect::<Vec<_>>();
+
+        prop_assert!(detect_mnemonic_schemes(words).contains(&MnemonicScheme::Bip39));
+    }
+}
+
+proptest! {
+    #![proptest_config(config(OTHER_LENGTH_CASES))]
+
+    /// A valid BIP-39 phrase of 15, 18, or 21 words is no scheme at all:
+    /// detection accepts BIP-39 only at 24 words, and no other scheme uses
+    /// these lengths.
+    #[test]
+    fn oracle_phrases_of_other_lengths_report_no_scheme(
+        entropy_len in prop::sample::select(&[20_usize, 24, 28][..]),
+        bytes in prop::collection::vec(any::<u8>(), 28),
+    ) {
+        let oracle = Mnemonic::from_entropy(&bytes[..entropy_len])
+            .expect("160, 192, and 224 bits are valid BIP-39 entropy lengths");
+
+        prop_assert!(!is_bip39_24_phrase(&oracle.words().collect::<Vec<_>>()));
+        prop_assert_eq!(
+            detect_mnemonic_schemes(oracle.words().map(str::to_owned).collect()),
+            vec![]
+        );
     }
 }
 
