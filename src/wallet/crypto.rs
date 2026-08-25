@@ -185,14 +185,15 @@ pub(crate) struct RotationKeys {
 /// [`TON_ACCOUNT_PATH`], independently of the other half. The derivation is
 /// infallible: a parsed [`RotationMnemonic`] always yields two keys.
 pub(crate) fn derive_rotation_keys(mnemonic: &RotationMnemonic) -> RotationKeys {
-    let derive = |half: &Bip39Half| {
-        signing_key(&derive_path(half.to_seed("").as_slice(), &TON_ACCOUNT_PATH))
-    };
-
     RotationKeys {
-        anchor: derive(mnemonic.anchor()),
-        signing: derive(mnemonic.signing()),
+        anchor: derive_half_key(mnemonic.anchor()),
+        signing: derive_half_key(mnemonic.signing()),
     }
+}
+
+/// Derives the Ed25519 account key represented by one mnemonic half.
+pub(crate) fn derive_half_key(half: &Bip39Half) -> SigningKey {
+    signing_key(&derive_path(half.to_seed("").as_slice(), &TON_ACCOUNT_PATH))
 }
 
 /// Generates the initial 12-word recovery phrase from one 128-bit draw.

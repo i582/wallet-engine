@@ -3,8 +3,9 @@ use std::sync::Arc;
 
 use futures::executor::block_on;
 use wallet_engine::{
-    CreateWalletRequest, CreatedWallet, ImportWalletRequest, Network, RecoveryPhrase,
-    SecretAccessReason, WalletDescriptor, WalletLifecycle, WalletLifecycleError,
+    CreateWalletRequest, CreatedWallet, ImportWalletRequest, KeyRotationMessageKind, Network,
+    PrepareKeyRotationRequest, PreparedKeyRotation, RecoveryPhrase, SecretAccessReason,
+    WalletDescriptor, WalletLifecycle, WalletLifecycleError,
 };
 
 use super::host::MemoryPlatformHost;
@@ -63,6 +64,18 @@ pub(crate) fn delete_wallet(
     LifecycleAction::Delete {
         operation: operation.into(),
         descriptor_from: descriptor_from.into(),
+    }
+}
+
+pub(crate) fn prepare_key_rotation(
+    operation: impl Into<String>,
+    descriptor_from: impl Into<String>,
+    message_kind: KeyRotationMessageKind,
+) -> LifecycleAction {
+    LifecycleAction::PrepareKeyRotation {
+        operation: operation.into(),
+        descriptor_from: descriptor_from.into(),
+        message_kind,
     }
 }
 
@@ -160,6 +173,24 @@ pub(crate) fn protected_secret_was_revealed(
     }
 }
 
+pub(crate) fn key_rotation_material_is(
+    operation: impl Into<String>,
+    message_kind: KeyRotationMessageKind,
+) -> LifecycleExpectation {
+    LifecycleExpectation::KeyRotationMaterialIs {
+        operation: operation.into(),
+        message_kind,
+    }
+}
+
+pub(crate) fn protected_secret_was_read_for_key_rotation(
+    descriptor_from: impl Into<String>,
+) -> LifecycleExpectation {
+    LifecycleExpectation::ProtectedSecretWasReadForKeyRotation {
+        descriptor_from: descriptor_from.into(),
+    }
+}
+
 pub(crate) fn protected_secret_is_deleted(
     descriptor_from: impl Into<String>,
 ) -> LifecycleExpectation {
@@ -205,6 +236,11 @@ pub(crate) enum LifecycleAction {
         operation: String,
         descriptor_from: String,
     },
+    PrepareKeyRotation {
+        operation: String,
+        descriptor_from: String,
+        message_kind: KeyRotationMessageKind,
+    },
     ReplaceProtectedSecret {
         target_descriptor: String,
         source_descriptor: String,
@@ -244,6 +280,13 @@ pub(crate) enum LifecycleExpectation {
         descriptor_from: String,
     },
     ProtectedSecretWasRevealed {
+        descriptor_from: String,
+    },
+    KeyRotationMaterialIs {
+        operation: String,
+        message_kind: KeyRotationMessageKind,
+    },
+    ProtectedSecretWasReadForKeyRotation {
         descriptor_from: String,
     },
     ProtectedSecretIsDeleted {
@@ -312,6 +355,7 @@ enum LifecycleResult {
     Created(Result<CreatedWallet, WalletLifecycleError>),
     Descriptor(Result<WalletDescriptor, WalletLifecycleError>),
     Phrase(Result<RecoveryPhrase, WalletLifecycleError>),
+    KeyRotation(Result<PreparedKeyRotation, WalletLifecycleError>),
     Unit(Result<(), WalletLifecycleError>),
 }
 
@@ -347,6 +391,22 @@ impl WalletLifecycleRunner {
                 let descriptor = self.descriptor(&descriptor_from)?.clone();
                 let result = block_on(self.lifecycle.delete_wallet(descriptor));
                 (operation, LifecycleResult::Unit(result))
+            }
+            LifecycleAction::PrepareKeyRotation {
+                operation,
+                descriptor_from,
+                message_kind,
+            } => {
+                let descriptor = self.descriptor(&descriptor_from)?.clone();
+                let result = block_on(self.lifecycle.prepare_key_rotation(
+                    PrepareKeyRotationRequest {
+                        descriptor,
+                        seqno: 7,
+                        valid_until: 1_900_000_000,
+                        message_kind,
+                    },
+                ));
+                (operation, LifecycleResult::KeyRotation(result))
             }
             LifecycleAction::ReplaceProtectedSecret {
                 target_descriptor,
@@ -467,6 +527,46 @@ impl WalletLifecycleRunner {
                     ))
                 }
             }
+            LifecycleExpectation::KeyRotationMaterialIs {
+                operation,
+                message_kind,
+            } => match self.results.get(&operation) {
+                Some(LifecycleResult::KeyRotation(Ok(prepared)))
+                    if prepared
+                        .replacement_recovery_phrase
+                        .phrase
+                        .split_ascii_whitespace()
+                        .count()
+                        == 24
+                        && prepared.new_public_key.len() == 32
+                        && prepared.seqno == 7
+                        && prepared.valid_until == 1_900_000_000
+                        && prepared.message_kind == message_kind =>
+                {
+                    Ok(())
+                }
+                Some(LifecycleResult::KeyRotation(Ok(_))) => {
+                    Err(format!("rotation material `{operation}` is incomplete"))
+                }
+                Some(LifecycleResult::KeyRotation(Err(error))) => Err(format!(
+                    "rotation preparation `{operation}` failed: {error}"
+                )),
+                Some(_) => Err(format!("operation `{operation}` is not a key rotation")),
+                None => Err(format!("operation `{operation}` does not exist")),
+            },
+            LifecycleExpectation::ProtectedSecretWasReadForKeyRotation { descriptor_from } => {
+                let secret_ref = &self.descriptor(&descriptor_from)?.secret_ref;
+                if self
+                    .host
+                    .secret_was_read_for(secret_ref, SecretAccessReason::PrepareKeyRotation)
+                {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "secret for `{descriptor_from}` was not read for key rotation"
+                    ))
+                }
+            }
             LifecycleExpectation::ProtectedSecretIsDeleted { descriptor_from } => {
                 let secret_ref = &self.descriptor(&descriptor_from)?.secret_ref;
                 if self.host.secret_exists(secret_ref) {
@@ -525,6 +625,7 @@ impl WalletLifecycleRunner {
             Some(LifecycleResult::Created(Err(error)))
             | Some(LifecycleResult::Descriptor(Err(error)))
             | Some(LifecycleResult::Phrase(Err(error)))
+            | Some(LifecycleResult::KeyRotation(Err(error)))
             | Some(LifecycleResult::Unit(Err(error))) => error,
             Some(_) => return Err(format!("operation `{operation}` succeeded")),
             None => return Err(format!("operation `{operation}` does not exist")),
