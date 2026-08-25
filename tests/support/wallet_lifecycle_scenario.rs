@@ -9,12 +9,51 @@ use wallet_engine::{
 };
 
 use super::host::MemoryPlatformHost;
+use super::localnet::LocalnetHttpHost;
+use super::test_wallet::test_wallet;
 
 pub(crate) fn wallet_lifecycle_scenario(name: impl Into<String>) -> WalletLifecycleScenario {
     WalletLifecycleScenario {
         name: name.into(),
         steps: Vec::new(),
     }
+}
+
+pub(crate) fn execute_prepared_key_rotation_on_localnet() -> Result<(), String> {
+    let platform_host = Arc::new(MemoryPlatformHost::default());
+    let lifecycle = WalletLifecycle::new(platform_host);
+    let fixture = test_wallet();
+    let descriptor = block_on(lifecycle.import_wallet(ImportWalletRequest {
+        record_id: "localnet-key-rotation".to_owned(),
+        network: Network::Testnet,
+        recovery_words: fixture.recovery_words(),
+    }))
+    .map_err(|error| error.to_string())?;
+    let localnet = LocalnetHttpHost::start(descriptor.address.as_str(), "5000000000")?;
+
+    localnet.spam_transfers(1)?;
+    let prepared = block_on(lifecycle.prepare_key_rotation(PrepareKeyRotationRequest {
+        descriptor,
+        seqno: 1,
+        valid_until: u64::from(u32::MAX),
+        message_kind: KeyRotationMessageKind::External,
+    }))
+    .map_err(|error| error.to_string())?;
+    localnet.submit_external_boc(&prepared.signed_boc, 2)?;
+
+    let expected_public_key = prepared
+        .new_public_key
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let actual_public_key = localnet.public_key_hex()?;
+    if actual_public_key != expected_public_key {
+        return Err(format!(
+            "expected rotated public key {expected_public_key}, got {actual_public_key}"
+        ));
+    }
+
+    Ok(())
 }
 
 pub(crate) fn create_wallet(

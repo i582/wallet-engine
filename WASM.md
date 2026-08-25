@@ -142,6 +142,27 @@ The list contains the 2048 English BIP-39 words accepted by the same
 recovery-phrase validation used for wallet import. Its order is the BIP-39
 index order.
 
+## Prepare key rotation
+
+Create the second mnemonic half and the signed Wallet rev00 request:
+
+```ts
+const prepared = await lifecycle.prepareKeyRotation({
+  descriptor,
+  seqno: freshSeqno,
+  validUntil,
+  messageKind: "external",
+})
+```
+
+This call requests the protected secret with reason `"prepareKeyRotation"`.
+It returns a complete 24-word phrase, the new public key, and a signed BOC. It
+does not change protected storage or submit the BOC.
+
+Before submission, store the phrase in protected storage. Store the pending
+BOC in a durable journal. Until the application resolves the on-chain result,
+block ordinary signing.
+
 ## Implement protected storage
 
 The package does not include an insecure recovery-phrase store. Implement the

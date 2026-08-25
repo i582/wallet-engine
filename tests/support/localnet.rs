@@ -406,6 +406,40 @@ impl LocalnetHttpHost {
         localnet.mine()
     }
 
+    /// Submits a complete external message without assuming an ordinary transfer body.
+    pub(super) fn submit_external_boc(&self, boc: &Boc, expected_seqno: u32) -> Result<(), String> {
+        let localnet = lock(&self.localnet);
+        let (status, body) = request(
+            &localnet.client,
+            Method::POST,
+            &format!("{}/api/v2/jsonRPC", localnet.base_url),
+            Some(&json!({
+                "jsonrpc": "2.0",
+                "id": "wallet-engine-localnet-raw-external",
+                "method": "sendBoc",
+                "params": { "boc": boc.to_base64() }
+            })),
+        )?;
+        if !(200..300).contains(&status)
+            || body.pointer("/result/@type").and_then(Value::as_str) != Some("ok")
+        {
+            return Err(format!(
+                "localnet raw external submission failed with HTTP {status}: {body}"
+            ));
+        }
+
+        for _ in 0..3 {
+            localnet.mine()?;
+        }
+        localnet.wait_for_state(&self.address, "active", Some(expected_seqno))
+    }
+
+    /// Returns the wallet's current public key as normalized lowercase hexadecimal.
+    pub(super) fn public_key_hex(&self) -> Result<String, String> {
+        let value = lock(&self.localnet).get_method_number(&self.address, "get_public_key")?;
+        normalize_u256_hex(&value)
+    }
+
     fn execute(&self, request: &HttpRequest) -> Result<HttpResponse, HttpHostError> {
         if lock(&self.cancelled).remove(&request.id) {
             return Err(host_error(
@@ -789,25 +823,31 @@ impl Localnet {
     }
 
     fn seqno(&self, address: &str) -> Result<u32, String> {
+        let encoded = self.get_method_number(address, "seqno")?;
+        u32::from_str_radix(encoded.trim_start_matches("0x"), 16).map_err(|error| error.to_string())
+    }
+
+    fn get_method_number(&self, address: &str, method: &str) -> Result<String, String> {
         let (status, body) = request(
             &self.client,
             Method::POST,
             &format!("{}/api/v2/jsonRPC", self.base_url),
             Some(&json!({
                 "jsonrpc": "2.0",
-                "id": "wallet-engine-localnet-seqno",
+                "id": format!("wallet-engine-localnet-{method}"),
                 "method": "runGetMethod",
-                "params": { "address": address, "method": "seqno", "stack": [] }
+                "params": { "address": address, "method": method, "stack": [] }
             })),
         )?;
         if !(200..300).contains(&status) {
-            return Err(format!("seqno request failed with HTTP {status}: {body}"));
+            return Err(format!(
+                "{method} request failed with HTTP {status}: {body}"
+            ));
         }
-        let encoded = body
-            .pointer("/result/stack/0/1")
+        body.pointer("/result/stack/0/1")
             .and_then(Value::as_str)
-            .ok_or_else(|| format!("seqno response has no numeric stack value: {body}"))?;
-        u32::from_str_radix(encoded.trim_start_matches("0x"), 16).map_err(|error| error.to_string())
+            .map(str::to_owned)
+            .ok_or_else(|| format!("{method} response has no numeric stack value: {body}"))
     }
 
     fn failure(&mut self, message: &str) -> String {
@@ -871,4 +911,17 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     }
+}
+
+fn normalize_u256_hex(value: &str) -> Result<String, String> {
+    let digits = value.strip_prefix("0x").unwrap_or(value);
+    if digits.is_empty()
+        || digits.len() > 64
+        || !digits.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(format!(
+            "get_public_key returned an invalid uint256: {value}"
+        ));
+    }
+    Ok(format!("{:0>64}", digits.to_ascii_lowercase()))
 }

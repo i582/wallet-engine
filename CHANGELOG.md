@@ -2,6 +2,12 @@
 
 This file records user-visible changes to Wallet Engine.
 
+## [0.0.6] - 2026-08-25
+
+### Added
+
+- Added `WalletLifecycle::prepare_key_rotation` and platform bindings. It creates the second 12-word half, both contract signatures, and the signed key-change BOC.
+
 ## [0.0.5] - 2026-08-25
 
 ### Added

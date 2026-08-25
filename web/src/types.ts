@@ -252,6 +252,7 @@ export interface ProtectedSecretRead {
     | "createWallet"
     | "signTransfer"
     | "signTonConnectProof"
+    | "prepareKeyRotation"
     | "encryptComment"
     | "decryptComment"
     | "revealRecoveryPhrase"
@@ -309,6 +310,25 @@ export interface RecoveryPhrase {
 export interface CreatedWallet {
   readonly descriptor: WalletDescriptor
   readonly recoveryPhrase: RecoveryPhrase
+}
+
+export type KeyRotationMessageKind = "external" | "internal"
+
+export interface PrepareKeyRotationRequest {
+  readonly descriptor: WalletDescriptor
+  readonly seqno: number
+  readonly validUntil: number
+  readonly messageKind: KeyRotationMessageKind
+}
+
+export interface PreparedKeyRotation {
+  readonly replacementRecoveryPhrase: RecoveryPhrase
+  readonly newPublicKey: number[]
+  /** Complete external or relaxed internal signed message in Base64 BOC form. */
+  readonly signedBoc: string
+  readonly seqno: number
+  readonly validUntil: number
+  readonly messageKind: KeyRotationMessageKind
 }
 
 export interface HostFailure {

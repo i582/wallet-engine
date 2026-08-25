@@ -93,6 +93,12 @@ fn key_rotation_preparation_rejects_an_already_rotated_phrase() {
 }
 
 #[test]
+fn prepared_external_key_rotation_executes_on_the_wallet_contract() {
+    execute_prepared_key_rotation_on_localnet()
+        .expect("the Wallet contract must accept the engine's prepared key rotation");
+}
+
+#[test]
 fn network_changes_the_wallet_contract_address() {
     let words = test_wallet().recovery_words();
 

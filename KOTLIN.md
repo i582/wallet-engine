@@ -94,6 +94,30 @@ The list contains the 2048 English BIP-39 words accepted by the same
 recovery-phrase validation used for wallet import. Its order is the BIP-39
 index order.
 
+## Prepare key rotation
+
+Create the second mnemonic half and the signed Wallet rev00 request:
+
+```kotlin
+val prepared = lifecycle.prepareKeyRotation(
+    PrepareKeyRotationRequest(
+        descriptor = descriptor,
+        seqno = freshSeqno,
+        validUntil = validUntil,
+        messageKind = KeyRotationMessageKind.EXTERNAL,
+    ),
+)
+```
+
+This call requests the protected secret with
+`SecretAccessReason.PREPARE_KEY_ROTATION`. It returns a complete 24-word phrase,
+the new public key, and a signed BOC. It does not change protected storage or
+submit the BOC.
+
+Before submission, store the phrase in protected storage. Store the pending
+BOC in a durable journal. Until the application resolves the on-chain result,
+block ordinary signing.
+
 ## Enriched activity
 
 Every nonzero transfer returned in `WalletSnapshot.activity.items` includes

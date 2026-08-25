@@ -18,6 +18,7 @@ use super::mnemonic::{Bip39Half, ENTROPY_LEN, RotationMnemonic};
 use crate::{Boc, Network, TonAddressString};
 
 const KEY_ROTATION_PROOF_TAG: &[u8; 12] = b"KEY_ROTATION";
+const KEY_ROTATION_PROOF_TAG_BITS: usize = 96;
 const CHANGE_PUBLIC_KEY_INTERNAL_OPCODE: u32 = 0xfbba_99c7;
 const CHANGE_PUBLIC_KEY_EXTERNAL_OPCODE: u32 = 0xfbba_99c8;
 const SIGNATURE_BITS: usize = 512;
@@ -80,10 +81,10 @@ pub(crate) fn prepare_key_rotation(
         }
 
         return prepare_with_new_half(
-            current,
-            current_keys.anchor,
-            new_half,
-            new_key,
+            &current,
+            &current_keys.anchor,
+            &new_half,
+            &new_key,
             &wallet.address,
             wallet.wallet_id,
             seqno,
@@ -100,10 +101,10 @@ pub(crate) fn prepare_key_rotation(
     reason = "all signed header and identity fields stay explicit at the cryptographic boundary"
 )]
 fn prepare_with_new_half(
-    current: RotationMnemonic,
-    current_key: SigningKey,
-    new_half: Bip39Half,
-    new_key: SigningKey,
+    current: &RotationMnemonic,
+    current_key: &SigningKey,
+    new_half: &Bip39Half,
+    new_key: &SigningKey,
     wallet_address: &TonAddress,
     wallet_id: i32,
     seqno: u32,
@@ -127,7 +128,7 @@ fn prepare_with_new_half(
         proof_signature.to_bytes(),
     )
     .map_err(|_| KeyRotationError::Preparation)?;
-    let signed_request = sign_cell(&current_key, &request)?;
+    let signed_request = sign_cell(current_key, &request)?;
     let message = wrap_signed_request(wallet_address, message_kind, signed_request)?;
     let signed_boc = Boc::try_from(
         message
@@ -156,7 +157,7 @@ fn build_rotation_proof(wallet_address: &TonAddress) -> Result<TonCell, TonCoreE
         TonCoreError::Custom("Wallet key-rotation proof requires an int8 workchain".to_owned())
     })?;
     let mut builder = TonCell::builder();
-    builder.write_bits(KEY_ROTATION_PROOF_TAG, KEY_ROTATION_PROOF_TAG.len() * 8)?;
+    builder.write_bits(KEY_ROTATION_PROOF_TAG, KEY_ROTATION_PROOF_TAG_BITS)?;
     builder.write_num(&u8::from_be_bytes(workchain.to_be_bytes()), 8)?;
     builder.write_bits(wallet_address.hash.as_slice(), PUBLIC_KEY_BITS)?;
     builder.build()
@@ -336,9 +337,20 @@ mod tests {
             .as_str()
             .expect("replacement phrase is UTF-8");
         let parsed = RotationMnemonic::parse(replacement).expect("replacement phrase parses");
+        let replacement_keys = derive_rotation_keys(&parsed);
 
         assert_eq!(replacement.split_whitespace().count(), 24);
         assert!(!parsed.is_pre_rotation());
+        assert_eq!(
+            replacement_keys.anchor.verifying_key().to_bytes(),
+            wallet.key_pair.public_key,
+            "rotation must preserve the address anchor"
+        );
+        assert_eq!(
+            replacement_keys.signing.verifying_key().to_bytes(),
+            material.new_public_key,
+            "words 13-24 must recover the key sent to the contract"
+        );
         assert_ne!(
             material.new_public_key, wallet.key_pair.public_key,
             "the contract rejects rotation to its current key"
@@ -424,10 +436,10 @@ mod tests {
         )
         .expect("request builds");
         let material = prepare_with_new_half(
-            current,
-            current_key,
-            new_half,
-            new_key,
+            &current,
+            &current_key,
+            &new_half,
+            &new_key,
             &wallet.address,
             wallet.wallet_id,
             SEQNO,
@@ -481,7 +493,7 @@ mod tests {
         let mut parser = proof.parser();
         assert_eq!(
             parser
-                .read_bits(KEY_ROTATION_PROOF_TAG.len() * 8)
+                .read_bits(KEY_ROTATION_PROOF_TAG_BITS)
                 .expect("proof tag"),
             KEY_ROTATION_PROOF_TAG
         );

@@ -176,11 +176,11 @@ pub struct PrepareKeyRotationRequest {
 
 /// One-shot data prepared for a Wallet rev00 signing-key rotation.
 ///
-/// This value does not mean that rotation succeeded on-chain. Before the host
-/// submits `signed_boc`, it must durably replace the protected 12-word phrase
-/// with `replacement_recovery_phrase`. Words 13-24 are the newly generated
-/// signing half. The host must block ordinary signing until it confirms or
-/// safely abandons the rotation attempt.
+/// This value does not mean that rotation succeeded on-chain. Before
+/// submission, the host must store `replacement_recovery_phrase` in protected
+/// storage. It must store `signed_boc` as a pending durable record. Words 13-24
+/// are the new signing half. Until chain state resolves the request, the host
+/// must block ordinary signing.
 #[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct PreparedKeyRotation {

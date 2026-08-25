@@ -180,6 +180,8 @@ QString secret_reason_text(SecretAccessReason reason) {
         return QStringLiteral("sign-transfer");
     case SecretAccessReason::kSignTonConnectProof:
         return QStringLiteral("sign-ton-connect-proof");
+    case SecretAccessReason::kPrepareKeyRotation:
+        return QStringLiteral("prepare-key-rotation");
     case SecretAccessReason::kEncryptComment:
         return QStringLiteral("encrypt-comment");
     case SecretAccessReason::kDecryptComment:
