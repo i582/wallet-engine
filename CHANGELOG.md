@@ -2,6 +2,19 @@
 
 This file records user-visible changes to Wallet Engine.
 
+## [0.0.5] - 2026-08-25
+
+### Added
+
+- Added `WalletStatuslessHost` and `WalletClient::new_statusless`, including generated platform bindings, for relays and protocol proxies that return only a provider body or an opaque host error.
+- Added a runnable TypeScript provider-transport example covering both metadata-rich HTTP and body-only relay integrations.
+
+### Fixed
+
+- Strict `ton://transfer/` parsing now rejects control characters, ambiguous normalized paths and authorities, and noncanonical raw recipient or jetton-master addresses.
+- TON Connect device information now accepts the legacy `"SendTransaction"` feature alongside its detailed descriptor while continuing to reject exact duplicates.
+- Status-less provider transports now recognize Toncenter error envelopes with explicit body codes, including rate limits and authentication failures.
+
 ## [0.0.4] - 2026-08-24
 
 ### Added
