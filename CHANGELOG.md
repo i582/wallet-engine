@@ -11,6 +11,7 @@ This file records user-visible changes to Wallet Engine.
 
 ### Fixed
 
+- Post-rotation Wallet rev00 requests now use the signing half of the recovery phrase while the account address and `StateInit` remain anchored to the first half.
 - Strict `ton://transfer/` parsing now rejects control characters, ambiguous normalized paths and authorities, and noncanonical raw recipient or jetton-master addresses.
 - TON Connect device information now accepts the legacy `"SendTransaction"` feature alongside its detailed descriptor while continuing to reject exact duplicates.
 - Status-less provider transports now recognize Toncenter error envelopes with explicit body codes, including rate limits and authentication failures.

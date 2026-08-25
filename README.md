@@ -295,15 +295,16 @@ outgoing messages
 Wallet V3R1 through V5R1 have no rotatable signing key, and the TEP forbids
 deploying them from a Rotation mnemonic.
 
-The engine embeds Wallet rev00. This revision is not declared final. The
-current lifecycle initializes it with the anchor public key and uses the anchor
-key to sign outgoing messages. The signing key is already derived but remains
-unused until key rotation is wired into the engine.
+The engine embeds Wallet rev00. This revision is not declared final. Its
+initial `StateInit` and address use the anchor public key. Ordinary external
+and owner-authorized internal requests use the signing key. Before rotation
+the two keys are equal. After rotation a 24-word phrase can sign requests for
+an already active account without changing its address.
 
-On import the signing key derived from words 13–24 is compared with the key
-stored in the account. A mismatch means the phrase carries an outdated signing
-half and is treated as invalid
-([section 13.2](https://github.com/ton-blockchain/TEPs/blob/master/text/0003-wallets.md#132-import-and-recovery)).
+The engine does not yet construct the one-time on-chain key-change request or
+compare an imported signing key with the key stored in an active account. It
+therefore rejects deployment from a post-rotation 24-word phrase: the initial
+contract still expects the anchor key until that on-chain change has happened.
 
 ### Host and API impact
 
