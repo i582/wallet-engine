@@ -118,13 +118,8 @@ impl wallet_engine::WalletStatuslessHost for StatuslessHostAdapter {
         request: HttpRequest,
     ) -> Result<Vec<u8>, StatuslessHostError> {
         let argument = to_value(&request).map_err(|value| statusless_rejection(&value))?;
-        let promise = invoke_promise(
-            &STATUSLESS_HOSTS,
-            self.id,
-            "executeStatusless",
-            &[argument],
-        )
-        .map_err(|value| statusless_rejection(&value))?;
+        let promise = invoke_promise(&STATUSLESS_HOSTS, self.id, "executeStatusless", &[argument])
+            .map_err(|value| statusless_rejection(&value))?;
         let value = SendJsFuture::new(promise)
             .await
             .map_err(|value| statusless_rejection(&value))?;
@@ -135,12 +130,9 @@ impl wallet_engine::WalletStatuslessHost for StatuslessHostAdapter {
         let Ok(argument) = to_value(&request_id) else {
             return;
         };
-        let Ok(promise) = invoke_promise(
-            &STATUSLESS_HOSTS,
-            self.id,
-            "cancelStatusless",
-            &[argument],
-        ) else {
+        let Ok(promise) =
+            invoke_promise(&STATUSLESS_HOSTS, self.id, "cancelStatusless", &[argument])
+        else {
             return;
         };
         let _ = SendJsFuture::new(promise).await;

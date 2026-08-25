@@ -140,5 +140,34 @@ jobs:
       - name: Run tests
         run: just test-rust
 
+  tui:
+    name: TUI example
+    runs-on: ubicloud-standard-8-ubuntu-2204
+    timeout-minutes: 20
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          key: ${{ runner.os }}-${{ runner.arch }}-tui
+          save-if: ${{ github.ref == 'refs/heads/master' }}
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install
+
+      - name: Install TUI test tools
+        uses: taiki-e/install-action@15449e3094499af05d8d964a1c884208e4b8b595 # v2.81.11
+        with:
+          tool: just@1.52.0,nextest@0.9.137
+          fallback: none
+
       - name: Check TUI example
         run: just tui-check
