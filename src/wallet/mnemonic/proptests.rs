@@ -36,6 +36,14 @@ const WORD_SLOT_CASES: u32 = 1179;
 /// `p = 1 - (255/256)^16`, which needs this many cases.
 const ENTROPY_BYTE_CASES: u32 = 111;
 
+/// Cases for the 24-word detection property.
+///
+/// Detection only accepts or rejects, so the rarest event it relies on is a
+/// swapped list word whose phrase still checksums: one swap in 256, since a
+/// 24-word phrase carries an 8-bit checksum. That event is missed by `n`
+/// draws with `(255/256)^n`, which needs this many cases at `d = 0.001`.
+const BIP39_24_SWAP_CASES: u32 = 1765;
+
 /// Cases for a seed property whose case draws both halves.
 ///
 /// Thirty-two entropy bytes per case double `p`, so half the cases cover the
@@ -256,6 +264,33 @@ proptest! {
             "{} words must be rejected",
             count
         );
+    }
+}
+
+proptest! {
+    #![proptest_config(config(BIP39_24_SWAP_CASES))]
+
+    /// Every 24-word phrase the oracle emits is detected as BIP-39, and one
+    /// swapped list word keeps or breaks detection exactly as the oracle
+    /// decides, including the one-in-256 swaps that still checksum.
+    #[test]
+    fn detects_24_word_phrases_as_the_oracle_does(
+        entropy in any::<[u8; BIP39_24_ENTROPY_LEN]>(),
+        position in 0_usize..BIP39_24_WORD_COUNT,
+        replacement in 0_usize..WORDLIST_LEN,
+    ) {
+        let oracle = Mnemonic::from_entropy(&entropy)
+            .expect("256 bits is a valid BIP-39 entropy length");
+        let mut words = oracle.words().map(str::to_owned).collect::<Vec<_>>();
+        prop_assert!(is_bip39_24_phrase(
+            &words.iter().map(String::as_str).collect::<Vec<_>>()
+        ));
+
+        words[position] = oracle_wordlist()[replacement].to_owned();
+        let ours = is_bip39_24_phrase(&words.iter().map(String::as_str).collect::<Vec<_>>());
+        let theirs = Mnemonic::parse_normalized(&words.join(" ")).is_ok();
+
+        prop_assert_eq!(ours, theirs, "{}", words.join(" "));
     }
 }
 

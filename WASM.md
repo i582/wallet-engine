@@ -142,6 +142,28 @@ The list contains the 2048 English BIP-39 words accepted by the same
 recovery-phrase validation used for wallet import. Its order is the BIP-39
 index order.
 
+## Mnemonic scheme detection
+
+Classify entered recovery words to explain a failed import:
+
+```ts
+import {detectMnemonicSchemes} from "@ton/wallet-engine"
+
+const schemes = await detectMnemonicSchemes(enteredWords)
+if (schemes.includes("rotation")) {
+  // importWallet accepts this phrase.
+} else if (schemes.length > 0) {
+  // A TON ("ton") or 24-word BIP-39 ("bip39") phrase from another
+  // wallet scheme. Explain that in your own product wording.
+} else {
+  // Not a known mnemonic.
+}
+```
+
+Pass the words exactly as you would pass them to `importWallet`. Only
+`"rotation"` phrases can be imported; `"ton"` and `"bip39"` are detection only
+and the engine derives no keys from them.
+
 ## Implement protected storage
 
 The package does not include an insecure recovery-phrase store. Implement the

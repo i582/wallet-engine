@@ -2,6 +2,12 @@
 
 This file records user-visible changes to Wallet Engine.
 
+## [Unreleased]
+
+### Added
+
+- Added `detect_mnemonic_schemes`, which reports every scheme under which entered recovery words validate: `rotation` (importable), plus detection-only `ton` (passwordless legacy TON mnemonic) and `bip39` (24-word Multichain mnemonic). Applications use it to explain why an import was rejected; the engine still derives keys only from Rotation mnemonics.
+
 ## [0.0.4] - 2026-08-24
 
 ### Added

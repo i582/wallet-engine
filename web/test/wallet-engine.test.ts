@@ -6,6 +6,7 @@ import {
   WalletClient,
   WalletLifecycle,
   convertTonAddress,
+  detectMnemonicSchemes,
   initializeWalletEngine,
   isValidTonAddress,
   mnemonicWordlist,
@@ -164,6 +165,22 @@ describe("high-level WASM API", () => {
     expect(words).toHaveLength(2048)
     expect(words[0]).toBe("abandon")
     expect(words.at(-1)).toBe("zoo")
+  })
+
+  test("detects the scheme of entered recovery words", async () => {
+    const rotation12 =
+      "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+    const ton24 =
+      "dose ice enrich trigger test dove century still betray gas diet dune " +
+      "use other base gym mad law immense village world example praise game"
+    const bip3924 =
+      "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon " +
+      "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art"
+
+    expect(await detectMnemonicSchemes(rotation12.split(" "))).toEqual(["rotation"])
+    expect(await detectMnemonicSchemes(ton24.split(" "))).toEqual(["ton"])
+    expect(await detectMnemonicSchemes(bip3924.split(" "))).toEqual(["bip39"])
+    expect(await detectMnemonicSchemes(["not", "a", "mnemonic"])).toEqual([])
   })
 
   test("parses strict TON transfer links without form-decoding the query", async () => {
