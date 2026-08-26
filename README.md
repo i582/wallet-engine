@@ -115,9 +115,9 @@ Generated packages remain under `bindings/` and are intentionally ignored.
 An explicit `vMAJOR.MINOR.PATCH` tag creates one GitHub Release. SemVer
 pre-release tags are also supported.
 
-Each release contains native Linux and macOS libraries, a Swift package, an
-Android AAR, and a TypeScript package with WebAssembly. The release also
-contains checksums, a machine-readable manifest, and build provenance.
+Each release contains native Linux, macOS, and Windows libraries, a Swift
+package, an Android AAR, and a TypeScript package with WebAssembly. The release
+also contains checksums, a machine-readable manifest, and build provenance.
 
 Read [RELEASING.md](RELEASING.md) for the file list and the release procedure.
 

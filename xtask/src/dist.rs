@@ -151,6 +151,28 @@ fn create_tar_gz(staging_root: &Path, directory_name: &str, output: &Path) -> Re
     )
 }
 
+/// Creates a ZIP archive containing one top-level directory on Windows.
+fn create_zip(staging_root: &Path, directory_name: &str, output: &Path) -> Result<()> {
+    if output.exists() {
+        fs::remove_file(output)
+            .with_context(|| format!("failed to replace {}", output.display()))?;
+    }
+    let source = staging_root.join(directory_name);
+    run_command(
+        Command::new("powershell")
+            .env("WALLET_ENGINE_ZIP_SOURCE", source)
+            .env("WALLET_ENGINE_ZIP_OUTPUT", output)
+            .arg("-NoLogo")
+            .arg("-NoProfile")
+            .arg("-NonInteractive")
+            .arg("-Command")
+            .arg(
+                "Compress-Archive -LiteralPath $env:WALLET_ENGINE_ZIP_SOURCE \
+                 -DestinationPath $env:WALLET_ENGINE_ZIP_OUTPUT -CompressionLevel Optimal -Force",
+            ),
+    )
+}
+
 /// Computes the lowercase SHA-256 digest of one release asset.
 fn sha256(path: &Path) -> Result<String> {
     let mut file =
