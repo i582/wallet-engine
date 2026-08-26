@@ -2,11 +2,20 @@
 
 This file records user-visible changes to Wallet Engine.
 
-## [0.0.6] - 2026-08-25
+## [0.0.6] - 2026-08-26
 
 ### Added
 
 - Added `WalletLifecycle::prepare_key_rotation` and platform bindings. It creates the second 12-word half, both contract signatures, and the signed key-change BOC.
+- Added Windows x86-64 MSVC release archives with the static library, DLL, import library, and C++ wrapper.
+
+### Changed
+
+- **Breaking:** Wallet derivation and signing now use the embedded Wallet rev00 contract instead of the experimental Wallet V5 placeholder, including its contract code, subwallet IDs, state layout, and external and internal request encoding.
+
+### Fixed
+
+- Post-rotation Wallet rev00 requests now use the signing half of the recovery phrase while the account address and `StateInit` remain anchored to the first half. Deployment from a post-rotation phrase is rejected until the account is active on-chain.
 
 ## [0.0.5] - 2026-08-25
 
