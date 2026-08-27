@@ -346,7 +346,6 @@ impl RotationMnemonic {
     }
 
     /// Whether both halves are identical, i.e. the key was never rotated.
-    #[cfg(test)]
     pub(crate) fn is_pre_rotation(&self) -> bool {
         self.anchor.words == self.signing.words
     }

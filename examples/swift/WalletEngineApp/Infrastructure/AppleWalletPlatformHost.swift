@@ -135,6 +135,8 @@ actor AppleWalletProtectedSecretStore {
             "Authenticate to sign this GRAM transfer."
         case .signTonConnectProof:
             "Authenticate to prove ownership of this wallet."
+        case .prepareKeyRotation:
+            "Authenticate to create a new wallet signing key."
         case .encryptComment:
             "Authenticate to encrypt this transfer comment."
         case .decryptComment:

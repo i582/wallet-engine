@@ -352,7 +352,7 @@ fn version_from_code(code: &TonCell) -> Result<Option<StandardWalletVersion>, Wa
         "20834b7b72b112147e1b2fb457b84e74d1a30f04f737d4f62a668e9552d2b72f" => {
             Some(StandardWalletVersion::V5R1)
         }
-        "99cca09ed5dfc604fbfe67e1d2d69a00ba74852b2365a23b49628b5633797898" => {
+        "3791f4bfbb8a2f697a5ce3598fdceeaaa0ead0badded8473a35fb69f76b021e5" => {
             Some(StandardWalletVersion::Wallet)
         }
         _ => None,
@@ -378,7 +378,8 @@ fn extract_public_key(
         | StandardWalletVersion::V3R2
         | StandardWalletVersion::V4R1
         | StandardWalletVersion::V4R2 => 64,
-        StandardWalletVersion::V5R1 | StandardWalletVersion::Wallet => 65,
+        StandardWalletVersion::V5R1 => 65,
+        StandardWalletVersion::Wallet => 72,
     };
     let _ = parser
         .read_bits(prefix_bits)
@@ -391,10 +392,7 @@ fn extract_public_key(
 
     if matches!(
         version,
-        StandardWalletVersion::V4R1
-            | StandardWalletVersion::V4R2
-            | StandardWalletVersion::V5R1
-            | StandardWalletVersion::Wallet
+        StandardWalletVersion::V4R1 | StandardWalletVersion::V4R2 | StandardWalletVersion::V5R1
     ) && parser
         .read_bit()
         .map_err(|_| WalletStateError::InvalidWalletData)?
@@ -485,19 +483,21 @@ mod tests {
                 builder.write_num(&0_u32, 32)?;
                 builder.write_num(&0x29a9_a317_u32, 32)?;
             }
-            StandardWalletVersion::V5R1 | StandardWalletVersion::Wallet => {
+            StandardWalletVersion::V5R1 => {
                 builder.write_bit(true)?;
                 builder.write_num(&0_u32, 32)?;
                 builder.write_num(&0x7fff_ff11_u32, 32)?;
+            }
+            StandardWalletVersion::Wallet => {
+                builder.write_num(&0_u8, 8)?;
+                builder.write_num(&0_u32, 32)?;
+                builder.write_num(&0x7fff_7f11_u32, 32)?;
             }
         }
         builder.write_bits(public_key, 256)?;
         if matches!(
             version,
-            StandardWalletVersion::V4R1
-                | StandardWalletVersion::V4R2
-                | StandardWalletVersion::V5R1
-                | StandardWalletVersion::Wallet
+            StandardWalletVersion::V4R1 | StandardWalletVersion::V4R2 | StandardWalletVersion::V5R1
         ) {
             builder.write_bit(false)?;
         }

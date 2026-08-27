@@ -17,7 +17,9 @@ use ton::ton_core::errors::TonCoreError;
 use ton::ton_core::traits::tlb::TLB;
 use ton::ton_core::types::TonAddress;
 use ton::ton_core::types::tlb_core::{MsgAddressExt, TLBCoins, TLBEitherRef};
-use ton::ton_wallet::{WALLET_V5R1_ID_DEFAULT, WALLET_V5R1_ID_DEFAULT_TESTNET, WalletVersion};
+use ton::ton_wallet::{
+    WALLET_SUBWALLET_ID_DEFAULT, WALLET_SUBWALLET_ID_DEFAULT_TESTNET, WalletVersion,
+};
 
 use crate::types::{Boc, BocError};
 use crate::{
@@ -44,6 +46,8 @@ pub(crate) enum TransferError {
     ExpirationOutOfRange,
     #[error("wallet public key does not derive the configured source address")]
     PublicKeyMismatch,
+    #[error("a rotated recovery phrase requires an already deployed wallet")]
+    RotatedWalletRequiresActiveAccount,
     #[error("internal message construction failed")]
     InternalMessage(#[source] TonCoreError),
     #[error("external message signing failed")]
@@ -71,6 +75,9 @@ pub(crate) fn prepare_transfer(
 ) -> Result<PreparedTransfer, TransferError> {
     let mnemonic = std::str::from_utf8(mnemonic_bytes).map_err(TransferError::MnemonicEncoding)?;
     let wallet = derive_wallet(mnemonic, network).map_err(TransferError::WalletDerivation)?;
+    if account.needs_state_init() && !wallet.is_pre_rotation() {
+        return Err(TransferError::RotatedWalletRequiresActiveAccount);
+    }
     let _ = request.intent.exact_value_total()?;
     let messages = request.intent.messages.clone();
     let (internal, send_modes) = build_internal_messages(&messages)?;
@@ -130,6 +137,9 @@ pub(crate) fn prepare_internal_signed_transfer(
 ) -> Result<PreparedTransfer, TransferError> {
     let mnemonic = std::str::from_utf8(mnemonic_bytes).map_err(TransferError::MnemonicEncoding)?;
     let wallet = derive_wallet(mnemonic, network).map_err(TransferError::WalletDerivation)?;
+    if account.needs_state_init() && !wallet.is_pre_rotation() {
+        return Err(TransferError::RotatedWalletRequiresActiveAccount);
+    }
     let _ = request.intent.exact_value_total()?;
     let messages = request.intent.messages.clone();
     let (internal, send_modes) = build_internal_messages(&messages)?;
@@ -187,8 +197,8 @@ pub(crate) fn prepare_transfer_emulation(
     let _ = request.intent.exact_value_total()?;
     let (internal, send_modes) = build_internal_messages(&request.intent.messages)?;
     let wallet_id = match network {
-        Network::Mainnet => WALLET_V5R1_ID_DEFAULT,
-        Network::Testnet => WALLET_V5R1_ID_DEFAULT_TESTNET,
+        Network::Mainnet => WALLET_SUBWALLET_ID_DEFAULT,
+        Network::Testnet => WALLET_SUBWALLET_ID_DEFAULT_TESTNET,
     };
 
     // Keep the preview path identical to real signing: only wallet message
@@ -206,14 +216,14 @@ pub(crate) fn prepare_transfer_emulation(
     )
     .map_err(TransferError::ExternalMessage)?;
 
-    // V5 stores the signature after the body. Zero bytes are deliberate: the
-    // Emulate API skips only this cryptographic check and executes everything else.
+    // Wallet stores the signature before the request. Zero bytes are deliberate:
+    // the Emulate API skips only this cryptographic check and executes everything else.
     let mut signed = TonCell::builder();
     signed
-        .write_cell(&body)
+        .write_bits([0_u8; 64], 512)
         .map_err(TransferError::InternalMessage)?;
     signed
-        .write_bits([0_u8; 64], 512)
+        .write_cell(&body)
         .map_err(TransferError::InternalMessage)?;
     let signed = signed.build().map_err(TransferError::InternalMessage)?;
     let info = CommonMsgInfo::ExtIn(CommonMsgInfoExtIn {
@@ -313,12 +323,17 @@ mod tests {
     use std::str::FromStr;
 
     use crate::{SendExpiration, SendIntent};
+    use ed25519_dalek::{Signature, VerifyingKey};
     use ton::block_tlb::CommonMsgInfo;
     use ton::ton_core::types::tlb_core::MsgAddress;
+    use ton::ton_wallet::WalletExtMsgBody;
 
     use super::*;
 
     const DESTINATION: &str = "0:2222222222222222222222222222222222222222222222222222222222222222";
+    const PRE_ROTATION_MNEMONIC: &str =
+        "notice tortoise soup strong gun divide offer process salon siren general carry";
+    const ROTATED_MNEMONIC: &str = "notice tortoise soup strong gun divide offer process salon siren general carry clump left year void clutch tool case burden fix income champion lounge";
 
     #[test]
     fn serialized_internal_message_is_non_bounceable() {
@@ -575,9 +590,7 @@ mod tests {
 
     #[test]
     fn internal_signing_preserves_the_ordered_batch_and_deployment_state() {
-        const MNEMONIC: &str = "notice tortoise soup strong gun divide offer process salon siren general carry clump left year void clutch tool case burden fix income champion lounge";
-
-        let source = derive_source(MNEMONIC.as_bytes(), Network::Testnet)
+        let source = derive_source(PRE_ROTATION_MNEMONIC.as_bytes(), Network::Testnet)
             .expect("fixture mnemonic derives a wallet");
         let source = TonAddressString::from_address(&source, Network::Testnet);
         let request = SendRequest {
@@ -608,7 +621,7 @@ mod tests {
         };
 
         let prepared = prepare_internal_signed_transfer(
-            MNEMONIC.as_bytes(),
+            PRE_ROTATION_MNEMONIC.as_bytes(),
             &NonEmptyString::try_from("record").expect("record id is valid"),
             &source,
             Network::Testnet,
@@ -628,10 +641,9 @@ mod tests {
         assert!(!info.bounce);
         assert!(outer.init.is_some());
 
-        let (body, signature) = ton::ton_wallet::WalletV5InternalSignedBody::read_signed(
-            &mut outer.body.value.parser(),
-        )
-        .expect("signed body decodes");
+        let (body, signature) =
+            ton::ton_wallet::WalletInternalSignedBody::read_signed(&mut outer.body.value.parser())
+                .expect("signed body decodes");
         assert_eq!(body.valid_until, 1_900_000_000);
         assert_eq!(body.msg_seqno, 0);
         assert_eq!(body.msgs_modes, vec![EXACT_AMOUNT_SEND_MODE; 2]);
@@ -653,6 +665,144 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(values, vec![1, 2]);
+    }
+
+    #[test]
+    fn rotated_wallet_requests_use_the_signing_key_and_anchor_address() {
+        let source = derive_source(ROTATED_MNEMONIC.as_bytes(), Network::Testnet)
+            .expect("rotated mnemonic derives its anchor wallet");
+        let source = TonAddressString::from_address(&source, Network::Testnet);
+        let request = single_message_request("rotated-signing");
+        let account = FreshSendAccount {
+            status: crate::AccountStatus::Active,
+            seqno: 7,
+        };
+        let record_id = NonEmptyString::try_from("record").expect("record id is valid");
+
+        let external = prepare_transfer(
+            ROTATED_MNEMONIC.as_bytes(),
+            &record_id,
+            &source,
+            Network::Testnet,
+            &request,
+            &account,
+            1_900_000_000,
+        )
+        .expect("external request builds");
+        let external = Msg::<TonCell>::from_boc(external.signed_boc.as_bytes().to_vec())
+            .expect("external request decodes");
+        let CommonMsgInfo::ExtIn(info) = &external.info else {
+            panic!("request must use an external envelope");
+        };
+        assert_eq!(info.dst, source.as_address().to_msg_address_int());
+        assert!(external.init.is_none());
+        let (body, signature) = WalletExtMsgBody::read_signed(&mut external.body.value.parser())
+            .expect("external signed body decodes");
+        assert_signed_by_signing_not_anchor(
+            ROTATED_MNEMONIC,
+            &body.to_cell().expect("external body serializes"),
+            &signature,
+        );
+
+        let internal = prepare_internal_signed_transfer(
+            ROTATED_MNEMONIC.as_bytes(),
+            &record_id,
+            &source,
+            Network::Testnet,
+            &request,
+            &account,
+            1_900_000_000,
+        )
+        .expect("internal request builds");
+        let internal = Msg::<TonCell>::from_boc(internal.signed_boc.as_bytes().to_vec())
+            .expect("internal request decodes");
+        let CommonMsgInfo::Int(info) = &internal.info else {
+            panic!("request must use an internal envelope");
+        };
+        assert_eq!(info.dst, source.as_address().to_msg_address());
+        assert!(internal.init.is_none());
+        let (body, signature) = ton::ton_wallet::WalletInternalSignedBody::read_signed(
+            &mut internal.body.value.parser(),
+        )
+        .expect("internal signed body decodes");
+        assert_signed_by_signing_not_anchor(
+            ROTATED_MNEMONIC,
+            &body.to_cell().expect("internal body serializes"),
+            &signature,
+        );
+    }
+
+    #[test]
+    fn rotated_wallet_cannot_be_deployed_from_a_post_rotation_phrase() {
+        let source = derive_source(ROTATED_MNEMONIC.as_bytes(), Network::Testnet)
+            .expect("rotated mnemonic derives its anchor wallet");
+        let source = TonAddressString::from_address(&source, Network::Testnet);
+        let request = single_message_request("rotated-deployment");
+        let account = FreshSendAccount {
+            status: crate::AccountStatus::Uninitialized,
+            seqno: 0,
+        };
+        let record_id = NonEmptyString::try_from("record").expect("record id is valid");
+
+        assert!(matches!(
+            prepare_transfer(
+                ROTATED_MNEMONIC.as_bytes(),
+                &record_id,
+                &source,
+                Network::Testnet,
+                &request,
+                &account,
+                1_900_000_000,
+            ),
+            Err(TransferError::RotatedWalletRequiresActiveAccount)
+        ));
+        assert!(matches!(
+            prepare_internal_signed_transfer(
+                ROTATED_MNEMONIC.as_bytes(),
+                &record_id,
+                &source,
+                Network::Testnet,
+                &request,
+                &account,
+                1_900_000_000,
+            ),
+            Err(TransferError::RotatedWalletRequiresActiveAccount)
+        ));
+    }
+
+    fn assert_signed_by_signing_not_anchor(mnemonic: &str, body: &TonCell, signature: &[u8]) {
+        let wallet = derive_wallet(mnemonic, Network::Testnet).expect("wallet derives");
+        let hash = body.cell_hash().expect("request body hashes");
+        let signature = Signature::from_slice(signature).expect("signature has 64 bytes");
+        let signing = VerifyingKey::from_bytes(&wallet.signing_public_key())
+            .expect("signing public key is valid");
+        let anchor = VerifyingKey::from_bytes(&wallet.key_pair.public_key)
+            .expect("anchor public key is valid");
+
+        signing
+            .verify_strict(hash.as_slice(), &signature)
+            .expect("signing key must verify the request");
+        assert!(
+            anchor.verify_strict(hash.as_slice(), &signature).is_err(),
+            "the distinct anchor key must not verify a post-rotation request"
+        );
+    }
+
+    fn single_message_request(operation_id: &str) -> SendRequest {
+        SendRequest {
+            operation_id: NonEmptyString::try_from(operation_id).expect("operation id is valid"),
+            force: false,
+            intent: SendIntent {
+                expiration: SendExpiration::Exact {
+                    unix_timestamp: 1_900_000_000,
+                },
+                messages: vec![send_message(
+                    SendAmount::exact("1").expect("amount is valid"),
+                    SendMessageBody::Empty,
+                    None,
+                )],
+            },
+        }
     }
 
     /// Builds one test message with a stable destination.

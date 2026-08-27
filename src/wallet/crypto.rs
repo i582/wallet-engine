@@ -5,25 +5,24 @@
 //! Its anchor half determines the wallet account address; its signing half
 //! signs outgoing messages and is replaced on rotation.
 //!
-//! The rotation-capable wallet contract is not finalized. Until it lands, the
-//! embedded `w5-experimental` contract stands in for it: that contract stores
-//! a single public key, so the anchor key both determines the address and
-//! signs messages. [`derive_rotation_keys`] already derives the signing key
-//! pair; swapping the placeholder for the real contract changes which key the
-//! wallet stores and signs with, not how keys are derived.
+//! The engine embeds Wallet rev00, which is not declared final. Its initial
+//! state and address use the anchor public key, while ordinary outgoing
+//! requests are signed by the signing half of the mnemonic.
 //!
 //! Lifecycle and signing code share this private module so both paths derive
 //! the same key pair, contract wallet ID, and address for a selected network.
 
 use std::ops::Deref;
 
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::{Signer as _, SigningKey};
 use ton::block_tlb::StateInit;
-use ton::ton_core::cell::TonHash;
+use ton::errors::TonError;
+use ton::ton_core::cell::{TonCell, TonHash};
 use ton::ton_core::traits::tlb::TLB;
 use ton::ton_core::types::TonAddress;
 use ton::ton_wallet::{
-    KeyPair, TonWallet, WALLET_V5R1_ID_DEFAULT, WALLET_V5R1_ID_DEFAULT_TESTNET, WalletVersion,
+    KeyPair, TonWallet, WALLET_SUBWALLET_ID_DEFAULT, WALLET_SUBWALLET_ID_DEFAULT_TESTNET,
+    WalletVersion,
 };
 use zeroize::Zeroizing;
 
@@ -49,14 +48,82 @@ pub(crate) struct SensitiveMnemonic {
     bytes: Zeroizing<Vec<u8>>,
 }
 
-/// A derived wallet whose vendored key pair wipes itself on drop.
-pub(crate) struct SensitiveWallet(TonWallet);
+/// A derived wallet with separate address and ordinary-signing keys.
+///
+/// The inner [`TonWallet`] retains the anchor key so any attached `StateInit`
+/// remains address-correct. The separate signing key signs Wallet requests.
+/// Both secret keys wipe themselves on drop.
+pub(crate) struct SensitiveWallet {
+    wallet: TonWallet,
+    signing: SigningKey,
+}
 
 impl Deref for SensitiveWallet {
     type Target = TonWallet;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.wallet
+    }
+}
+
+impl SensitiveWallet {
+    /// Reports whether the wallet is still in its initial, unrotated state.
+    pub(crate) fn is_pre_rotation(&self) -> bool {
+        self.wallet.key_pair.public_key == self.signing_public_key()
+    }
+
+    /// Returns the public key that authorizes ordinary outgoing requests.
+    pub(crate) fn signing_public_key(&self) -> [u8; 32] {
+        self.signing.verifying_key().to_bytes()
+    }
+
+    /// Builds and signs an external Wallet request while preserving anchor-based `StateInit`.
+    pub(crate) fn create_ext_in_msg_with_modes(
+        &self,
+        int_msgs: Vec<TonCell>,
+        int_msg_modes: Vec<u8>,
+        seqno: u32,
+        expire_at: u32,
+        add_state_init: bool,
+    ) -> Result<TonCell, TonError> {
+        let body =
+            self.wallet
+                .create_ext_in_body_with_modes(expire_at, seqno, int_msgs, int_msg_modes)?;
+        let signed = self.sign_wallet_body(&body)?;
+        self.wallet
+            .create_ext_in_msg_from_body(signed, add_state_init)
+    }
+
+    /// Builds and signs an internal Wallet request while preserving anchor-based `StateInit`.
+    pub(crate) fn create_internal_signed_msg_with_modes(
+        &self,
+        int_msgs: Vec<TonCell>,
+        int_msg_modes: Vec<u8>,
+        seqno: u32,
+        expire_at: u32,
+        add_state_init: bool,
+    ) -> Result<TonCell, TonError> {
+        let body = WalletVersion::build_internal_signed_body_with_modes(
+            self.wallet.version,
+            expire_at,
+            seqno,
+            self.wallet.wallet_id,
+            int_msgs,
+            int_msg_modes,
+        )?;
+        let signed = self.sign_wallet_body(&body)?;
+        self.wallet
+            .create_internal_signed_msg_from_body(signed, add_state_init)
+    }
+
+    /// Signs the request-cell hash and prepends the Wallet rev00 signature.
+    fn sign_wallet_body(&self, body: &TonCell) -> Result<TonCell, TonError> {
+        let hash = body.cell_hash()?;
+        let signature = self.signing.sign(hash.as_slice()).to_bytes();
+        let mut builder = TonCell::builder();
+        builder.write_bits(signature, 512)?;
+        builder.write_cell(body)?;
+        Ok(builder.build()?)
     }
 }
 
@@ -109,10 +176,6 @@ pub(crate) struct RotationKeys {
     /// Determines the wallet account address. Never changes.
     pub(crate) anchor: SigningKey,
     /// Signs ordinary outgoing messages. Replaced on rotation.
-    #[allow(
-        dead_code,
-        reason = "unused until the finalized rotation contract stores the signing key"
-    )]
     pub(crate) signing: SigningKey,
 }
 
@@ -122,14 +185,15 @@ pub(crate) struct RotationKeys {
 /// [`TON_ACCOUNT_PATH`], independently of the other half. The derivation is
 /// infallible: a parsed [`RotationMnemonic`] always yields two keys.
 pub(crate) fn derive_rotation_keys(mnemonic: &RotationMnemonic) -> RotationKeys {
-    let derive = |half: &Bip39Half| {
-        signing_key(&derive_path(half.to_seed("").as_slice(), &TON_ACCOUNT_PATH))
-    };
-
     RotationKeys {
-        anchor: derive(mnemonic.anchor()),
-        signing: derive(mnemonic.signing()),
+        anchor: derive_half_key(mnemonic.anchor()),
+        signing: derive_half_key(mnemonic.signing()),
     }
+}
+
+/// Derives the Ed25519 account key represented by one mnemonic half.
+pub(crate) fn derive_half_key(half: &Bip39Half) -> SigningKey {
+    signing_key(&derive_path(half.to_seed("").as_slice(), &TON_ACCOUNT_PATH))
 }
 
 /// Generates the initial 12-word recovery phrase from one 128-bit draw.
@@ -162,10 +226,9 @@ fn ton_key_pair(key: &SigningKey) -> KeyPair {
 /// Its V5-compatible `wallet_id` combines the TON `network_global_id` with the
 /// client context. Mainnet and testnet therefore derive different contracts.
 ///
-/// Placeholder wiring: the `w5-experimental` contract stores one key, so the
-/// anchor key is used for both the address and message signing. The final
-/// rotation contract keeps the address bound to the anchor key and moves
-/// signing to the stored signing key; only this function changes then.
+/// Wallet rev00 initializes its stored key from the anchor, so the anchor key
+/// determines the address and deployment state. Ordinary requests use the
+/// separately derived signing key; before rotation both keys are identical.
 pub(crate) fn derive_wallet(
     mnemonic: &str,
     network: Network,
@@ -176,21 +239,25 @@ pub(crate) fn derive_wallet(
 
     let contract_wallet_id = wallet_contract_id(network);
 
-    TonWallet::new_with_params(
+    let wallet = TonWallet::new_with_params(
         WalletVersion::Wallet,
         ton_key_pair(&keys.anchor),
         0,
         contract_wallet_id,
     )
-    .map(SensitiveWallet)
-    .map_err(|_| WalletCryptoError::WalletConstruction)
+    .map_err(|_| WalletCryptoError::WalletConstruction)?;
+
+    Ok(SensitiveWallet {
+        wallet,
+        signing: keys.signing,
+    })
 }
 
 /// Returns the network-specific contract identifier used by the wallet.
 const fn wallet_contract_id(network: Network) -> i32 {
     match network {
-        Network::Mainnet => WALLET_V5R1_ID_DEFAULT,
-        Network::Testnet => WALLET_V5R1_ID_DEFAULT_TESTNET,
+        Network::Mainnet => WALLET_SUBWALLET_ID_DEFAULT,
+        Network::Testnet => WALLET_SUBWALLET_ID_DEFAULT_TESTNET,
     }
 }
 
@@ -234,13 +301,13 @@ mod tests {
         bytes.iter().map(|byte| format!("{byte:02x}")).collect()
     }
 
-    /// Pins the embedded wallet contract to the reviewed upstream build.
+    /// Pins the embedded Wallet rev00 code-cell hash.
     #[test]
     fn wallet_code_matches_upstream_hash() -> Result<(), Box<dyn std::error::Error>> {
         const EXPECTED_HASH: [u8; 32] = [
-            0x99, 0xcc, 0xa0, 0x9e, 0xd5, 0xdf, 0xc6, 0x04, 0xfb, 0xfe, 0x67, 0xe1, 0xd2, 0xd6,
-            0x9a, 0x00, 0xba, 0x74, 0x85, 0x2b, 0x23, 0x65, 0xa2, 0x3b, 0x49, 0x62, 0x8b, 0x56,
-            0x33, 0x79, 0x78, 0x98,
+            0x37, 0x91, 0xf4, 0xbf, 0xbb, 0x8a, 0x2f, 0x69, 0x7a, 0x5c, 0xe3, 0x59, 0x8f, 0xdc,
+            0xee, 0xaa, 0xa0, 0xea, 0xd0, 0xba, 0xdd, 0xed, 0x84, 0x73, 0xa3, 0x5f, 0xb6, 0x9f,
+            0x76, 0xb0, 0x21, 0xe5,
         ];
         let code = WalletVersion::get_code(WalletVersion::Wallet)?;
         let hash = code.cell_hash()?;
@@ -274,16 +341,21 @@ mod tests {
         Ok(())
     }
 
-    /// The placeholder contract must take the anchor key, and the public-state
-    /// path must agree with the full derivation.
+    /// Wallet rev00 derives its address from the anchor and keeps the distinct
+    /// signing half for ordinary requests.
     #[test]
-    fn wallet_derives_from_the_anchor_key() -> Result<(), Box<dyn std::error::Error>> {
+    fn wallet_separates_anchor_and_signing_keys() -> Result<(), Box<dyn std::error::Error>> {
         let wallet = derive_wallet(ROTATION_PHRASE, Network::Testnet)?;
 
         assert_eq!(
             hex(&wallet.key_pair.public_key),
             "7952e94118f34607c75e23258dd9220d66ccac5a3ee074125c25068e8107bfbf"
         );
+        assert_eq!(
+            hex(&wallet.signing_public_key()),
+            "5d6320a0546c2df0908f0477e1ade79226faf854d041548f846b58872de5213e"
+        );
+        assert!(!wallet.is_pre_rotation());
 
         let (address, _) =
             derive_wallet_public_state(&wallet.key_pair.public_key, Network::Testnet)?;
@@ -330,6 +402,12 @@ mod tests {
             from_half.key_pair.public_key,
             from_duplicated.key_pair.public_key
         );
+        assert_eq!(
+            from_half.signing_public_key(),
+            from_half.key_pair.public_key
+        );
+        assert!(from_half.is_pre_rotation());
+        assert!(from_duplicated.is_pre_rotation());
 
         let keys = derive_rotation_keys(&RotationMnemonic::parse(HALF)?);
         assert_eq!(keys.anchor.as_bytes(), keys.signing.as_bytes());

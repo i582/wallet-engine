@@ -546,10 +546,25 @@ impl DeviceInfo {
             return Err(DeviceInfoValidationError::UnsupportedProtocolVersion);
         }
 
+        let mut legacy_send_transaction = false;
+        let mut detailed_send_transaction = false;
         let mut names = Vec::new();
         for feature in &self.features {
             let name = match feature {
-                Feature::LegacySendTransaction | Feature::SendTransaction(_) => "SendTransaction",
+                Feature::LegacySendTransaction => {
+                    if legacy_send_transaction {
+                        return Err(DeviceInfoValidationError::DuplicateFeature);
+                    }
+                    legacy_send_transaction = true;
+                    continue;
+                }
+                Feature::SendTransaction(_) => {
+                    if detailed_send_transaction {
+                        return Err(DeviceInfoValidationError::DuplicateFeature);
+                    }
+                    detailed_send_transaction = true;
+                    continue;
+                }
                 Feature::SignData(_) => "SignData",
                 Feature::SignMessage(_) => "SignMessage",
                 Feature::EmbeddedRequest => "EmbeddedRequest",
@@ -1296,12 +1311,13 @@ mod tests {
     }
 
     #[test]
-    fn device_info_rejects_invalid_identity_version_and_duplicate_features() {
+    fn device_info_rejects_invalid_identity_version_and_exact_duplicate_features() {
         let invalid = [
             r#"{"platform":"browser","appName":"","appVersion":"1","maxProtocolVersion":2,"features":[]}"#,
             r#"{"platform":"browser","appName":"wallet","appVersion":"","maxProtocolVersion":2,"features":[]}"#,
             r#"{"platform":"browser","appName":"wallet","appVersion":"1","maxProtocolVersion":1,"features":[]}"#,
-            r#"{"platform":"browser","appName":"wallet","appVersion":"1","maxProtocolVersion":2,"features":["SendTransaction",{"name":"SendTransaction","maxMessages":4}]}"#,
+            r#"{"platform":"browser","appName":"wallet","appVersion":"1","maxProtocolVersion":2,"features":["SendTransaction","SendTransaction"]}"#,
+            r#"{"platform":"browser","appName":"wallet","appVersion":"1","maxProtocolVersion":2,"features":[{"name":"SendTransaction","maxMessages":4},{"name":"SendTransaction","maxMessages":4}]}"#,
         ];
         for value in invalid {
             assert!(
@@ -1309,6 +1325,13 @@ mod tests {
                 "accepted {value}"
             );
         }
+    }
+
+    #[test]
+    fn device_info_accepts_legacy_alias_with_detailed_send_transaction() {
+        let device = r#"{"platform":"browser","appName":"wallet","appVersion":"1","maxProtocolVersion":2,"features":["SendTransaction",{"name":"SendTransaction","maxMessages":4}]}"#;
+
+        assert!(serde_json::from_str::<DeviceInfo>(device).is_ok());
     }
 
     #[test]

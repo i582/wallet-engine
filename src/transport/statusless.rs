@@ -163,22 +163,31 @@ const fn http_kind(kind: StatuslessHostErrorKind) -> HttpHostErrorKind {
     }
 }
 
-/// Recognizes a top-level provider error when no endpoint envelope owns it.
+/// Recognizes a top-level provider error from its scalar diagnostic fields.
 fn naked_provider_error(body: &[u8]) -> Option<DomainError> {
     let value: Value = serde_json::from_slice(body).ok()?;
+    let provider_status = value.get("code").and_then(provider_code);
 
-    if ["ok", "result", "jsonrpc"]
-        .into_iter()
-        .any(|field| value.get(field).is_some())
-    {
-        return None;
+    // Toncenter v3 can report HTTP failures using a v2-shaped envelope, for
+    // example `{ "ok": false, "result": "Ratelimit exceed", "code": 429 }`.
+    // A v3 endpoint parser does not own that envelope, so preserve its explicit
+    // provider status and accept `result` as the diagnostic in this failure form.
+    if value.get("ok") == Some(&Value::Bool(false)) && provider_status.is_some() {
+        let developer_message = ["error", "description", "result"]
+            .into_iter()
+            .find_map(|field| value.get(field).and_then(value_message))
+            .unwrap_or_else(|| "provider rejected request".to_owned());
+        return Some(provider_error(developer_message, provider_status));
     }
 
     let developer_message = value.get("error").and_then(value_message)?;
-    let provider_status = value.get("code").and_then(provider_code);
 
+    Some(provider_error(developer_message, provider_status))
+}
+
+fn provider_error(developer_message: String, provider_status: Option<u16>) -> DomainError {
     if provider_status == Some(429) {
-        return Some(DomainError {
+        return DomainError {
             code: ErrorCode::RateLimited,
             category: ErrorCategory::RateLimit,
             retry: RetryAdvice::Safe,
@@ -186,10 +195,10 @@ fn naked_provider_error(body: &[u8]) -> Option<DomainError> {
             provider_status,
             retry_after_ms: None,
             host_kind: None,
-        });
+        };
     }
 
-    Some(DomainError {
+    DomainError {
         code: ErrorCode::HttpRejected,
         category: ErrorCategory::ProviderProtocol,
         retry: if provider_status.is_some_and(|status| status >= 500) {
@@ -201,7 +210,7 @@ fn naked_provider_error(body: &[u8]) -> Option<DomainError> {
         provider_status,
         retry_after_ms: None,
         host_kind: None,
-    })
+    }
 }
 
 fn provider_code(value: &Value) -> Option<u16> {
@@ -263,8 +272,8 @@ mod tests {
     }
 
     #[test]
-    fn endpoint_owned_envelopes_are_not_intercepted() {
-        assert!(naked_provider_error(br#"{"ok":false,"error":"denied"}"#).is_none());
+    fn endpoint_successes_and_structured_errors_are_not_intercepted() {
+        assert!(naked_provider_error(br#"{"ok":true,"result":{"@type":"ok"}}"#).is_none());
         assert!(
             naked_provider_error(
                 br#"{"jsonrpc":"2.0","error":{"code":-32000,"message":"denied"}}"#
@@ -272,6 +281,49 @@ mod tests {
             .is_none()
         );
         assert!(naked_provider_error(br#"{"nft_items":[]}"#).is_none());
+    }
+
+    #[test]
+    fn code_less_scalar_error_is_not_hidden_by_endpoint_markers() {
+        let error = naked_provider_error(br#"{"ok":false,"error":"rejected"}"#)
+            .expect("the scalar provider error must be recognized");
+
+        assert_eq!(error.code, ErrorCode::HttpRejected);
+        assert_eq!(error.category, ErrorCategory::ProviderProtocol);
+        assert_eq!(error.retry, RetryAdvice::None);
+        assert_eq!(error.developer_message, "rejected");
+        assert_eq!(error.provider_status, None);
+        assert_eq!(error.retry_after_ms, None);
+        assert_eq!(error.host_kind, None);
+    }
+
+    #[test]
+    fn explicit_v3_rate_limit_envelope_is_intercepted_before_endpoint_parsing() {
+        let error = naked_provider_error(br#"{"ok":false,"result":"Ratelimit exceed","code":429}"#)
+            .expect("the explicit v3 rate limit must be recognized");
+
+        assert_eq!(error.code, ErrorCode::RateLimited);
+        assert_eq!(error.category, ErrorCategory::RateLimit);
+        assert_eq!(error.retry, RetryAdvice::Safe);
+        assert_eq!(error.developer_message, "Ratelimit exceed");
+        assert_eq!(error.provider_status, Some(429));
+        assert_eq!(error.retry_after_ms, None);
+        assert_eq!(error.host_kind, None);
+    }
+
+    #[test]
+    fn explicit_v3_authentication_error_is_intercepted_before_endpoint_parsing() {
+        let error =
+            naked_provider_error(br#"{"ok":false,"error":"API key does not exist","code":401}"#)
+                .expect("the explicit v3 authentication failure must be recognized");
+
+        assert_eq!(error.code, ErrorCode::HttpRejected);
+        assert_eq!(error.category, ErrorCategory::ProviderProtocol);
+        assert_eq!(error.retry, RetryAdvice::None);
+        assert_eq!(error.developer_message, "API key does not exist");
+        assert_eq!(error.provider_status, Some(401));
+        assert_eq!(error.retry_after_ms, None);
+        assert_eq!(error.host_kind, None);
     }
 
     #[test]

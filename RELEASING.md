@@ -15,6 +15,7 @@ Each release contains these files:
 | `wallet-engine-VERSION-aarch64-unknown-linux-gnu.tar.gz` | Linux ARM64 static library, shared library, and C++ wrapper |
 | `wallet-engine-VERSION-x86_64-apple-darwin.tar.gz` | macOS x86-64 static library, dynamic library, and C++ wrapper |
 | `wallet-engine-VERSION-aarch64-apple-darwin.tar.gz` | macOS ARM64 static library, dynamic library, and C++ wrapper |
+| `wallet-engine-VERSION-x86_64-pc-windows-msvc.zip` | Windows x86-64 static library, DLL with import library, and C++ wrapper |
 | `wallet-engine-swift-VERSION.zip` | Swift package with a macOS and iOS `XCFramework` |
 | `wallet-engine-android-VERSION.aar` | Kotlin wrapper and Android libraries for ARM64 and x86-64 |
 | `wallet-engine-android-VERSION.pom` | Maven metadata for the Android archive |
@@ -65,6 +66,7 @@ You can run package commands locally:
 ```shell
 cargo xtask dist verify-tag --tag v0.1.0
 cargo xtask dist native --target aarch64-apple-darwin
+cargo xtask dist native --target x86_64-pc-windows-msvc
 cargo xtask dist swift
 cargo xtask dist android
 cargo xtask dist web

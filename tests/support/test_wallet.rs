@@ -4,20 +4,22 @@ use pbkdf2::pbkdf2_hmac;
 use sha2::Sha512;
 use ton::ton_wallet::KeyPair;
 
-/// A stable rotation mnemonic and the testnet wallet address derived from it.
+/// A stable pre-rotation mnemonic and the testnet wallet address derived from it.
 ///
 /// Keep these values together. Changing one without the other would make
 /// lifecycle, signing, and localnet scenarios test different wallets.
 pub(crate) struct TestWalletFixture;
 
 impl TestWalletFixture {
-    /// Two independent 12-word BIP-39 halves: an anchor half and a signing
-    /// half, per TEP-0003 section 3.3.
-    const RECOVERY_PHRASE: &'static str = "notice tortoise soup strong gun divide offer process salon siren general carry clump left year void clutch tool case burden fix income champion lounge";
+    /// One 12-word BIP-39 half. Before rotation the engine uses it for both the
+    /// anchor key and the signing key.
+    const RECOVERY_PHRASE: &'static str =
+        "notice tortoise soup strong gun divide offer process salon siren general carry";
 
-    const TESTNET_ADDRESS: &'static str = "0QBKa7RDhGX6xHlEmqaA275NPQyP_am575E8xJ9W2t3HiB3E";
+    const TESTNET_ADDRESS: &'static str = "0QCecG6hpl_o16_bYZO_x3rNzyfbhH7Ur6jTh49taojyvNCE";
 
-    const OTHER_RECOVERY_PHRASE: &'static str = "april style market avoid find artist van spy salute broccoli daughter imitate lunch peasant crazy floor priority still aunt proof cradle fork afford blouse";
+    const OTHER_RECOVERY_PHRASE: &'static str =
+        "april style market avoid find artist van spy salute broccoli daughter imitate";
 
     pub(crate) const fn recovery_phrase_bytes(&self) -> &'static [u8] {
         Self::RECOVERY_PHRASE.as_bytes()

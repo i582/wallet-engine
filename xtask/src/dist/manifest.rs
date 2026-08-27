@@ -110,6 +110,7 @@ fn expected_artifacts(version: &str) -> BTreeSet<String> {
         format!("wallet-engine-{version}-aarch64-unknown-linux-gnu.tar.gz"),
         format!("wallet-engine-{version}-x86_64-apple-darwin.tar.gz"),
         format!("wallet-engine-{version}-aarch64-apple-darwin.tar.gz"),
+        format!("wallet-engine-{version}-x86_64-pc-windows-msvc.zip"),
         format!("wallet-engine-swift-{version}.zip"),
         format!("wallet-engine-android-{version}.aar"),
         format!("wallet-engine-android-{version}.pom"),
@@ -167,6 +168,7 @@ fn classify(name: &str) -> (&'static str, Option<&'static str>) {
         "aarch64-unknown-linux-gnu",
         "x86_64-apple-darwin",
         "aarch64-apple-darwin",
+        "x86_64-pc-windows-msvc",
     ] {
         if name.contains(target) {
             return ("native", Some(target));
@@ -210,7 +212,8 @@ mod tests {
     #[test]
     fn expects_every_release_package() {
         let names = expected_artifacts("1.2.3");
-        assert_eq!(names.len(), 8);
+        assert_eq!(names.len(), 9);
+        assert!(names.contains("wallet-engine-1.2.3-x86_64-pc-windows-msvc.zip"));
         assert!(names.contains("wallet-engine-swift-1.2.3.zip"));
         assert!(names.contains("wallet-engine-android-1.2.3.aar"));
         assert!(names.contains("ton-wallet-engine-1.2.3.tgz"));
@@ -221,6 +224,10 @@ mod tests {
         assert_eq!(
             classify("wallet-engine-1.2.3-aarch64-unknown-linux-gnu.tar.gz"),
             ("native", Some("aarch64-unknown-linux-gnu"))
+        );
+        assert_eq!(
+            classify("wallet-engine-1.2.3-x86_64-pc-windows-msvc.zip"),
+            ("native", Some("x86_64-pc-windows-msvc"))
         );
         assert_eq!(classify("wallet-engine-swift-1.2.3.zip"), ("swift", None));
         assert_eq!(

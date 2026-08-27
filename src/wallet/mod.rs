@@ -5,6 +5,7 @@
 
 pub(crate) mod crypto;
 pub(crate) mod encrypted_comment;
+pub(crate) mod key_rotation;
 pub(crate) mod mnemonic;
 mod mnemonic_scheme;
 pub(crate) mod nft_transfer;
@@ -23,13 +24,14 @@ use ton_connect_core::{RawAccountAddress, ton_proof_signing_hash};
 use self::crypto::{
     SensitiveMnemonic, derive_wallet, derive_wallet_public_state, generate_mnemonic,
 };
-use crate::TonAddressString;
+use self::key_rotation::{KeyRotationError, prepare_key_rotation};
 use crate::domain::{
     Network, ProtectedSecretHostError, ProtectedSecretHostErrorKind, ProtectedSecretRead,
     ProtectedSecretRef, ProtectedSecretStore, SecretAccessReason, bounded_diagnostic,
 };
 use crate::engine::WalletPlatformHost;
 use crate::types::TonAddressExt as _;
+use crate::{Boc, TonAddressString};
 
 const MAX_RECORD_ID_BYTES: usize = 128;
 
@@ -154,6 +156,54 @@ pub struct CreatedWallet {
     pub recovery_phrase: RecoveryPhrase,
 }
 
+/// Selects how the signed key-rotation request will reach Wallet rev00.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Enum)]
+#[serde(rename_all = "camelCase")]
+pub enum KeyRotationMessageKind {
+    /// Complete incoming external message for direct provider submission.
+    External,
+    /// Complete owner-signed internal message for a gas-paying relayer.
+    Internal,
+}
+
+/// Requests creation of the data needed for Wallet rev00 key rotation.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct PrepareKeyRotationRequest {
+    /// Active pre-rotation wallet whose signing key will change.
+    pub descriptor: WalletDescriptor,
+    /// Fresh sequence number read from the wallet contract.
+    pub seqno: u32,
+    /// Unix timestamp covered by the current key's request signature.
+    pub valid_until: u64,
+    /// Delivery channel and channel-specific request opcode.
+    pub message_kind: KeyRotationMessageKind,
+}
+
+/// One-shot data prepared for a Wallet rev00 signing-key rotation.
+///
+/// This value does not mean that rotation succeeded on-chain. Before
+/// submission, the host must store `replacement_recovery_phrase` in protected
+/// storage. It must store `signed_boc` as a pending durable record. Words 13-24
+/// are the new signing half. Until chain state resolves the request, the host
+/// must block ordinary signing.
+#[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedKeyRotation {
+    /// Full 24-word phrase that preserves the anchor and adds the new signing half.
+    pub replacement_recovery_phrase: RecoveryPhrase,
+    /// New raw 32-byte Ed25519 signing public key stored by the contract on success.
+    pub new_public_key: Vec<u8>,
+    /// Complete external or relaxed internal signed message as a validated BOC.
+    pub signed_boc: Boc,
+    /// Sequence number covered by the signed request.
+    pub seqno: u32,
+    /// Unix expiration timestamp covered by the signed request.
+    pub valid_until: u64,
+    /// Delivery channel encoded into the request opcode.
+    pub message_kind: KeyRotationMessageKind,
+}
+
 /// A wallet creation, import, secret, or derivation failure.
 #[derive(
     Debug,
@@ -184,6 +234,15 @@ pub enum WalletLifecycleError {
     /// The TON Connect proof fields or signing key are invalid.
     #[error("TON Connect ownership proof signing failed")]
     TonConnectSigningFailed,
+    /// The protected phrase already contains a distinct signing half.
+    #[error("wallet signing key has already been rotated")]
+    SigningKeyAlreadyRotated,
+    /// The supplied expiration cannot fit the contract's uint32 field.
+    #[error("wallet key-rotation expiration timestamp is out of range")]
+    KeyRotationExpirationOutOfRange,
+    /// Rust could not generate, sign, or serialize the key-rotation data.
+    #[error("wallet key-rotation preparation failed")]
+    KeyRotationPreparationFailed,
     /// The protected mnemonic derives a different address from the descriptor.
     #[error("protected recovery phrase does not belong to this wallet")]
     SecretWalletMismatch,
@@ -357,6 +416,55 @@ impl WalletLifecycle {
         descriptor: WalletDescriptor,
     ) -> Result<TonConnectAccountInfo, WalletLifecycleError> {
         derive_ton_connect_account(descriptor)
+    }
+
+    /// Generates a new signing half and both signatures required to rotate Wallet rev00.
+    ///
+    /// This method reads the current protected phrase after user authorization.
+    /// It does not update protected storage and does not submit the returned BOC.
+    /// The request is valid only for an active wallet whose key was not rotated.
+    pub async fn prepare_key_rotation(
+        &self,
+        request: PrepareKeyRotationRequest,
+    ) -> Result<PreparedKeyRotation, WalletLifecycleError> {
+        validate_descriptor(&request.descriptor)?;
+
+        let bytes = self
+            .platform_host
+            .read_protected_secret(ProtectedSecretRead {
+                secret_ref: request.descriptor.secret_ref.clone(),
+                reason: SecretAccessReason::PrepareKeyRotation,
+                prompt: "Authenticate to create a new wallet signing key".to_owned(),
+            })
+            .await?;
+        let secret = SensitiveMnemonic::from_bytes(bytes)
+            .map_err(|_| WalletLifecycleError::InvalidRecoveryPhrase)?;
+        let prepared = prepare_key_rotation(
+            &secret,
+            request.descriptor.network,
+            &request.descriptor.address,
+            request.seqno,
+            request.valid_until,
+            request.message_kind,
+        )
+        .map_err(|error| match error {
+            KeyRotationError::InvalidMnemonic => WalletLifecycleError::InvalidRecoveryPhrase,
+            KeyRotationError::WalletIdentityMismatch => WalletLifecycleError::SecretWalletMismatch,
+            KeyRotationError::AlreadyRotated => WalletLifecycleError::SigningKeyAlreadyRotated,
+            KeyRotationError::ExpirationOutOfRange => {
+                WalletLifecycleError::KeyRotationExpirationOutOfRange
+            }
+            KeyRotationError::Preparation => WalletLifecycleError::KeyRotationPreparationFailed,
+        })?;
+
+        Ok(PreparedKeyRotation {
+            replacement_recovery_phrase: recovery_phrase(&prepared.replacement_mnemonic)?,
+            new_public_key: prepared.new_public_key.to_vec(),
+            signed_boc: prepared.signed_boc,
+            seqno: request.seqno,
+            valid_until: request.valid_until,
+            message_kind: request.message_kind,
+        })
     }
 }
 

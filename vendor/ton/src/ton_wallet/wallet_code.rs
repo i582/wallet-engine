@@ -55,8 +55,8 @@ pub static TON_WALLET_CODE_BY_VERSION: LazyLock<HashMap<WalletVersion, TonCell>>
                 V5R1,
                 load_code!("../../resources/ton_wallet_code/wallet_v5.code"),
             ),
-            // Built from https://github.com/tolk-vm/wallet-v5-experimental at
-            // b420256f2fd78844a31260831616c1fab7acd0db with Acton 1.1.0.
+            // Wallet rev00.
+            // Code-cell hash: 3791f4bfbb8a2f697a5ce3598fdceeaaa0ead0badded8473a35fb69f76b021e5.
             (
                 Wallet,
                 load_code!("../../resources/ton_wallet_code/wallet_v5_experimental.code"),

@@ -8,6 +8,35 @@ This file records user-visible changes to Wallet Engine.
 
 - Added `detect_mnemonic_schemes`, which reports every scheme under which entered recovery words validate: `rotation` (importable), plus detection-only `ton` (passwordless legacy TON mnemonic) and `bip39` (24-word Multichain mnemonic). Applications use it to explain why an import was rejected; the engine still derives keys only from Rotation mnemonics.
 
+## [0.0.6] - 2026-08-26
+
+### Added
+
+- Added `WalletLifecycle::prepare_key_rotation` and platform bindings. It creates the second 12-word half, both contract signatures, and the signed key-change BOC.
+- Added Windows x86-64 MSVC release archives with the static library, DLL, import library, and C++ wrapper.
+
+### Changed
+
+- **Breaking:** Wallet derivation and signing now use the embedded Wallet rev00 contract instead of the experimental Wallet V5 placeholder, including its contract code, subwallet IDs, state layout, and external and internal request encoding.
+
+### Fixed
+
+- Post-rotation Wallet rev00 requests now use the signing half of the recovery phrase while the account address and `StateInit` remain anchored to the first half. Deployment from a post-rotation phrase is rejected until the account is active on-chain.
+
+## [0.0.5] - 2026-08-25
+
+### Added
+
+- Added `WalletStatuslessHost` and `WalletClient::new_statusless`, including generated platform bindings, for relays and protocol proxies that return only a provider body or an opaque host error.
+- Added a runnable TypeScript provider-transport example covering both metadata-rich HTTP and body-only relay integrations.
+
+### Fixed
+
+- Post-rotation Wallet rev00 requests now use the signing half of the recovery phrase while the account address and `StateInit` remain anchored to the first half.
+- Strict `ton://transfer/` parsing now rejects control characters, ambiguous normalized paths and authorities, and noncanonical raw recipient or jetton-master addresses.
+- TON Connect device information now accepts the legacy `"SendTransaction"` feature alongside its detailed descriptor while continuing to reject exact duplicates.
+- Status-less provider transports now recognize Toncenter error envelopes with explicit body codes, including rate limits and authentication failures.
+
 ## [0.0.4] - 2026-08-24
 
 ### Added

@@ -115,9 +115,9 @@ Generated packages remain under `bindings/` and are intentionally ignored.
 An explicit `vMAJOR.MINOR.PATCH` tag creates one GitHub Release. SemVer
 pre-release tags are also supported.
 
-Each release contains native Linux and macOS libraries, a Swift package, an
-Android AAR, and a TypeScript package with WebAssembly. The release also
-contains checksums, a machine-readable manifest, and build provenance.
+Each release contains native Linux, macOS, and Windows libraries, a Swift
+package, an Android AAR, and a TypeScript package with WebAssembly. The release
+also contains checksums, a machine-readable manifest, and build provenance.
 
 Read [RELEASING.md](RELEASING.md) for the file list and the release procedure.
 
@@ -327,16 +327,32 @@ outgoing messages
 Wallet V3R1 through V5R1 have no rotatable signing key, and the TEP forbids
 deploying them from a Rotation mnemonic.
 
-The rotation contract is not finalized. Until it lands, the embedded
-`w5-experimental` contract stands in as a placeholder: it stores a single
-public key, so the anchor key both determines the address and signs outgoing
-messages. The signing key is already derived and takes over message signing
-when the placeholder is replaced.
+The engine embeds Wallet rev00. This revision is not declared final. Its
+initial `StateInit` and address use the anchor public key. Ordinary external
+and owner-authorized internal requests use the signing key. Before rotation
+the two keys are equal. After rotation a 24-word phrase can sign requests for
+an already active account without changing its address.
 
-On import the signing key derived from words 13–24 is compared with the key
-stored in the account. A mismatch means the phrase carries an outdated signing
-half and is treated as invalid
-([section 13.2](https://github.com/ton-blockchain/TEPs/blob/master/text/0003-wallets.md#132-import-and-recovery)).
+`WalletLifecycle.prepareKeyRotation` constructs the one-time key-change data.
+The caller supplies a fresh `seqno`, an expiration time, and the message kind.
+The engine then:
+
+1. reads and checks the protected 12-word phrase.
+2. creates an independent 12-word signing half.
+3. signs the wallet-address proof with the new key.
+4. signs the `ChangePublicKey` request with the current anchor key.
+5. returns the complete 24-word phrase, new public key, and signed BOC.
+
+The method does not change protected storage or submit the BOC. It also does
+not read `was_key_changed` or `get_public_key` from chain state.
+
+Before submission, store the returned phrase in protected storage. Store the
+pending BOC in a durable journal. Until chain state resolves the request, block
+ordinary signing. If the submission result is unknown, do not discard the
+pending request.
+
+The engine rejects deployment from a post-rotation 24-word phrase. The initial
+contract expects the anchor key until the on-chain key change is complete.
 
 ### Host and API impact
 
@@ -345,6 +361,10 @@ account address and never changes, so persisted descriptors survive rotation.
 The current signing key is on-chain state, not descriptor state.
 `revealRecoveryPhrase` returns the phrase exactly as recorded: 12 words before
 rotation or 24 words after it. Protected storage holds one secret.
+
+Key-rotation preparation requests protected-secret access with
+`SecretAccessReason.prepareKeyRotation`. The result contains recovery words,
+so applications must treat the complete result as secret data.
 
 ## Wallet flow diagrams
 
@@ -362,7 +382,7 @@ color alone:
 
 ```mermaid
 flowchart TD
-    Lifecycle["WalletLifecycle<br/>create · import · reveal · delete"]
+    Lifecycle["WalletLifecycle<br/>create · import · reveal · rotate · delete"]
     Descriptor["WalletDescriptor<br/>public metadata + secret reference"]
     Lifecycle --> Descriptor
     Descriptor --> Client["WalletClient"]

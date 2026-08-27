@@ -1,3 +1,4 @@
+use wallet_engine::KeyRotationMessageKind;
 use wallet_engine::{Network, ProtectedSecretHostErrorKind, WalletLifecycleError};
 
 use crate::support::*;
@@ -37,6 +38,64 @@ fn importing_known_words_derives_the_expected_testnet_wallet() {
         .then(phrase_is("reveal", words))
         .then(protected_secret_was_revealed("import"))
         .run();
+}
+
+#[test]
+fn key_rotation_preparation_returns_new_material_without_replacing_storage() {
+    let fixture = test_wallet();
+
+    wallet_lifecycle_scenario("key rotation preparation creates one-shot material")
+        .when(import_wallet(
+            "import",
+            "rotation-wallet",
+            Network::Testnet,
+            fixture.recovery_words(),
+        ))
+        .when(prepare_key_rotation(
+            "rotation",
+            "import",
+            KeyRotationMessageKind::External,
+        ))
+        .then(key_rotation_material_is(
+            "rotation",
+            KeyRotationMessageKind::External,
+        ))
+        .then(protected_secret_was_read_for_key_rotation("import"))
+        .when(reveal_wallet("reveal", "import"))
+        .then(phrase_has_words("reveal", 12))
+        .run();
+}
+
+#[test]
+fn key_rotation_preparation_rejects_an_already_rotated_phrase() {
+    let words = "notice tortoise soup strong gun divide offer process salon siren general carry clump left year void clutch tool case burden fix income champion lounge"
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect();
+
+    wallet_lifecycle_scenario("a distinct signing half cannot rotate twice")
+        .when(import_wallet(
+            "import",
+            "rotated-wallet",
+            Network::Testnet,
+            words,
+        ))
+        .when(prepare_key_rotation(
+            "rotation",
+            "import",
+            KeyRotationMessageKind::Internal,
+        ))
+        .then(lifecycle_error(
+            "rotation",
+            WalletLifecycleError::SigningKeyAlreadyRotated,
+        ))
+        .run();
+}
+
+#[test]
+fn prepared_external_key_rotation_executes_on_the_wallet_contract() {
+    execute_prepared_key_rotation_on_localnet()
+        .expect("the Wallet contract must accept the engine's prepared key rotation");
 }
 
 #[test]

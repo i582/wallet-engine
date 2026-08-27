@@ -30,7 +30,8 @@ pub struct TonWallet {
 impl TonWallet {
     pub fn new(version: WalletVersion, key_pair: KeyPair) -> Result<Self, TonError> {
         let wallet_id = match version {
-            WalletVersion::V5R1 | WalletVersion::Wallet => WALLET_V5R1_ID_DEFAULT,
+            WalletVersion::V5R1 => WALLET_V5R1_ID_DEFAULT,
+            WalletVersion::Wallet => WALLET_SUBWALLET_ID_DEFAULT,
             _ => WALLET_ID_DEFAULT,
         };
         Self::new_with_params(version, key_pair, 0, wallet_id)

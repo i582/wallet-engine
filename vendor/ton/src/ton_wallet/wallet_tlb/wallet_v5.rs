@@ -28,31 +28,6 @@ impl WalletV5Data {
     }
 }
 
-/// Initial data for the wallet contract with one-time key rotation.
-#[derive(Debug, PartialEq, Clone, TLB)]
-pub struct WalletData {
-    pub sign_allowed: bool,
-    pub seqno: u32,
-    pub wallet_id: i32,
-    pub public_key: TonHash,
-    pub extensions: Option<TLBRef<TonCell>>,
-    pub was_key_changed: bool,
-}
-
-impl WalletData {
-    /// Creates undeployed storage with signature auth enabled and key rotation unused.
-    pub fn new(wallet_id: i32, public_key: TonHash) -> Self {
-        Self {
-            sign_allowed: true,
-            seqno: 0,
-            wallet_id,
-            public_key,
-            extensions: None,
-            was_key_changed: false,
-        }
-    }
-}
-
 /// https://docs.ton.org/participate/wallets/contracts#wallet-v5
 /// signature is not considered as part of msg body
 /// https://github.com/ton-blockchain/wallet-contract-v5/blob/main/types.tlb

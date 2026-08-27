@@ -106,7 +106,15 @@ impl WalletVersion {
                 msgs,
             }
             .to_cell(),
-            V5R1 | Wallet => WalletV5ExtMsgBody {
+            V5R1 => WalletV5ExtMsgBody {
+                wallet_id,
+                valid_until,
+                msg_seqno,
+                msgs_modes,
+                msgs,
+            }
+            .to_cell(),
+            Wallet => WalletExtMsgBody {
                 wallet_id,
                 valid_until,
                 msg_seqno,
@@ -131,7 +139,16 @@ impl WalletVersion {
         msgs_modes: Vec<u8>,
     ) -> Result<TonCell, TonError> {
         match version {
-            V5R1 | Wallet => WalletV5InternalSignedBody {
+            V5R1 => WalletV5InternalSignedBody {
+                wallet_id,
+                valid_until,
+                msg_seqno,
+                msgs_modes,
+                msgs,
+            }
+            .to_cell()
+            .map_err(TonError::from),
+            Wallet => WalletInternalSignedBody {
                 wallet_id,
                 valid_until,
                 msg_seqno,
@@ -153,7 +170,7 @@ impl WalletVersion {
     ) -> Result<TonCell, TonError> {
         match version {
             // different order
-            V5R1 | Wallet => {
+            V5R1 => {
                 let mut builder = TonCell::builder();
                 builder.write_cell(msg_cell)?;
                 builder.write_bits(sign, sign.len() * 8)?;
