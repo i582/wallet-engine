@@ -248,6 +248,35 @@ locally for prefix suggestions.
 This export provides the word vocabulary, not another recovery scheme. Wallet
 import accepts only the Rotation mnemonic scheme described below.
 
+### Mnemonic scheme detection
+
+Swift, Kotlin, and TypeScript expose `detectMnemonicSchemes`. Rust and C++
+expose `detect_mnemonic_schemes`.
+
+The function takes the entered recovery words - one word per element, exactly
+as `importWallet` takes them - and returns every scheme under which they
+validate:
+
+| Scheme     | Meaning                                                                             |
+| ---------- | ----------------------------------------------------------------------------------- |
+| `rotation` | A 12- or 24-word Rotation mnemonic. The only importable scheme.                      |
+| `ton`      | A passwordless legacy 24-word TON mnemonic (TEP-0003 section 3.1).                   |
+| `bip39`    | A standard 24-word BIP-39 phrase, the Multichain mnemonic of TEP-0003 section 3.2.   |
+
+The checks are independent, and one phrase can validate under more than one
+scheme, so the result is a list in the fixed order above. An empty list means
+the words match no scheme the engine knows.
+
+Wallet import succeeds exactly when the result contains `rotation`. The other
+schemes are detection only: the engine derives no keys from them and cannot
+import them. Use them to tell the user what they entered - for example, that
+the phrase is a TON or plain BIP-39 mnemonic from another wallet scheme -
+instead of showing a generic "invalid phrase" error. The wording of that
+message belongs to the application.
+
+Detection derives no key material. A password-protected TON mnemonic is not
+detectable without its password and reports no match.
+
 ## Key derivation
 
 The engine uses the **Rotation mnemonic** scheme defined in
@@ -272,15 +301,18 @@ phrase its second, independent half. `importWallet` therefore accepts the
 phrase exactly as the user recorded it - 12 words before rotation or 24 words
 after it - and expands the 12-word form internally; applications never
 duplicate words themselves. TON mnemonics and plain Multichain mnemonics are
-rejected as invalid.
+rejected as invalid; `detectMnemonicSchemes` recognizes them so the
+application can explain the rejection.
 
 ### Compatibility
 
 One 24-word phrase can be valid under more than one scheme. On import an
 application should run all the checks it supports — the TON mnemonic checksum,
 the Multichain checksum, and the two Rotation checksums over words 1–12 and
-13–24 — and should not pick a scheme silently. When more than one validates,
-derive the accounts for each scheme and let the user choose. See
+13–24 — and should not pick a scheme silently. `detectMnemonicSchemes` runs
+all three checks and reports every match. When more than one validates, tell
+the user which schemes matched; this engine derives accounts only for the
+Rotation scheme. See
 [sections 7 and 8](https://github.com/ton-blockchain/TEPs/blob/master/text/0003-wallets.md#8-wallet-import-mnemonic-scheme-detection).
 
 Rotation support is optional for other wallets. One that skips it reports a

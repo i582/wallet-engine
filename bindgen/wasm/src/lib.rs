@@ -10,7 +10,7 @@ mod wallet;
 pub use address::{convert_ton_address, is_valid_ton_address, parse_ton_address};
 pub use host::{WalletHttpHost, WalletPlatformHost, WalletStatuslessHost};
 pub use lifecycle::WalletLifecycle;
-pub use mnemonic::mnemonic_wordlist;
+pub use mnemonic::{detect_mnemonic_schemes, mnemonic_wordlist};
 pub use ton_transfer_link::parse_ton_transfer_link;
 pub use wallet::WalletClient;
 

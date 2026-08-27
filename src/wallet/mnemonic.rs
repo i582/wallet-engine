@@ -11,9 +11,12 @@
 //!
 //! <https://github.com/ton-blockchain/TEPs/blob/master/text/0003-wallets.md#33-rotation-mnemonic>
 //!
-//! Twelve words is the only BIP-39 length the engine handles. BIP-39 also
-//! defines 15, 18, 21, and 24-word phrases; none of them appear in a rotation
-//! mnemonic, so none of them are implemented here.
+//! Twelve words is the only BIP-39 length the engine derives keys from. For
+//! scheme detection only, [`is_bip39_24_phrase`] recognizes the standalone
+//! 24-word BIP-39 form - the Multichain mnemonic of TEP-0003 - and
+//! [`is_ton_mnemonic`] recognizes the legacy TON mnemonic. The remaining
+//! BIP-39 lengths (15, 18, and 21 words) appear in no supported scheme and are
+//! not implemented.
 //!
 //! This module owns the word encoding only. Key derivation lives in
 //! [`super::crypto`].
@@ -22,7 +25,7 @@ use std::sync::LazyLock;
 
 use pbkdf2::pbkdf2_hmac;
 use sha2::{Digest as _, Sha256, Sha512};
-use ton::ton_wallet::WORDLIST_EN_SET;
+use ton::ton_wallet::{Mnemonic as TonMnemonic, WORDLIST_EN_SET};
 use zeroize::{Zeroize as _, Zeroizing};
 
 /// Words in one BIP-39 half of a rotation mnemonic.
@@ -33,6 +36,16 @@ pub(crate) const ROTATION_WORD_COUNT: usize = HALF_WORD_COUNT * 2;
 
 /// Entropy bytes behind a 12-word phrase: 128 bits.
 pub(crate) const ENTROPY_LEN: usize = 16;
+
+/// Words in a standalone 24-word BIP-39 (Multichain) phrase.
+///
+/// Numerically equal to [`ROTATION_WORD_COUNT`], but the two schemes pack
+/// their bits differently: one 256-bit entropy block with an 8-bit checksum
+/// versus two independently checksummed 128-bit halves.
+const BIP39_24_WORD_COUNT: usize = 24;
+
+/// Entropy bytes behind a 24-word phrase: 256 bits.
+const BIP39_24_ENTROPY_LEN: usize = 32;
 
 /// Words in the BIP-39 English list. Each word therefore encodes 11 bits.
 const WORDLIST_LEN: usize = 2048;
@@ -368,6 +381,50 @@ impl RotationMnemonic {
     }
 }
 
+/// Reports whether `words` form one checksummed 24-word BIP-39 mnemonic.
+///
+/// This is the Multichain mnemonic of
+/// [TEP-0003 section 3.2](https://github.com/ton-blockchain/TEPs/blob/master/text/0003-wallets.md#32-multichain-mnemonic):
+/// 256 entropy bits followed by an 8-bit checksum, encoded as one 24-word
+/// phrase. Words are normalized like [`Bip39Half::new`].
+///
+/// Detection only: the engine never derives a seed or key from this scheme.
+#[allow(
+    clippy::arithmetic_side_effects,
+    reason = "index is below twenty-four, so the bit offset cannot overflow"
+)]
+pub(crate) fn is_bip39_24_phrase(words: &[&str]) -> bool {
+    if words.len() != BIP39_24_WORD_COUNT {
+        return false;
+    }
+
+    let mut packed = Zeroizing::new(vec![0_u8; BIP39_24_ENTROPY_LEN + 1]);
+    for (index, word) in words.iter().enumerate() {
+        let normalized = Zeroizing::new(word.trim().to_lowercase());
+        let Some(value) = word_index(&normalized) else {
+            return false;
+        };
+        write_word(&mut packed, index * BITS_PER_WORD, value);
+    }
+
+    let (entropy, trailing) = packed.split_at(BIP39_24_ENTROPY_LEN);
+    trailing.first().copied() == Some(checksum_byte(entropy))
+}
+
+/// Reports whether `words` form a passwordless 24-word TON mnemonic.
+///
+/// TON mnemonics
+/// ([TEP-0003 section 3.1](https://github.com/ton-blockchain/TEPs/blob/master/text/0003-wallets.md#31-ton-mnemonic))
+/// draw from the same English word list but carry no positional checksum;
+/// validity is a first-byte condition on a PBKDF2 seed, checked by the
+/// vendored `ton` implementation. A password-protected TON mnemonic fails
+/// this check by design: without the password its validity is not observable.
+///
+/// Detection only: the engine never derives a key pair from this scheme.
+pub(crate) fn is_ton_mnemonic(words: &[&str]) -> bool {
+    TonMnemonic::new(words.to_vec(), None).is_ok()
+}
+
 #[cfg(test)]
 mod proptests;
 
@@ -614,6 +671,65 @@ mod tests {
             mnemonic.to_phrase().split_whitespace().count(),
             ROTATION_WORD_COUNT
         );
+    }
+
+    /// Official 24-word BIP-39 English phrases from `trezor/python-mnemonic`.
+    const BIP39_24_VECTORS: &[&str] = &[
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon \
+         abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art",
+        "legal winner thank year wave sausage worth useful legal winner thank year \
+         wave sausage worth useful legal winner thank year wave sausage worth title",
+        "letter advice cage absurd amount doctor acoustic avoid letter advice cage absurd \
+         amount doctor acoustic avoid letter advice cage absurd amount doctor acoustic bless",
+        "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo vote",
+    ];
+
+    /// The passwordless TON mnemonic from the vendored `ton` crate's tests.
+    const TON_MNEMONIC: &str = "dose ice enrich trigger test dove century still betray \
+                                gas diet dune use other base gym mad law immense village \
+                                world example praise game";
+
+    fn split(phrase: &str) -> Vec<&str> {
+        phrase.split_whitespace().collect()
+    }
+
+    #[test]
+    fn recognizes_official_24_word_bip39_phrases() {
+        for phrase in BIP39_24_VECTORS {
+            assert!(is_bip39_24_phrase(&split(phrase)), "{phrase}");
+        }
+
+        let messy = "  ZOO zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo \
+                     zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo Vote  ";
+        assert!(is_bip39_24_phrase(&split(messy)));
+    }
+
+    #[test]
+    fn rejects_non_bip39_24_word_inputs() {
+        // Valid words, but the trailing checksum byte does not match.
+        assert!(!is_bip39_24_phrase(&["zoo"; BIP39_24_WORD_COUNT]));
+        // A valid 12-word half is a different length.
+        assert!(!is_bip39_24_phrase(&split(
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+        )));
+        assert!(!is_bip39_24_phrase(&["notaword"; BIP39_24_WORD_COUNT]));
+        // A rotation phrase packs two 4-bit half checksums, not one 8-bit one.
+        assert!(!is_bip39_24_phrase(&split(ROTATION_PHRASE)));
+    }
+
+    #[test]
+    fn recognizes_passwordless_ton_mnemonics() {
+        assert!(is_ton_mnemonic(&split(TON_MNEMONIC)));
+
+        let messy = TON_MNEMONIC.to_uppercase();
+        assert!(is_ton_mnemonic(&split(&messy)));
+
+        // TON mnemonics are always 24 words.
+        let truncated = &split(TON_MNEMONIC)[..HALF_WORD_COUNT];
+        assert!(!is_ton_mnemonic(truncated));
+        assert!(!is_ton_mnemonic(&["notaword"; BIP39_24_WORD_COUNT]));
+        // Valid words whose seed fails the passwordless first-byte condition.
+        assert!(!is_ton_mnemonic(&["zoo"; BIP39_24_WORD_COUNT]));
     }
 
     #[test]

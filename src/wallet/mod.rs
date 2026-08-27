@@ -7,10 +7,13 @@ pub(crate) mod crypto;
 pub(crate) mod encrypted_comment;
 pub(crate) mod key_rotation;
 pub(crate) mod mnemonic;
+mod mnemonic_scheme;
 pub(crate) mod nft_transfer;
 pub(crate) mod send;
 pub(crate) mod slip_0010;
 pub(crate) mod transfer;
+
+pub use mnemonic_scheme::{MnemonicScheme, detect_mnemonic_schemes};
 
 use std::sync::Arc;
 
@@ -116,6 +119,9 @@ pub struct ImportWalletRequest {
     /// whose key was never rotated, or 24 words - two independently
     /// checksummed BIP-39 halves - after rotation. The engine expands the
     /// 12-word form itself; never duplicate the words in the application.
+    ///
+    /// [`detect_mnemonic_schemes`] classifies the same word vector without
+    /// importing it, so the application can explain a rejection.
     pub recovery_words: Vec<String>,
 }
 
@@ -216,6 +222,10 @@ pub enum WalletLifecycleError {
     #[error("invalid wallet record identifier")]
     InvalidRecordId,
     /// The recovery phrase is not a valid 12- or 24-word Rotation mnemonic.
+    ///
+    /// [`detect_mnemonic_schemes`] reports whether the words form a TON or
+    /// 24-word BIP-39 mnemonic instead, so the application can say why the
+    /// phrase was rejected.
     #[error("invalid recovery phrase")]
     InvalidRecoveryPhrase,
     /// Rust cannot construct the requested wallet address.
