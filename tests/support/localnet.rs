@@ -775,8 +775,8 @@ impl Localnet {
         let mut params = dict_codec
             .read(&mut config_cell.parser())
             .map_err(|error| format!("localnet config parsing failed: {error}"))?;
-        let wallet_code =
-            TonCell::from_boc_base64(WALLET_TG_CODE_B64.trim()).map_err(|error| error.to_string())?;
+        let wallet_code = TonCell::from_boc_base64(WALLET_TG_CODE_B64.trim())
+            .map_err(|error| error.to_string())?;
         let key = u32::from_be_bytes(BYTECODE_CONFIG_KEY.to_be_bytes());
         params.insert(key, TLBRef::new(wallet_code));
         let mut patched_builder = TonCell::builder();

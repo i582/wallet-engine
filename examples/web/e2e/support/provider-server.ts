@@ -179,6 +179,17 @@ async function proxyLocalnetRequest(
 
   const body: Buffer | undefined =
     request.method === "GET" || request.method === "HEAD" ? undefined : await readBody(request)
+  const getMethodCall: WalletGetMethodCall | undefined = parseRunGetMethod(body)
+  if (getMethodCall !== undefined) {
+    const served: unknown | undefined = await actor.walletGetMethod(
+      getMethodCall.address,
+      getMethodCall.method,
+    )
+    if (served !== undefined) {
+      sendJson(response, 200, served)
+      return
+    }
+  }
   const submitsMessage: boolean = isSendBocRequest(body)
   const previousTransactionIds: readonly string[] | undefined =
     submitsMessage && walletAddress !== undefined
@@ -227,6 +238,40 @@ function requiredLocalnet(): ActonLocalnet {
     throw new Error("Acton localnet mode is active without a running process")
   }
   return localnet
+}
+
+/** One JSON-RPC get-method invocation addressed to a localnet account. */
+type WalletGetMethodCall = {
+  readonly address: string
+  readonly method: string
+}
+
+/** Extracts the target of a JSON-RPC `runGetMethod` body, if it is one. */
+function parseRunGetMethod(body: Buffer | undefined): WalletGetMethodCall | undefined {
+  if (body === undefined || body.length === 0) {
+    return undefined
+  }
+  try {
+    const value: unknown = JSON.parse(body.toString("utf8"))
+    if (
+      typeof value !== "object" ||
+      value === null ||
+      !("method" in value) ||
+      value.method !== "runGetMethod" ||
+      !("params" in value) ||
+      typeof value.params !== "object" ||
+      value.params === null ||
+      !("address" in value.params) ||
+      typeof value.params.address !== "string" ||
+      !("method" in value.params) ||
+      typeof value.params.method !== "string"
+    ) {
+      return undefined
+    }
+    return {address: value.params.address, method: value.params.method}
+  } catch {
+    return undefined
+  }
 }
 
 /** Reports whether a JSON-RPC body submits a signed wallet message. */

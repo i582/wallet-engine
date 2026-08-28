@@ -39,6 +39,7 @@
     "@biomejs/biome": "^2.5.0",
     "@playwright/test": "1.62.1",
     "@tailwindcss/vite": "4.3.3",
+    "@ton/core": "^0.63.1",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.2",
