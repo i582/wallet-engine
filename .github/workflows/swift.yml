@@ -8,6 +8,11 @@ on:
     branches:
       - master
   workflow_dispatch:
+    inputs:
+      update-snapshots:
+        description: Regenerate the iOS snapshot baselines instead of verifying them
+        type: boolean
+        default: false
 
 permissions: { }
 
@@ -97,7 +102,15 @@ jobs:
         run: just example-swift-e2e-install
 
       - name: Run iOS client scenarios
-        run: just example-swift-e2e
+        run: just ${{ inputs.update-snapshots && 'example-swift-e2e-update-snapshots' || 'example-swift-e2e' }}
+
+      - name: Upload regenerated iOS snapshots
+        if: ${{ always() && inputs.update-snapshots }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ios-snapshots
+          path: examples/swift/WalletEngineAppUITests/Snapshots
+          if-no-files-found: error
 
       - name: Upload iOS E2E diagnostics
         if: failure()
