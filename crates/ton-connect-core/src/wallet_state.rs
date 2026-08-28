@@ -176,7 +176,8 @@ pub enum StandardWalletVersion {
     V4R2,
     /// Wallet V5 revision 1.
     V5R1,
-    /// The wallet-engine contract with one-time public-key rotation.
+    /// The wallet-engine trampoline whose real bytecode lives in the
+    /// blockchain config.
     Wallet,
 }
 
@@ -352,7 +353,7 @@ fn version_from_code(code: &TonCell) -> Result<Option<StandardWalletVersion>, Wa
         "20834b7b72b112147e1b2fb457b84e74d1a30f04f737d4f62a668e9552d2b72f" => {
             Some(StandardWalletVersion::V5R1)
         }
-        "3791f4bfbb8a2f697a5ce3598fdceeaaa0ead0badded8473a35fb69f76b021e5" => {
+        "9149ae51c1e4689710cebf7830297b16acfbadb363a920a537893e7ffeeca768" => {
             Some(StandardWalletVersion::Wallet)
         }
         _ => None,
@@ -401,13 +402,6 @@ fn extract_public_key(
             .read_next_ref()
             .map_err(|_| WalletStateError::InvalidWalletData)?;
     }
-    if matches!(version, StandardWalletVersion::Wallet)
-        && parser
-            .read_bit()
-            .map_err(|_| WalletStateError::InvalidWalletData)?
-    {
-        return Err(WalletStateError::InvalidWalletData);
-    }
     parser
         .ensure_empty()
         .map_err(|_| WalletStateError::InvalidWalletData)?;
@@ -439,7 +433,7 @@ mod tests {
     const V4R1_CODE: &str = include_str!("testdata/wallet_v4r1.code");
     const V4R2_CODE: &str = include_str!("testdata/wallet_v4r2.code");
     const V5R1_CODE: &str = include_str!("testdata/wallet_v5.code");
-    const WALLET_CODE: &str = include_str!("testdata/wallet_v5_experimental.code");
+    const WALLET_CODE: &str = include_str!("testdata/wallet_trampoline.code");
 
     type TestResult = Result<(), Box<dyn Error>>;
 
@@ -499,9 +493,6 @@ mod tests {
             version,
             StandardWalletVersion::V4R1 | StandardWalletVersion::V4R2 | StandardWalletVersion::V5R1
         ) {
-            builder.write_bit(false)?;
-        }
-        if matches!(version, StandardWalletVersion::Wallet) {
             builder.write_bit(false)?;
         }
         Ok(builder.build()?)

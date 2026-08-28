@@ -55,11 +55,12 @@ pub static TON_WALLET_CODE_BY_VERSION: LazyLock<HashMap<WalletVersion, TonCell>>
                 V5R1,
                 load_code!("../../resources/ton_wallet_code/wallet_v5.code"),
             ),
-            // Wallet rev00.
-            // Code-cell hash: 3791f4bfbb8a2f697a5ce3598fdceeaaa0ead0badded8473a35fb69f76b021e5.
+            // Wallet trampoline: the on-account code jumps into the real
+            // WalletTg rev00 bytecode stored in blockchain config param -123.
+            // Code-cell hash: 9149ae51c1e4689710cebf7830297b16acfbadb363a920a537893e7ffeeca768.
             (
                 Wallet,
-                load_code!("../../resources/ton_wallet_code/wallet_v5_experimental.code"),
+                load_code!("../../resources/ton_wallet_code/wallet_trampoline.code"),
             ),
             (
                 HLV1R1,

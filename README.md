@@ -327,11 +327,16 @@ outgoing messages
 Wallet V3R1 through V5R1 have no rotatable signing key, and the TEP forbids
 deploying them from a Rotation mnemonic.
 
-The engine embeds Wallet rev00. This revision is not declared final. Its
-initial `StateInit` and address use the anchor public key. Ordinary external
-and owner-authorized internal requests use the signing key. Before rotation
-the two keys are equal. After rotation a 24-word phrase can sign requests for
-an already active account without changing its address.
+The engine embeds the wallet trampoline: a small code cell that jumps into
+the real Wallet rev00 bytecode stored at blockchain config param `-123`. The
+bytecode is present in the testnet config; the mainnet config vote is in
+progress. Only the trampoline and the initial storage are deployed per
+account, so every wallet shares the config-resident implementation and its
+future revisions. The revision is not declared final. The initial `StateInit`
+and address use the anchor public key. Ordinary external and owner-authorized
+internal requests use the signing key. Before rotation the two keys are
+equal. After rotation a 24-word phrase can sign requests for an already
+active account without changing its address.
 
 `WalletLifecycle.prepareKeyRotation` constructs the one-time key-change data.
 The caller supplies a fresh `seqno`, an expiration time, and the message kind.
@@ -344,7 +349,7 @@ The engine then:
 5. returns the complete 24-word phrase, new public key, and signed BOC.
 
 The method does not change protected storage or submit the BOC. It also does
-not read `was_key_changed` or `get_public_key` from chain state.
+not read `get_public_key` from chain state.
 
 Before submission, store the returned phrase in protected storage. Store the
 pending BOC in a durable journal. Until chain state resolves the request, block

@@ -263,11 +263,11 @@ mod tests {
         assert_eq!(material.new_public_key, new_public_key);
         assert_eq!(
             proof.cell_hash().expect("proof hashes").to_string(),
-            "85CEBA9AE10E881B46B67535C9C58E3DCB281591C286BD597462DC58D20E746B"
+            "26ADD39A33B9F4A6BE22ADC98DB908C05AE47976EFD215CBB82D1A2691717517"
         );
         assert_eq!(
             request.cell_hash().expect("request hashes").to_string(),
-            "6BB3DA0003A1688B43D40191EC5522BC394D40835AB30EBBBB77743FC41089C7"
+            "5527695BB1558A7489A2378399386D77AD019C64768ED57F281979D124383FFE"
         );
 
         let replacement = material
@@ -284,7 +284,7 @@ mod tests {
 
         assert_eq!(
             message.cell_hash().expect("message hashes").to_string(),
-            "C345C176A1BB01B3F3DBE61107F2EF085BF84317F6A14586F90176531965148A"
+            "8242D2902CEE23814342B5058C741149F993F73A5D649A9F4BA41895D391954A"
         );
     }
 
@@ -313,7 +313,7 @@ mod tests {
         );
         assert_eq!(
             message.cell_hash().expect("message hashes").to_string(),
-            "1FA588F01CA2FFCB187C8F33F40645ECB218719356859BD4A113D0410B52F494"
+            "C8017E316393EC14C2A01DAF9C10F008793E84A375DF31DCF1ECF53D729B5EC4"
         );
     }
 

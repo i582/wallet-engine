@@ -30,12 +30,11 @@ fn rust_serialization_matches_original_tolk_vectors() -> Result<(), Box<dyn Erro
         seqno: 0x0102_0304,
         wallet_id: 0x7fff_7ffd,
         public_key: TonHash::from([0x11; 32]),
-        was_key_changed: false,
     }
     .to_cell()?;
     assert_hash(
         &storage,
-        "94651e5f3b20fd2e86335fc6e071def4aeba2b4cf58a0f48a57a7c0fc280423f",
+        "879617849c5eb8056d68eeb4fa84d090bfc11123e069740b854f3678f8678d64",
     )?;
 
     let msgs = source_vector_messages()?;
