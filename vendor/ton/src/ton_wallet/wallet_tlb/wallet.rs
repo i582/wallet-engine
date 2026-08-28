@@ -17,18 +17,16 @@ pub struct WalletData {
     pub seqno: u32,
     pub wallet_id: u32,
     pub public_key: TonHash,
-    pub was_key_changed: bool,
 }
 
 impl WalletData {
-    /// Creates undeployed revision-00 storage with key rotation unused.
+    /// Creates undeployed revision-00 storage.
     pub fn new(wallet_id: i32, public_key: TonHash) -> Self {
         Self {
             revision: 0,
             seqno: 0,
             wallet_id: u32::from_be_bytes(wallet_id.to_be_bytes()),
             public_key,
-            was_key_changed: false,
         }
     }
 }
@@ -280,7 +278,6 @@ mod tests {
         assert_eq!(parser.read_num::<u32>(32)?, 0);
         assert_eq!(parser.read_num::<u32>(32)?, 0x7fff_7ffd);
         assert_eq!(parser.read_bits(256)?, vec![0x5a; 32]);
-        assert!(!parser.read_bit()?);
         parser.ensure_empty()?;
         Ok(())
     }

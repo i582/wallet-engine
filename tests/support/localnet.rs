@@ -17,12 +17,13 @@ use reqwest::blocking::Client;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use ton::block_tlb::{CommonMsgInfoInt, Msg};
+use ton::tlb_adapters::{DictKeyAdapterUint, DictValAdapterTLB, TLBHashMap};
 use ton::ton_core::cell::TonCell;
 use ton::ton_core::traits::tlb::TLB;
 use ton::ton_core::types::TonAddress;
-use ton::ton_core::types::tlb_core::TLBCoins;
+use ton::ton_core::types::tlb_core::{TLBCoins, TLBRef};
 use ton::ton_wallet::{
-    TonWallet, WALLET_SUBWALLET_ID_DEFAULT_TESTNET, WalletExtMsgBody, WalletVersion,
+    TonWallet, WALLET_SUBWALLET_ID_DEFAULT_TESTNET, WalletData, WalletExtMsgBody, WalletVersion,
 };
 use wallet_engine::{
     Boc, HttpHeader, HttpHostError, HttpHostErrorKind, HttpMethod, HttpRequest, HttpRequestId,
@@ -451,6 +452,26 @@ impl LocalnetHttpHost {
             lock(&self.activity_requests).push(request.url.clone());
         }
 
+        if request.method == HttpMethod::Post
+            && let Ok(payload) = serde_json::from_slice::<Value>(&request.body)
+            && payload.get("method").and_then(Value::as_str) == Some("runGetMethod")
+            && let Some(address) = payload.pointer("/params/address").and_then(Value::as_str)
+            && let Some(get_method) = payload.pointer("/params/method").and_then(Value::as_str)
+            && let Some(body) = lock(&self.localnet)
+                .wallet_get_method(address, get_method)
+                .map_err(|error| host_error(HttpHostErrorKind::Other, &error))?
+        {
+            return Ok(HttpResponse {
+                status: 200,
+                headers: vec![HttpHeader {
+                    name: "content-type".to_owned(),
+                    value: "application/json".to_owned(),
+                }],
+                body: body.to_string().into_bytes(),
+                final_url: request.url.clone(),
+            });
+        }
+
         let method = match request.method {
             HttpMethod::Get => Method::GET,
             HttpMethod::Post => Method::POST,
@@ -698,12 +719,99 @@ impl Localnet {
             )
             .is_ok_and(|(status, _)| (200..300).contains(&status))
             {
+                localnet.install_wallet_bytecode()?;
                 return Ok(localnet);
             }
             thread::sleep(Duration::from_millis(50));
         }
 
         Err(localnet.failure("Acton localnet did not become ready"))
+    }
+
+    /// Publishes the real wallet bytecode into the localnet blockchain config.
+    ///
+    /// Deployed accounts carry only the wallet trampoline, whose code jumps
+    /// into the bytecode stored at config param -123 (already present on
+    /// testnet). A fresh localnet config lacks that param, so every wallet
+    /// execution would fail without this patch.
+    fn install_wallet_bytecode(&self) -> Result<(), String> {
+        const WALLET_TG_CODE_B64: &str = include_str!("wallet_tg_rev00.code");
+        const BYTECODE_CONFIG_KEY: i32 = -123;
+
+        let (status, mut state) = request(
+            &self.client,
+            Method::GET,
+            &format!("{}/acton_dumpState", self.base_url),
+            None,
+        )?;
+        if !(200..300).contains(&status) {
+            return Err(format!("localnet state dump failed with HTTP {status}"));
+        }
+
+        let config_hash = state
+            .pointer("/globals/config_boc_hash")
+            .and_then(Value::as_str)
+            .ok_or("localnet state dump has no config hash")?
+            .to_owned();
+        let config_entry = state
+            .pointer_mut("/cas_entries")
+            .and_then(Value::as_array_mut)
+            .ok_or("localnet state dump has no cell storage")?
+            .iter_mut()
+            .filter_map(Value::as_array_mut)
+            .find(|pair| pair.first().and_then(Value::as_str) == Some(config_hash.as_str()))
+            .ok_or("localnet cell storage has no config cell")?;
+        let config_boc = STANDARD
+            .decode(
+                config_entry[1]
+                    .as_str()
+                    .ok_or("localnet config cell is not base64")?,
+            )
+            .map_err(|error| format!("localnet config cell decoding failed: {error}"))?;
+
+        let config_cell = TonCell::from_boc(config_boc).map_err(|error| error.to_string())?;
+        let dict_codec =
+            TLBHashMap::<DictKeyAdapterUint<u32>, DictValAdapterTLB<TLBRef<TonCell>>>::new(32);
+        let mut params = dict_codec
+            .read(&mut config_cell.parser())
+            .map_err(|error| format!("localnet config parsing failed: {error}"))?;
+        let wallet_code =
+            TonCell::from_boc_base64(WALLET_TG_CODE_B64.trim()).map_err(|error| error.to_string())?;
+        let key = u32::from_be_bytes(BYTECODE_CONFIG_KEY.to_be_bytes());
+        params.insert(key, TLBRef::new(wallet_code));
+        let mut patched_builder = TonCell::builder();
+        dict_codec
+            .write(&mut patched_builder, &params)
+            .map_err(|error| format!("localnet config serialization failed: {error}"))?;
+        let patched = patched_builder.build().map_err(|error| error.to_string())?;
+
+        let patched_hash: String = patched
+            .cell_hash()
+            .map_err(|error| error.to_string())?
+            .as_slice()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let patched_boc = STANDARD.encode(patched.to_boc().map_err(|error| error.to_string())?);
+        config_entry[0] = Value::String(patched_hash.clone());
+        config_entry[1] = Value::String(patched_boc);
+        *state
+            .pointer_mut("/globals/config_boc_hash")
+            .ok_or("localnet state dump lost its config hash")? = Value::String(patched_hash);
+
+        let (status, body) = request(
+            &self.client,
+            Method::POST,
+            &format!("{}/acton_loadState", self.base_url),
+            Some(&state),
+        )?;
+        if (200..300).contains(&status) && body.get("ok").and_then(Value::as_bool) == Some(true) {
+            Ok(())
+        } else {
+            Err(format!(
+                "localnet config update failed with HTTP {status}: {body}"
+            ))
+        }
     }
 
     fn fund(&self, address: &str, amount: u64) -> Result<(), String> {
@@ -822,28 +930,75 @@ impl Localnet {
         )
     }
 
+    /// Serves a wallet get method from the account's storage cell.
+    ///
+    /// Localnet's `runGetMethod` executes the on-account trampoline without
+    /// the chain-state config, so `CONFIGOPTPARAM -123` fails there even
+    /// though transactions see the patched config. Real networks run get
+    /// methods against the full masterchain config, so tests answer the
+    /// wallet's storage-backed get methods locally instead. Returns `None`
+    /// for other methods or accounts without parsable wallet storage.
+    fn wallet_get_method(&self, address: &str, method: &str) -> Result<Option<Value>, String> {
+        if !matches!(method, "seqno" | "get_subwallet_id" | "get_public_key") {
+            return Ok(None);
+        }
+
+        let (status, body) = request(
+            &self.client,
+            Method::GET,
+            &format!(
+                "{}/api/v2/getAddressInformation?address={address}",
+                self.base_url
+            ),
+            None,
+        )?;
+        if !(200..300).contains(&status) {
+            return Err(format!(
+                "account data request failed with HTTP {status}: {body}"
+            ));
+        }
+        let Some(data) = body.pointer("/result/data").and_then(Value::as_str) else {
+            return Ok(None);
+        };
+        let Ok(data) = STANDARD.decode(data) else {
+            return Ok(None);
+        };
+        let Ok(storage) = WalletData::from_boc(data) else {
+            return Ok(None);
+        };
+
+        let value = match method {
+            "seqno" => format!("0x{:x}", storage.seqno),
+            "get_subwallet_id" => format!("0x{:x}", storage.wallet_id),
+            _ => {
+                let mut encoded = String::with_capacity(66);
+                encoded.push_str("0x");
+                for byte in storage.public_key.as_slice() {
+                    encoded.push_str(&format!("{byte:02x}"));
+                }
+                encoded
+            }
+        };
+        Ok(Some(json!({
+            "ok": true,
+            "result": {
+                "@type": "smc.runResult",
+                "exit_code": 0,
+                "gas_used": 0,
+                "stack": [["num", value]]
+            }
+        })))
+    }
+
     fn seqno(&self, address: &str) -> Result<u32, String> {
         let encoded = self.get_method_number(address, "seqno")?;
         u32::from_str_radix(encoded.trim_start_matches("0x"), 16).map_err(|error| error.to_string())
     }
 
     fn get_method_number(&self, address: &str, method: &str) -> Result<String, String> {
-        let (status, body) = request(
-            &self.client,
-            Method::POST,
-            &format!("{}/api/v2/jsonRPC", self.base_url),
-            Some(&json!({
-                "jsonrpc": "2.0",
-                "id": format!("wallet-engine-localnet-{method}"),
-                "method": "runGetMethod",
-                "params": { "address": address, "method": method, "stack": [] }
-            })),
-        )?;
-        if !(200..300).contains(&status) {
-            return Err(format!(
-                "{method} request failed with HTTP {status}: {body}"
-            ));
-        }
+        let body = self
+            .wallet_get_method(address, method)?
+            .ok_or_else(|| format!("{method} is not a wallet storage get method"))?;
         body.pointer("/result/stack/0/1")
             .and_then(Value::as_str)
             .map(str::to_owned)

@@ -16,7 +16,7 @@ impl TestWalletFixture {
     const RECOVERY_PHRASE: &'static str =
         "notice tortoise soup strong gun divide offer process salon siren general carry";
 
-    const TESTNET_ADDRESS: &'static str = "0QCecG6hpl_o16_bYZO_x3rNzyfbhH7Ur6jTh49taojyvNCE";
+    const TESTNET_ADDRESS: &'static str = "0QAzxihJwpvRSOBcSjpzmDIf7RjpuAosoEWzmNTbNVy8EdkD";
 
     const OTHER_RECOVERY_PHRASE: &'static str =
         "april style market avoid find artist van spy salute broccoli daughter imitate";
