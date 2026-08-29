@@ -172,7 +172,9 @@ export class TonConnectWallet {
           items.push({
             name: "ton_proof",
             proof: {
-              timestamp: String(timestamp),
+              // The TON Connect specification sends the timestamp as an
+              // integer. Strict dApp validators reject a string here.
+              timestamp,
               domain: {lengthBytes: new TextEncoder().encode(domain).byteLength, value: domain},
               payload: item.payload,
               signature: Base64.encode(new Uint8Array(signed.signature)),
