@@ -438,6 +438,7 @@ describe("high-level WASM API", () => {
     })
     expect(proof.signature).toHaveLength(64)
 
+    let submittedBoc: string | undefined
     const client = await WalletClient.create(
       {
         ...walletConfig(created.descriptor),
@@ -445,12 +446,22 @@ describe("high-level WASM API", () => {
       },
       {
         platformHost: platform,
-        fetch: mockFetch(async (_input, init) => {
+        fetch: mockFetch(async (input, init) => {
+          if (String(input).includes("getAddressInformation")) {
+            return Response.json({
+              ok: true,
+              result: {balance: "5000000000", state: "active", sync_utime: 1_800_000_000},
+            })
+          }
           const body = new TextDecoder().decode(init?.body as Uint8Array)
           const request = JSON.parse(body) as {method: string; params: Record<string, unknown>}
-          expect(request.method).toBe("runGetMethod")
-          expect(request.params.method).toBe("seqno")
-          return Response.json({ok: true, result: {stack: [["num", "0x2a"]]}})
+          if (request.method === "runGetMethod") {
+            expect(request.params.method).toBe("seqno")
+            return Response.json({ok: true, result: {stack: [["num", "0x2a"]]}})
+          }
+          expect(request.method).toBe("sendBoc")
+          submittedBoc = request.params.boc as string
+          return Response.json({ok: true, result: {"@type": "ok"}})
         }),
       },
     )
@@ -468,6 +479,17 @@ describe("high-level WASM API", () => {
       validUntil: 1_900_000_000,
       messageKind: "external",
     })
+
+    const sendResult = await client.sendBoc({
+      operationId: "browser-key-rotation-send",
+      force: false,
+      signedBoc: rotation.signedBoc,
+      seqno: rotation.seqno,
+      validUntil: rotation.validUntil,
+    })
+    expect(sendResult.phase).toBe("submitted")
+    expect(sendResult.signedBoc).toBe(rotation.signedBoc)
+    expect(submittedBoc).toBe(rotation.signedBoc)
 
     const revealed = await lifecycle.revealRecoveryPhrase(created.descriptor)
     expect(revealed.phrase).toEqual(created.recoveryPhrase.phrase)

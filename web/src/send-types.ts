@@ -105,6 +105,18 @@ export interface SendRequest {
   readonly intent: SendIntent
 }
 
+/** Durably submits one already signed external wallet message. */
+export interface SendBocRequest {
+  readonly operationId: string
+  /** Allows replacement of an unresolved durable send after explicit confirmation. */
+  readonly force?: boolean
+  readonly signedBoc: string
+  /** Exact wallet seqno covered by signedBoc. */
+  readonly seqno: number
+  /** Exact Unix expiration timestamp covered by signedBoc. */
+  readonly validUntil: number
+}
+
 /** Requests one signed internal Wallet V5 message without submission. */
 export interface SignMessageRequest {
   readonly operationId: string

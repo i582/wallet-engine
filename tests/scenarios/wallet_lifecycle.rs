@@ -100,6 +100,24 @@ fn repeated_external_key_rotation_executes_on_the_wallet_contract() {
 }
 
 #[test]
+fn key_rotation_journal_survives_wallet_client_restart() {
+    execute_key_rotation_confirmation_after_restart_on_localnet()
+        .expect("a restarted WalletClient must confirm the journaled key rotation");
+}
+
+#[test]
+fn stale_key_rotation_is_rejected_before_submission() {
+    execute_stale_key_rotation_rejection_on_localnet()
+        .expect("a stale rotation must stay local and a fresh retry must execute");
+}
+
+#[test]
+fn key_rotation_and_ordinary_send_share_one_active_slot() {
+    execute_key_rotation_shares_send_slot_on_localnet()
+        .expect("sendBoc and ordinary send must share the same active operation");
+}
+
+#[test]
 fn network_changes_the_wallet_contract_address() {
     let words = test_wallet().recovery_words();
 

@@ -23,8 +23,9 @@ use ton::ton_wallet::{
 
 use crate::types::{Boc, BocError};
 use crate::{
-    Base64Hash, Base64HashError, Network, NonEmptyString, SendAmount, SendIntentError, SendMessage,
-    SendMessageBody, SendPreviewRequest, SendRequest, TonAddressString,
+    Base64Hash, Base64HashError, Network, NonEmptyString, SendAmount, SendBocRequest,
+    SendIntentError, SendMessage, SendMessageBody, SendPreviewRequest, SendRequest,
+    TonAddressString,
 };
 
 use super::crypto::{WalletCryptoError, derive_wallet, derive_wallet_public_state};
@@ -62,6 +63,49 @@ pub(crate) enum TransferError {
     BocEncoding(#[source] TonCoreError),
     #[error("signed BOC validation failed")]
     InvalidBoc(#[source] BocError),
+    #[error("prepared BOC is not an incoming external message")]
+    PreparedMessageNotExternal,
+    #[error("prepared BOC destination does not match the configured wallet")]
+    PreparedMessageDestinationMismatch,
+}
+
+/// Normalizes a caller-signed external message into the same durable material
+/// used by locally signed transfers.
+pub(crate) fn prepare_signed_boc(
+    record_id: &NonEmptyString,
+    source: &TonAddressString,
+    request: &SendBocRequest,
+) -> Result<PreparedTransfer, TransferError> {
+    let _ = u32::try_from(request.valid_until).map_err(|_| TransferError::ExpirationOutOfRange)?;
+    let root = TonCell::from_boc(request.signed_boc.as_bytes().to_vec())
+        .map_err(TransferError::MessageNormalization)?;
+    let normalized =
+        Msg::<TonCell>::from_cell(&root).map_err(TransferError::MessageNormalization)?;
+    let CommonMsgInfo::ExtIn(info) = &normalized.info else {
+        return Err(TransferError::PreparedMessageNotExternal);
+    };
+    if info.dst != source.as_address().to_msg_address_int() {
+        return Err(TransferError::PreparedMessageDestinationMismatch);
+    }
+
+    let message_hash_bytes = normalized
+        .cell_hash_normalized()
+        .map_err(TransferError::MessageHash)?;
+    let message_hash = Base64Hash::from_bytes(message_hash_bytes.as_slice())
+        .map_err(TransferError::InvalidMessageHash)?;
+
+    Ok(PreparedTransfer {
+        operation_id: request.operation_id.clone(),
+        record_id: record_id.clone(),
+        source: source.clone(),
+        kind: SignedMessageKind::External,
+        messages: Vec::new(),
+        seqno: request.seqno,
+        needs_state_init: normalized.state_init().is_some(),
+        valid_until: request.valid_until,
+        signed_boc: request.signed_boc.clone(),
+        message_hash,
+    })
 }
 
 pub(crate) fn prepare_transfer(

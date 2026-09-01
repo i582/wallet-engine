@@ -9,9 +9,12 @@ use super::send_state::SensitiveBytes;
 use super::state::{OperationFamily, ensure_running};
 
 use crate::transport::build_toncenter_v2_request;
-use crate::wallet::send::{FreshSendAccount, SendDirective, SendWorkflow};
+use crate::wallet::send::{FreshSendAccount, PreparedTransfer, SendDirective, SendWorkflow};
 use crate::wallet::transfer::{derive_source, prepare_transfer};
-use crate::{AccountStatus, SendPhase, SendRequest, SendResult, WalletClientError};
+use crate::{
+    AccountStatus, HttpRequestId, SendPhase, SendRequest, SendResult, WalletClientConfig,
+    WalletClientError,
+};
 
 use super::provider::parse_account;
 use super::resolution::ResolutionRequests;
@@ -279,110 +282,8 @@ impl WalletClient {
         .map_err(|error| {
             self.send_failed_error(generation, format!("failed to prepare transfer: {error}"))
         })?;
-        let signed_boc = prepared.signed_boc.clone();
-
-        let submit_request =
-            build_send_boc_request(&config, submit_request_id, &prepared.signed_boc).map_err(
-                |_| self.send_failed_error(generation, "failed to construct submission"),
-            )?;
-
-        let directive = workflow
-            .transfer_prepared(prepared)
-            .map_err(|error| self.send_failed_error(generation, error.to_string()))?;
-
-        let SendDirective::PersistJournal(mutation) = directive else {
-            return Err(self.send_failed_error(generation, "invalid send persistence transition"));
-        };
-
-        self.publish_send_workflow(generation, &workflow)?;
-
-        // Start the irreversible boundary before awaiting durable CAS. After this point cancel
-        // returns TooLate because the exact BOC can survive a crash or already be in flight.
-        self.begin_send_commit(generation)?;
-        let journal = match self.platform_host.compare_exchange_journal(mutation).await {
-            Ok(journal) => journal,
-            Err(error) => {
-                return Err(self.submission_unknown_error(generation, error.to_string()));
-            }
-        };
-        self.ensure_current_send(generation)?;
-
-        let journal_applied = journal.applied;
-        let directive = workflow.journal_persisted(&journal).map_err(|error| {
-            if journal_applied {
-                self.submission_unknown_error(generation, error.to_string())
-            } else {
-                self.send_workflow_error(generation, &error)
-            }
-        })?;
-
-        let SendDirective::Submit {
-            signed_boc: _,
-            message_hash,
-        } = directive
-        else {
-            return Err(
-                self.submission_unknown_error(generation, "invalid send submission transition")
-            );
-        };
-        workflow
-            .submission_started()
-            .map_err(|error| self.submission_unknown_error(generation, error.to_string()))?;
-        self.publish_send_workflow(generation, &workflow)?;
-
-        // Submit exactly the BOC stored above. Transport or malformed-response failures are
-        // classified as SubmissionUnknown because the provider might have accepted the POST.
-        let submit_result = self
-            .execute_tracked_send_request(generation, &submit_request)
-            .await?;
-
-        let final_directive = match submit_result.and_then(|body| parse_send_response(&body)) {
-            Ok(SendBocResponse::Accepted) => workflow.submission_succeeded(None),
-            Ok(SendBocResponse::Rejected(message)) => workflow.submission_rejected(message),
-            Err(error) if is_explicit_send_rejection(&error) => {
-                workflow.submission_rejected(error.developer_message)
-            }
-            Err(error) => workflow.submission_unknown(error.developer_message),
-        }
-        .map_err(|error| self.submission_unknown_error(generation, error.to_string()))?;
-        let SendDirective::PersistJournal(mutation) = final_directive else {
-            return Err(self
-                .submission_unknown_error(generation, "invalid terminal persistence transition"));
-        };
-        self.publish_send_workflow(generation, &workflow)?;
-        self.ensure_current_send(generation)?;
-
-        // Persist the terminal outcome before publishing completion. On failure, keep the public
-        // state unknown so a restart cannot silently replace a possibly submitted transfer.
-        let journal = match self.platform_host.compare_exchange_journal(mutation).await {
-            Ok(journal) => journal,
-            Err(error) => {
-                return Err(self.submission_unknown_error(generation, error.to_string()));
-            }
-        };
-        self.ensure_current_send(generation)?;
-        let _ = workflow
-            .journal_persisted(&journal)
-            .map_err(|error| self.submission_unknown_error(generation, error.to_string()))?;
-        let phase = workflow.snapshot().phase;
-
-        // Publish one terminal snapshot and release the single-flight send slot.
-        {
-            let mut state = self.lock()?;
-            if state.is_current(OperationFamily::Send, generation) {
-                state.snapshot.send = workflow.snapshot();
-                state.send_workflow = Some(workflow);
-                state.active_send = None;
-                state.send_commit_started = false;
-                state.next_revision()?;
-            }
-        }
-        Ok(SendResult {
-            operation_id: request.operation_id,
-            message_hash,
-            signed_boc,
-            phase,
-        })
+        self.submit_prepared_send(generation, &config, submit_request_id, workflow, prepared)
+            .await
     }
 
     /// Cancels the active send before its durable commit boundary.
@@ -418,5 +319,115 @@ impl WalletClient {
         }
 
         Ok(())
+    }
+}
+
+impl WalletClient {
+    /// Persists and submits one normalized signed external message.
+    ///
+    /// Both locally signed transfers and caller-prepared BOCs cross the same
+    /// durable boundary and publish the same terminal send state here.
+    pub(super) async fn submit_prepared_send(
+        &self,
+        generation: u64,
+        config: &WalletClientConfig,
+        submit_request_id: HttpRequestId,
+        mut workflow: SendWorkflow,
+        prepared: PreparedTransfer,
+    ) -> Result<SendResult, WalletClientError> {
+        let operation_id = prepared.operation_id.clone();
+        let signed_boc = prepared.signed_boc.clone();
+        let submit_request =
+            build_send_boc_request(config, submit_request_id, &prepared.signed_boc).map_err(
+                |_| self.send_failed_error(generation, "failed to construct submission"),
+            )?;
+
+        let directive = workflow
+            .transfer_prepared(prepared)
+            .map_err(|error| self.send_failed_error(generation, error.to_string()))?;
+        let SendDirective::PersistJournal(mutation) = directive else {
+            return Err(self.send_failed_error(generation, "invalid send persistence transition"));
+        };
+        self.publish_send_workflow(generation, &workflow)?;
+
+        // The exact signed BOC becomes durable before provider handoff.
+        self.begin_send_commit(generation)?;
+        let journal = match self.platform_host.compare_exchange_journal(mutation).await {
+            Ok(journal) => journal,
+            Err(error) => {
+                return Err(self.submission_unknown_error(generation, error.to_string()));
+            }
+        };
+        self.ensure_current_send(generation)?;
+
+        let journal_applied = journal.applied;
+        let directive = workflow.journal_persisted(&journal).map_err(|error| {
+            if journal_applied {
+                self.submission_unknown_error(generation, error.to_string())
+            } else {
+                self.send_workflow_error(generation, &error)
+            }
+        })?;
+        let SendDirective::Submit {
+            signed_boc: _,
+            message_hash,
+        } = directive
+        else {
+            return Err(
+                self.submission_unknown_error(generation, "invalid send submission transition")
+            );
+        };
+        workflow
+            .submission_started()
+            .map_err(|error| self.submission_unknown_error(generation, error.to_string()))?;
+        self.publish_send_workflow(generation, &workflow)?;
+
+        let submit_result = self
+            .execute_tracked_send_request(generation, &submit_request)
+            .await?;
+        let final_directive = match submit_result.and_then(|body| parse_send_response(&body)) {
+            Ok(SendBocResponse::Accepted) => workflow.submission_succeeded(None),
+            Ok(SendBocResponse::Rejected(message)) => workflow.submission_rejected(message),
+            Err(error) if is_explicit_send_rejection(&error) => {
+                workflow.submission_rejected(error.developer_message)
+            }
+            Err(error) => workflow.submission_unknown(error.developer_message),
+        }
+        .map_err(|error| self.submission_unknown_error(generation, error.to_string()))?;
+        let SendDirective::PersistJournal(mutation) = final_directive else {
+            return Err(self
+                .submission_unknown_error(generation, "invalid terminal persistence transition"));
+        };
+        self.publish_send_workflow(generation, &workflow)?;
+        self.ensure_current_send(generation)?;
+
+        let journal = match self.platform_host.compare_exchange_journal(mutation).await {
+            Ok(journal) => journal,
+            Err(error) => {
+                return Err(self.submission_unknown_error(generation, error.to_string()));
+            }
+        };
+        self.ensure_current_send(generation)?;
+        let _ = workflow
+            .journal_persisted(&journal)
+            .map_err(|error| self.submission_unknown_error(generation, error.to_string()))?;
+        let phase = workflow.snapshot().phase;
+
+        {
+            let mut state = self.lock()?;
+            if state.is_current(OperationFamily::Send, generation) {
+                state.snapshot.send = workflow.snapshot();
+                state.send_workflow = Some(workflow);
+                state.active_send = None;
+                state.send_commit_started = false;
+                state.next_revision()?;
+            }
+        }
+        Ok(SendResult {
+            operation_id,
+            message_hash,
+            signed_boc,
+            phase,
+        })
     }
 }

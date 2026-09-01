@@ -21,6 +21,7 @@ mod resolution;
 mod resolution_http;
 mod resolve;
 mod send;
+mod send_boc;
 mod send_http;
 mod send_state;
 mod sign_message;

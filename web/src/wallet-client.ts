@@ -8,6 +8,7 @@ import type {
   NftTransferRequest,
   SendPreview,
   SendPreviewRequest,
+  SendBocRequest,
   SendRequest,
   SendResult,
   SignMessageRequest,
@@ -126,6 +127,12 @@ export class WalletClient {
   async send(request: SendRequest): Promise<SendResult> {
     this.assertOpen()
     return (await this.raw.send(request)) as SendResult
+  }
+
+  /** Durably records and submits an already signed external-message BOC. */
+  async sendBoc(request: SendBocRequest): Promise<SendResult> {
+    this.assertOpen()
+    return (await this.raw.sendBoc(request)) as SendResult
   }
 
   /** Fetches the current seqno and prepares a signed Wallet rev00 key rotation. */

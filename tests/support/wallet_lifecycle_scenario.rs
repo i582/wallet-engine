@@ -1,15 +1,17 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::thread;
 
 use futures::executor::block_on;
 use wallet_engine::{
     CreateWalletRequest, CreatedWallet, ImportWalletRequest, KeyRotationMessageKind, Network,
     NonEmptyString, PrepareKeyRotationRequest, PreparedKeyRotation, ProviderConfig, RecoveryPhrase,
-    SecretAccessReason, WalletClient, WalletClientConfig, WalletClientError, WalletDescriptor,
-    WalletLifecycle, WalletLifecycleError,
+    SecretAccessReason, SendAmount, SendBocRequest, SendExpiration, SendIntent, SendMessage,
+    SendMessageBody, SendPhase, SendRequest, UnsignedDecimalString, WalletClient,
+    WalletClientConfig, WalletClientError, WalletDescriptor, WalletLifecycle, WalletLifecycleError,
 };
 
-use super::host::{MemoryPlatformHost, ScenarioHttpHost};
+use super::host::{MemoryPlatformHost, RequestKind, ScenarioHttpHost};
 use super::localnet::LocalnetHttpHost;
 use super::scenario::wallet;
 use super::test_wallet::test_wallet;
@@ -53,7 +55,32 @@ pub(crate) fn execute_repeated_key_rotation_on_localnet() -> Result<(), String> 
             first.seqno
         ));
     }
-    localnet.submit_external_boc(&first.signed_boc, 2)?;
+    let first_send = block_on(
+        first_client.send_boc(SendBocRequest {
+            operation_id: NonEmptyString::try_from("localnet-key-rotation-first".to_owned())
+                .map_err(|error| error.to_string())?,
+            force: false,
+            signed_boc: first.signed_boc.clone(),
+            seqno: first.seqno,
+            valid_until: first.valid_until,
+        }),
+    )
+    .map_err(|error| error.to_string())?;
+    if first_send.phase != SendPhase::Submitted {
+        return Err(format!(
+            "expected first rotation submission, got {:?}",
+            first_send.phase
+        ));
+    }
+    localnet.wait_for_seqno(2)?;
+    let first_resolution =
+        block_on(first_client.resolve_pending()).map_err(|error| error.to_string())?;
+    if first_resolution.phase != SendPhase::Confirmed {
+        return Err(format!(
+            "expected first rotation confirmation, got {:?}",
+            first_resolution.phase
+        ));
+    }
     assert_localnet_public_key(&localnet, &first.new_public_key, "first")?;
 
     let second_descriptor = block_on(
@@ -94,10 +121,235 @@ pub(crate) fn execute_repeated_key_rotation_on_localnet() -> Result<(), String> 
     if second.new_public_key == first.new_public_key {
         return Err("the second rotation reused the current signing key".to_owned());
     }
-    localnet.submit_external_boc(&second.signed_boc, 3)?;
+    let second_send = block_on(
+        second_client.send_boc(SendBocRequest {
+            operation_id: NonEmptyString::try_from("localnet-key-rotation-second".to_owned())
+                .map_err(|error| error.to_string())?,
+            force: false,
+            signed_boc: second.signed_boc.clone(),
+            seqno: second.seqno,
+            valid_until: second.valid_until,
+        }),
+    )
+    .map_err(|error| error.to_string())?;
+    if second_send.phase != SendPhase::Submitted {
+        return Err(format!(
+            "expected second rotation submission, got {:?}",
+            second_send.phase
+        ));
+    }
+    localnet.wait_for_seqno(3)?;
+    let second_resolution =
+        block_on(second_client.resolve_pending()).map_err(|error| error.to_string())?;
+    if second_resolution.phase != SendPhase::Confirmed {
+        return Err(format!(
+            "expected second rotation confirmation, got {:?}",
+            second_resolution.phase
+        ));
+    }
     assert_localnet_public_key(&localnet, &second.new_public_key, "second")?;
 
     Ok(())
+}
+
+pub(crate) fn execute_key_rotation_confirmation_after_restart_on_localnet() -> Result<(), String> {
+    let LocalnetKeyRotationFixture {
+        platform_host,
+        descriptor,
+        localnet,
+        client,
+    } = localnet_key_rotation_fixture("localnet-key-rotation-restart")?;
+    let prepared = prepare_external_rotation(&client)?;
+    let request = key_rotation_send_request("localnet-key-rotation-restart", &prepared)?;
+
+    let submitted = block_on(client.send_boc(request)).map_err(|error| error.to_string())?;
+    if submitted.phase != SendPhase::Submitted {
+        return Err(format!(
+            "expected rotation submission before restart, got {:?}",
+            submitted.phase
+        ));
+    }
+    drop(client);
+
+    localnet.wait_for_seqno(prepared.seqno + 1)?;
+    let restarted = localnet_wallet_client(descriptor, localnet.clone(), platform_host)?;
+    let resolution = block_on(restarted.resolve_pending()).map_err(|error| error.to_string())?;
+    if resolution.phase != SendPhase::Confirmed {
+        return Err(format!(
+            "expected restarted client to confirm the journaled rotation, got {:?}",
+            resolution.phase
+        ));
+    }
+    assert_localnet_public_key(&localnet, &prepared.new_public_key, "restarted")
+}
+
+pub(crate) fn execute_stale_key_rotation_rejection_on_localnet() -> Result<(), String> {
+    let LocalnetKeyRotationFixture {
+        localnet, client, ..
+    } = localnet_key_rotation_fixture("localnet-key-rotation-stale")?;
+    let stale = prepare_external_rotation(&client)?;
+    localnet.spam_transfers(1)?;
+    localnet.wait_for_seqno(stale.seqno + 1)?;
+
+    let error = block_on(client.send_boc(key_rotation_send_request(
+        "localnet-key-rotation-stale",
+        &stale,
+    )?))
+    .expect_err("a stale prepared key rotation must not be submitted");
+    let WalletClientError::SendFailed { diagnostic } = error else {
+        return Err(format!("expected a stale-seqno send failure, got {error}"));
+    };
+    if !diagnostic.contains("does not match current wallet seqno") {
+        return Err(format!(
+            "expected a stale-seqno diagnostic, got {diagnostic}"
+        ));
+    }
+    if localnet.submitted_boc().is_some() {
+        return Err("the stale key-rotation BOC reached sendBoc".to_owned());
+    }
+
+    let fresh = prepare_external_rotation(&client)?;
+    if fresh.seqno != stale.seqno + 1 {
+        return Err(format!(
+            "expected fresh rotation seqno {}, got {}",
+            stale.seqno + 1,
+            fresh.seqno
+        ));
+    }
+    let submitted = block_on(client.send_boc(key_rotation_send_request(
+        "localnet-key-rotation-fresh-after-stale",
+        &fresh,
+    )?))
+    .map_err(|error| error.to_string())?;
+    if submitted.phase != SendPhase::Submitted {
+        return Err(format!(
+            "expected fresh rotation submission after stale rejection, got {:?}",
+            submitted.phase
+        ));
+    }
+    localnet.wait_for_seqno(fresh.seqno + 1)?;
+    let resolution = block_on(client.resolve_pending()).map_err(|error| error.to_string())?;
+    if resolution.phase != SendPhase::Confirmed {
+        return Err(format!(
+            "expected fresh rotation confirmation after stale rejection, got {:?}",
+            resolution.phase
+        ));
+    }
+    assert_localnet_public_key(&localnet, &fresh.new_public_key, "fresh after stale")
+}
+
+pub(crate) fn execute_key_rotation_shares_send_slot_on_localnet() -> Result<(), String> {
+    let LocalnetKeyRotationFixture {
+        descriptor,
+        localnet,
+        client,
+        ..
+    } = localnet_key_rotation_fixture("localnet-key-rotation-single-flight")?;
+    let prepared = prepare_external_rotation(&client)?;
+    let request = key_rotation_send_request("localnet-key-rotation-paused", &prepared)?;
+
+    localnet.pause_next_request("rotation-submit".to_owned(), RequestKind::Submission);
+    let send_client = client.clone();
+    let send_thread = thread::spawn(move || block_on(send_client.send_boc(request)));
+    localnet.wait_for_request("rotation-submit")?;
+
+    let ordinary_send = SendRequest {
+        operation_id: NonEmptyString::try_from("ordinary-send-during-rotation".to_owned())
+            .map_err(|error| error.to_string())?,
+        force: false,
+        intent: SendIntent {
+            expiration: SendExpiration::EngineDefault,
+            messages: vec![SendMessage {
+                destination: descriptor.address,
+                amount: SendAmount::Exact {
+                    nanograms: UnsignedDecimalString::try_from("1".to_owned())
+                        .map_err(|error| error.to_string())?,
+                },
+                body: SendMessageBody::Empty,
+                bounce: false,
+                state_init: None,
+            }],
+        },
+    };
+    let ordinary_result = block_on(client.send(ordinary_send));
+
+    localnet.release_request("rotation-submit")?;
+    let submitted = send_thread
+        .join()
+        .map_err(|_| "the paused key-rotation send thread panicked".to_owned())?
+        .map_err(|error| error.to_string())?;
+    let error = ordinary_result.expect_err("ordinary send must share the active sendBoc slot");
+    if error != WalletClientError::SendAlreadyInProgress {
+        return Err(format!("expected shared send slot rejection, got {error}"));
+    }
+    if submitted.phase != SendPhase::Submitted {
+        return Err(format!(
+            "expected paused rotation to submit after release, got {:?}",
+            submitted.phase
+        ));
+    }
+    localnet.wait_for_seqno(prepared.seqno + 1)?;
+    let resolution = block_on(client.resolve_pending()).map_err(|error| error.to_string())?;
+    if resolution.phase != SendPhase::Confirmed {
+        return Err(format!(
+            "expected paused rotation confirmation, got {:?}",
+            resolution.phase
+        ));
+    }
+    assert_localnet_public_key(&localnet, &prepared.new_public_key, "single-flight")
+}
+
+struct LocalnetKeyRotationFixture {
+    platform_host: Arc<MemoryPlatformHost>,
+    descriptor: WalletDescriptor,
+    localnet: Arc<LocalnetHttpHost>,
+    client: Arc<WalletClient>,
+}
+
+fn localnet_key_rotation_fixture(record_id: &str) -> Result<LocalnetKeyRotationFixture, String> {
+    let platform_host = Arc::new(MemoryPlatformHost::default());
+    let lifecycle = WalletLifecycle::new(platform_host.clone());
+    let descriptor = block_on(lifecycle.import_wallet(ImportWalletRequest {
+        record_id: record_id.to_owned(),
+        network: Network::Testnet,
+        recovery_words: test_wallet().recovery_words(),
+    }))
+    .map_err(|error| error.to_string())?;
+    let localnet = Arc::new(LocalnetHttpHost::start(
+        descriptor.address.as_str(),
+        "5000000000",
+    )?);
+    localnet.spam_transfers(1)?;
+    let client =
+        localnet_wallet_client(descriptor.clone(), localnet.clone(), platform_host.clone())?;
+    Ok(LocalnetKeyRotationFixture {
+        platform_host,
+        descriptor,
+        localnet,
+        client,
+    })
+}
+
+fn prepare_external_rotation(client: &WalletClient) -> Result<PreparedKeyRotation, String> {
+    block_on(client.prepare_key_rotation(PrepareKeyRotationRequest {
+        valid_until: u64::from(u32::MAX),
+        message_kind: KeyRotationMessageKind::External,
+    }))
+    .map_err(|error| error.to_string())
+}
+
+fn key_rotation_send_request(
+    operation_id: &str,
+    prepared: &PreparedKeyRotation,
+) -> Result<SendBocRequest, String> {
+    Ok(SendBocRequest {
+        operation_id: NonEmptyString::try_from(operation_id.to_owned())
+            .map_err(|error| error.to_string())?,
+        force: false,
+        signed_boc: prepared.signed_boc.clone(),
+        seqno: prepared.seqno,
+        valid_until: prepared.valid_until,
+    })
 }
 
 fn localnet_wallet_client(

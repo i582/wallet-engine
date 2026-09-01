@@ -1,4 +1,4 @@
-//! The private reducer for durable transfer submission.
+//! The private reducer for durable signed-message submission.
 //!
 //! The reducer produces directives for the wallet client. It never performs
 //! callbacks itself. Its journal record prevents a second signature after an
@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::domain::{
     AccountStatus, JournalCompareExchange, JournalCompareExchangeResult, JournalKey, JournalRecord,
     PendingReason, ProtectedSecretRead, ProtectedSecretRef, ResolutionInfo, SecretAccessReason,
-    SendPhase, SendRequest, SendSnapshot, bounded_diagnostic,
+    SendIntent, SendPhase, SendRequest, SendSnapshot, bounded_diagnostic,
 };
 use crate::types::Boc;
 use crate::{
@@ -19,6 +19,7 @@ use crate::{
 
 const JOURNAL_SCHEMA_VERSION: u32 = 5;
 const FIRST_JOURNAL_VERSION: u64 = 1;
+// Keep the historical slot value so existing transfer journals remain readable.
 pub(crate) const SEND_SLOT: &str = "outgoing-transfer";
 
 /// Fresh chain state used to build a wallet transfer.
@@ -76,6 +77,7 @@ pub(crate) struct PreparedTransfer {
     pub kind: SignedMessageKind,
 
     /// The complete ordered outgoing internal-message batch encoded into wallet actions.
+    /// Caller-signed external BOCs use an empty batch.
     pub messages: Vec<SendMessage>,
 
     /// The fresh wallet sequence number signed into the wallet request.
@@ -167,6 +169,7 @@ enum SendEvent {
     Begin,
     JournalLoaded,
     FreshAccountLoaded,
+    PreparedAccountLoaded,
     AuthorizationSucceeded,
     TransferPrepared,
     PreparedJournalPersisted,
@@ -190,7 +193,8 @@ impl SendStage {
             (Self::Validating, SendEvent::Begin) => Some(Self::LoadingJournal),
             (Self::LoadingJournal, SendEvent::JournalLoaded) => Some(Self::FetchingFreshAccount),
             (Self::FetchingFreshAccount, SendEvent::FreshAccountLoaded) => Some(Self::Authorizing),
-            (Self::Authorizing, SendEvent::AuthorizationSucceeded) => Some(Self::Preparing),
+            (Self::FetchingFreshAccount, SendEvent::PreparedAccountLoaded)
+            | (Self::Authorizing, SendEvent::AuthorizationSucceeded) => Some(Self::Preparing),
             (Self::Preparing, SendEvent::TransferPrepared) => Some(Self::PersistingPrepared),
             (Self::PersistingPrepared, SendEvent::PreparedJournalPersisted) => {
                 Some(Self::ReadyToSubmit)
@@ -357,6 +361,7 @@ struct DurableSendRecord {
     /// The wallet-contract entry point and delivery channel.
     kind: SignedMessageKind,
     /// The complete ordered outgoing internal-message batch stored with the signed message.
+    /// Caller-signed external BOCs use an empty batch.
     messages: Vec<SendMessage>,
     /// The wallet sequence number signed into the external message.
     seqno: u32,
@@ -677,7 +682,7 @@ pub(crate) struct SendWorkflow {
     kind: SignedMessageKind,
 
     /// The wallet-level protected secret used only by the local signing path.
-    local_secret_ref: ProtectedSecretRef,
+    local_secret_ref: Option<ProtectedSecretRef>,
 
     /// The current reducer stage.
     /// Each reducer method accepts only its documented predecessor stage.
@@ -714,7 +719,7 @@ impl SendWorkflow {
             record_id,
             source,
             request,
-            local_secret_ref,
+            Some(local_secret_ref),
             SignedMessageKind::External,
         )
     }
@@ -730,8 +735,35 @@ impl SendWorkflow {
             record_id,
             source,
             request,
-            local_secret_ref,
+            Some(local_secret_ref),
             SignedMessageKind::Internal,
+        )
+    }
+
+    /// Creates a workflow for a caller-signed external BOC that still uses the
+    /// wallet-wide journal, submission, and resolution state machine.
+    pub(crate) const fn new_prepared_external(
+        record_id: NonEmptyString,
+        source: TonAddressString,
+        operation_id: NonEmptyString,
+        force: bool,
+        valid_until: u64,
+    ) -> Self {
+        Self::new_with_kind(
+            record_id,
+            source,
+            SendRequest {
+                operation_id,
+                force,
+                intent: SendIntent {
+                    expiration: SendExpiration::Exact {
+                        unix_timestamp: valid_until,
+                    },
+                    messages: Vec::new(),
+                },
+            },
+            None,
+            SignedMessageKind::External,
         )
     }
 
@@ -740,7 +772,7 @@ impl SendWorkflow {
         record_id: NonEmptyString,
         source: TonAddressString,
         request: SendRequest,
-        local_secret_ref: ProtectedSecretRef,
+        local_secret_ref: Option<ProtectedSecretRef>,
         kind: SignedMessageKind,
     ) -> Self {
         Self {
@@ -822,7 +854,27 @@ impl SendWorkflow {
 
         self.fresh_account = Some(account);
         self.stage = next_stage;
-        Ok(self.read_secret_directive())
+        self.read_secret_directive()
+    }
+
+    /// Validates fresh chain state for an already signed external BOC without
+    /// requesting a protected secret or creating another signed message.
+    pub(crate) fn prepared_account_loaded(
+        &mut self,
+        account: FreshSendAccount,
+    ) -> Result<(), SendWorkflowError> {
+        let next_stage =
+            self.next_stage(SendEvent::PreparedAccountLoaded, "prepared_account_loaded")?;
+
+        if !account.permits_send() {
+            return Err(SendWorkflowError::AccountUnavailable {
+                status: account.status,
+            });
+        }
+
+        self.fresh_account = Some(account);
+        self.stage = next_stage;
+        Ok(())
     }
 
     /// Marks successful host authorization.
@@ -1038,12 +1090,19 @@ impl SendWorkflow {
         }
     }
 
-    fn read_secret_directive(&self) -> SendDirective {
-        SendDirective::ReadProtectedSecret(ProtectedSecretRead {
-            secret_ref: self.local_secret_ref.clone(),
+    fn read_secret_directive(&self) -> Result<SendDirective, SendWorkflowError> {
+        let secret_ref =
+            self.local_secret_ref
+                .clone()
+                .ok_or(SendWorkflowError::InvalidTransition {
+                    from: self.stage,
+                    event: "protected_secret_required",
+                })?;
+        Ok(SendDirective::ReadProtectedSecret(ProtectedSecretRead {
+            secret_ref,
             reason: SecretAccessReason::SignTransfer,
             prompt: "Authenticate to sign this wallet transaction".to_owned(),
-        })
+        }))
     }
 
     fn prepared_ref(&self) -> Result<&PreparedTransfer, SendWorkflowError> {

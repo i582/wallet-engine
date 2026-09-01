@@ -93,6 +93,10 @@ impl LocalnetHttpHost {
         lock(&self.submitted_message).clone()
     }
 
+    pub(super) fn submitted_boc(&self) -> Option<String> {
+        lock(&self.submitted_boc_base64).clone()
+    }
+
     pub(super) fn last_activity_request(&self) -> Option<String> {
         lock(&self.activity_requests).last().cloned()
     }
@@ -408,27 +412,8 @@ impl LocalnetHttpHost {
     }
 
     /// Submits a complete external message without assuming an ordinary transfer body.
-    pub(super) fn submit_external_boc(&self, boc: &Boc, expected_seqno: u32) -> Result<(), String> {
+    pub(super) fn wait_for_seqno(&self, expected_seqno: u32) -> Result<(), String> {
         let localnet = lock(&self.localnet);
-        let (status, body) = request(
-            &localnet.client,
-            Method::POST,
-            &format!("{}/api/v2/jsonRPC", localnet.base_url),
-            Some(&json!({
-                "jsonrpc": "2.0",
-                "id": "wallet-engine-localnet-raw-external",
-                "method": "sendBoc",
-                "params": { "boc": boc.to_base64() }
-            })),
-        )?;
-        if !(200..300).contains(&status)
-            || body.pointer("/result/@type").and_then(Value::as_str) != Some("ok")
-        {
-            return Err(format!(
-                "localnet raw external submission failed with HTTP {status}: {body}"
-            ));
-        }
-
         for _ in 0..3 {
             localnet.mine()?;
         }
@@ -537,15 +522,16 @@ impl LocalnetHttpHost {
                 .cell_hash_normalized()
                 .map(|hash| STANDARD.encode(hash.as_slice()))
                 .map_err(|error| host_error(HttpHostErrorKind::Other, &error.to_string()))?;
-            let (body, _) = WalletExtMsgBody::read_signed(&mut message.body.parser())
-                .map_err(|error| host_error(HttpHostErrorKind::Other, &error.to_string()))?;
-            let comment = decode_submitted_comment(&body)?;
-            *lock(&self.submitted_message) = Some(SubmittedMessage {
-                contains_state_init: message.state_init().is_some(),
-                send_modes: body.msgs_modes,
-                comment,
-                message_hash,
-            });
+            if let Ok((body, _)) = WalletExtMsgBody::read_signed(&mut message.body.parser())
+                && let Ok(comment) = decode_submitted_comment(&body)
+            {
+                *lock(&self.submitted_message) = Some(SubmittedMessage {
+                    contains_state_init: message.state_init().is_some(),
+                    send_modes: body.msgs_modes,
+                    comment,
+                    message_hash,
+                });
+            }
             *lock(&self.submitted_boc_base64) = Some(encoded);
             localnet
                 .mine()
@@ -576,6 +562,12 @@ impl WalletHttpHost for LocalnetHttpHost {
             self.wait_at_request_gate(RequestKind::Seqno, request.id)?;
         } else if request.url.contains("/api/emulate/v1/emulateTrace") {
             self.wait_at_request_gate(RequestKind::Emulation, request.id)?;
+        } else if request
+            .body
+            .windows(b"sendBoc".len())
+            .any(|window| window == b"sendBoc")
+        {
+            self.wait_at_request_gate(RequestKind::Submission, request.id)?;
         }
         self.execute(&request)
     }

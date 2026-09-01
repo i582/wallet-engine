@@ -65,6 +65,7 @@ pub(crate) enum RequestKind {
     Activity,
     Seqno,
     Emulation,
+    Submission,
     ExecutedMessage,
     PendingMessage,
 }

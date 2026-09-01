@@ -219,7 +219,7 @@ pub enum WalletClientError {
     /// The internal state lock or active operation state is unavailable.
     #[error("wallet client state is unavailable")]
     StateUnavailable,
-    /// Another transfer is already being prepared or submitted by this client.
+    /// Another signed message is already being prepared or submitted by this client.
     #[error("another send operation is already in progress")]
     SendAlreadyInProgress,
     /// Another send preview is already fetching or emulating current chain state.

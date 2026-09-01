@@ -129,20 +129,33 @@ val prepared = client.prepareKeyRotation(
         messageKind = KeyRotationMessageKind.EXTERNAL,
     ),
 )
+
+// Persist the replacement phrase in the application's protected storage first.
+val result = client.sendBoc(
+    SendBocRequest(
+        operationId = UUID.randomUUID().toString().lowercase(),
+        force = false,
+        signedBoc = prepared.signedBoc,
+        seqno = prepared.seqno,
+        validUntil = prepared.validUntil,
+    ),
+)
 ```
 
 The client first fetches the current `seqno` through its configured HTTP host.
 It then requests the protected secret with
 `SecretAccessReason.PREPARE_KEY_ROTATION`. It returns a complete 24-word phrase,
 the new public key, a signed BOC, and the `seqno` covered by the signature. It
-does not change protected storage or submit the BOC.
+does not change protected storage or submit the BOC by itself.
 
 For a later rotation, protected storage must contain the 24-word phrase from
 the last successful rotation.
 
-Before submission, store the phrase in protected storage. Store the pending
-BOC in a durable journal. Until the application resolves the on-chain result,
-block ordinary signing.
+Before `sendBoc`, store the phrase in protected storage. `sendBoc` validates
+fresh `seqno`, destination, and expiration, then stores the exact BOC in the
+same durable wallet-wide journal used by `send` before provider handoff. It
+returns `SendResult`; `SUBMISSION_UNKNOWN`, `resolvePending`, `cancelSend`, and
+the ordinary-send block have the same semantics as transfer submission.
 
 ## Enriched activity
 

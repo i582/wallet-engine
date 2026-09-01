@@ -351,14 +351,17 @@ configured HTTP host to fetch a fresh `seqno`, then:
 5. returns the replacement 24-word phrase, new public key, signed BOC, and the
    `seqno` covered by that signature.
 
-The method does not change protected storage, submit the BOC, or read the
+The method does not change protected storage, submit the BOC by itself, or read the
 current public key from chain state. The caller must use a protected phrase
 that matches the current on-chain signing key.
 
-Before submission, store the returned phrase in protected storage. Store the
-pending BOC in a durable journal. Until chain state resolves the request, block
-ordinary signing. If the submission result is unknown, do not discard the
-pending request.
+Before submission, store the returned phrase in protected storage, then call
+`WalletClient.sendBoc` with an operation ID plus the returned BOC, `seqno`, and
+expiration. `sendBoc` validates fresh chain state and the external-message
+destination, stores the exact BOC in the same wallet-wide durable journal as
+`send`, and only then hands it to the provider. It returns the normal
+`SendResult`; `submissionUnknown`, `resolvePending`, `cancelSend`, and blocking
+of another send use the same workflow as transfers.
 
 The engine rejects deployment from a post-rotation 24-word phrase. The initial
 contract expects the anchor key until the on-chain key change is complete.
@@ -397,7 +400,7 @@ flowchart TD
     Descriptor --> Client["WalletClient"]
     Client --> Read["refresh · loadMoreActivity"]
     Client --> Preview["previewSend"]
-    Client --> Send["send · prepareKeyRotation"]
+    Client --> Send["send · sendBoc · prepareKeyRotation"]
     Client --> Resolve["resolvePending"]
     Client --> Observe["snapshot · waitForChange"]
     Read --> Snapshot["WalletSnapshot"]
@@ -986,10 +989,16 @@ does not submit the message.
 7. stores the exact signed BoC in the host journal.
 8. submits that BoC to the provider.
 
-`SendRequest.force` defaults to `false` at JSON boundaries. When it is `true`,
-`send` can replace an unresolved durable signed BoC without first obtaining
-terminal provider evidence. Use it only after showing the unresolved transfer
-and receiving explicit user confirmation.
+`sendBoc` enters the same workflow with an already signed external message. It
+skips secret authorization and signing, but still reloads account state,
+requires the supplied `seqno` and expiration to be current, validates the BOC
+destination, persists the exact bytes before handoff, and publishes the same
+send phases and resolution state.
+
+`SendRequest.force` and `SendBocRequest.force` default to `false` at JSON
+boundaries. When true, they can replace an unresolved durable signed BoC
+without first obtaining terminal provider evidence. Use this only after
+showing the unresolved operation and receiving explicit user confirmation.
 
 `SendResult.signedBoc` contains the exact signed external-message BoC. TON
 Connect returns this value to the dApp after an accepted or uncertain

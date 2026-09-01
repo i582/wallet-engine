@@ -8,8 +8,9 @@
 //! The public object model has three main entry points:
 //!
 //! - [`WalletLifecycle`] creates, imports, reveals, and deletes wallets.
-//! - [`WalletClient`] refreshes a wallet, loads activity, sends transfers, and prepares key
-//!   rotation with a fresh provider sequence number.
+//! - [`WalletClient`] refreshes a wallet, loads activity, sends transfers or caller-signed
+//!   BOCs through one durable workflow, and prepares key rotation with a fresh provider
+//!   sequence number.
 //! - [`TonConnectSession`] manages one encrypted native TON Connect session.
 //!
 //! A minimum integration has these steps:

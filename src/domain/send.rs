@@ -161,6 +161,27 @@ pub struct SendRequest {
     pub intent: SendIntent,
 }
 
+/// Requests durable submission of an already signed external wallet message.
+///
+/// `seqno` and `valid_until` must be the exact values covered by `signed_boc`.
+/// They let the engine reconcile an ambiguous submission without parsing a
+/// wallet-version-specific body.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct SendBocRequest {
+    /// A unique idempotency identifier chosen by the application.
+    pub operation_id: NonEmptyString,
+    /// Allows this submission to replace an unresolved durable send after confirmation.
+    #[serde(default)]
+    pub force: bool,
+    /// The complete signed external-message BOC.
+    pub signed_boc: Boc,
+    /// The wallet sequence number covered by the signed message.
+    pub seqno: u32,
+    /// The Unix expiration timestamp covered by the signed message.
+    pub valid_until: u64,
+}
+
 /// Requests an owner-signed Wallet V5 message for delivery by a relayer.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
