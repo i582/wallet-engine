@@ -152,6 +152,54 @@ pub(crate) fn execute_repeated_key_rotation_on_localnet() -> Result<(), String> 
     Ok(())
 }
 
+pub(crate) fn execute_uninitialized_key_rotation_deploys_with_zero_seqno_on_localnet()
+-> Result<(), String> {
+    let platform_host = Arc::new(MemoryPlatformHost::default());
+    let lifecycle = WalletLifecycle::new(platform_host.clone());
+    let descriptor = block_on(lifecycle.import_wallet(ImportWalletRequest {
+        record_id: "localnet-uninitialized-key-rotation".to_owned(),
+        network: Network::Testnet,
+        recovery_words: test_wallet().recovery_words(),
+    }))
+    .map_err(|error| error.to_string())?;
+    let localnet = Arc::new(LocalnetHttpHost::start(
+        descriptor.address.as_str(),
+        "5000000000",
+    )?);
+    let client = localnet_wallet_client(descriptor, localnet.clone(), platform_host)?;
+
+    let prepared = prepare_external_rotation(&client)?;
+    if prepared.seqno != 0 {
+        return Err(format!(
+            "expected uninitialized wallet seqno 0, got {}",
+            prepared.seqno
+        ));
+    }
+
+    let submitted = block_on(client.send_boc(key_rotation_send_request(
+        "localnet-uninitialized-key-rotation",
+        &prepared,
+    )?))
+    .map_err(|error| error.to_string())?;
+    if submitted.phase != SendPhase::Submitted {
+        return Err(format!(
+            "expected uninitialized rotation submission, got {:?}",
+            submitted.phase
+        ));
+    }
+    localnet.wait_for_seqno(1)?;
+    let resolution = block_on(client.resolve_pending()).map_err(|error| error.to_string())?;
+    if resolution.phase != SendPhase::Confirmed {
+        return Err(format!(
+            "expected uninitialized rotation confirmation, got {:?}",
+            resolution.phase
+        ));
+    }
+    assert_localnet_public_key(&localnet, &prepared.new_public_key, "initial deployment")?;
+
+    Ok(())
+}
+
 pub(crate) fn execute_key_rotation_confirmation_after_restart_on_localnet() -> Result<(), String> {
     let LocalnetKeyRotationFixture {
         platform_host,

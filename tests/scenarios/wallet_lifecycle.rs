@@ -100,6 +100,12 @@ fn repeated_external_key_rotation_executes_on_the_wallet_contract() {
 }
 
 #[test]
+fn uninitialized_key_rotation_deploys_with_zero_seqno() {
+    execute_uninitialized_key_rotation_deploys_with_zero_seqno_on_localnet()
+        .expect("an undeployed wallet must rotate with seqno zero and anchor StateInit");
+}
+
+#[test]
 fn key_rotation_journal_survives_wallet_client_restart() {
     execute_key_rotation_confirmation_after_restart_on_localnet()
         .expect("a restarted WalletClient must confirm the journaled key rotation");

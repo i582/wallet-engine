@@ -11,11 +11,12 @@ This file records user-visible changes to Wallet Engine.
 
 ### Changed
 
-- **Breaking:** Moved `prepare_key_rotation` from `WalletLifecycle` to `WalletClient`. The request no longer contains a wallet descriptor or `seqno`; the client uses its configured wallet identity and fetches the current `seqno` through its provider transport.
+- **Breaking:** Moved `prepare_key_rotation` from `WalletLifecycle` to `WalletClient`. The request no longer contains a wallet descriptor or `seqno`; the client uses fresh account state, fetching the getter only for an active contract and using zero plus anchor-based `StateInit` before deployment.
 
 ### Fixed
 
 - Wallet rev00 key rotation can be prepared repeatedly. Later rotations are authorized by the current signing half while preserving the anchor half and wallet address.
+- Key rotation no longer interprets Toncenter's failed `seqno` getter stack for an undeployed account. It derives sequence number zero from account state and prepares a deployable rotation BOC with `StateInit`.
 
 ## [0.0.6] - 2026-08-26
 

@@ -1,11 +1,16 @@
 //! Wallet key-rotation preparation backed by fresh provider state.
 
 use crate::domain::{ProtectedSecretRead, SecretAccessReason, bounded_diagnostic};
+use crate::transport::build_toncenter_v2_request;
 use crate::wallet::crypto::SensitiveMnemonic;
 use crate::wallet::key_rotation::{KeyRotationError, prepare_key_rotation as prepare_rotation};
-use crate::{PrepareKeyRotationRequest, PreparedKeyRotation, RecoveryPhrase, WalletClientError};
+use crate::{
+    AccountStatus, PrepareKeyRotationRequest, PreparedKeyRotation, RecoveryPhrase,
+    WalletClientError,
+};
 
 use super::WalletClient;
+use super::provider::parse_account;
 use super::send_http::{build_seqno_request, parse_seqno};
 use super::state::{OperationFamily, ensure_running};
 
@@ -13,9 +18,11 @@ use super::state::{OperationFamily, ensure_running};
 impl WalletClient {
     /// Generates a new signing half and a signed Wallet rev00 key-change message.
     ///
-    /// The client fetches the wallet's current `seqno` through its configured
-    /// provider before asking the host to unlock the protected phrase. It does
-    /// not update protected storage and does not submit the returned BOC.
+    /// The client first fetches fresh account state through its configured
+    /// provider. Active wallets use the on-chain `seqno` getter, while an
+    /// account without deployed contract code uses sequence number zero. The
+    /// client then asks the host to unlock the protected phrase. It does not
+    /// update protected storage and does not submit the returned BOC.
     pub async fn prepare_key_rotation(
         &self,
         request: PrepareKeyRotationRequest,
@@ -26,7 +33,7 @@ impl WalletClient {
             ));
         }
 
-        let (generation, config, seqno_request, secret_request) = {
+        let (generation, config, account_request, seqno_request, secret_request) = {
             let mut state = self.lock()?;
             ensure_running(&state)?;
             let secret_ref = state
@@ -44,11 +51,20 @@ impl WalletClient {
                 .ok_or(WalletClientError::IdentifierExhausted)?;
             let generation = state.resolution_generation;
             let config = state.config.clone();
+
+            let account_request = build_toncenter_v2_request(
+                &config,
+                state.allocate_request_id()?,
+                "getAddressInformation",
+                &[("address", config.address.as_str())],
+            )?;
+
             let seqno_request = build_seqno_request(&config, state.allocate_request_id()?)?;
             state.active_resolution = Some((generation, Vec::new()));
             (
                 generation,
                 config,
+                account_request,
                 seqno_request,
                 ProtectedSecretRead {
                     secret_ref,
@@ -58,16 +74,43 @@ impl WalletClient {
             )
         };
 
-        let seqno = match self
-            .execute_tracked_standalone_resolution_request(generation, &seqno_request)
+        let account = match self
+            .execute_tracked_standalone_resolution_request(generation, &account_request)
             .await
         {
             Ok(result) => result
-                .and_then(|body| parse_seqno(&body))
+                .and_then(|body| parse_account(&body))
                 .map_err(|error| self.fail_key_rotation(generation, error.developer_message))?,
             Err(error) => {
                 self.discard_key_rotation_operation(generation);
                 return Err(error);
+            }
+        };
+
+        let (seqno, needs_state_init) = match account.status {
+            AccountStatus::Active => (
+                match self
+                    .execute_tracked_standalone_resolution_request(generation, &seqno_request)
+                    .await
+                {
+                    Ok(result) => result
+                        .and_then(|body| parse_seqno(&body))
+                        .map_err(|error| {
+                            self.fail_key_rotation(generation, error.developer_message)
+                        })?,
+                    Err(error) => {
+                        self.discard_key_rotation_operation(generation);
+                        return Err(error);
+                    }
+                },
+                false,
+            ),
+            AccountStatus::Nonexistent | AccountStatus::Uninitialized => (0, true),
+            status @ (AccountStatus::Frozen | AccountStatus::Unknown) => {
+                return Err(self.fail_key_rotation(
+                    generation,
+                    format!("wallet account state {status:?} does not permit key rotation"),
+                ));
             }
         };
 
@@ -87,6 +130,7 @@ impl WalletClient {
             config.network,
             &config.address,
             seqno,
+            needs_state_init,
             request.valid_until,
             request.message_kind,
         )

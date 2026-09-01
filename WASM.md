@@ -184,7 +184,9 @@ const result = await client.sendBoc({
 })
 ```
 
-The client first fetches the current `seqno` through its configured HTTP host.
+The client first fetches fresh account state through its configured HTTP host.
+It calls the `seqno` getter only for an active contract; an undeployed account
+uses `seqno` zero and gets anchor-based `StateInit` in the prepared BOC.
 It then requests the protected secret with reason `"prepareKeyRotation"`. It
 returns a complete 24-word phrase, the new public key, a signed BOC, and the
 `seqno` covered by the signature. It does not change protected storage or

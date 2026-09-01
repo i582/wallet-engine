@@ -4,16 +4,19 @@
 //! mnemonic, cell, and signature construction required by the contract.
 
 use ed25519_dalek::{Signer as _, SigningKey};
-use ton::block_tlb::{CommonMsgInfo, CommonMsgInfoExtIn, CommonMsgInfoInt, Msg};
+use ton::block_tlb::{CommonMsgInfo, CommonMsgInfoExtIn, CommonMsgInfoInt, Msg, StateInit};
 use ton::ton_core::cell::TonCell;
 use ton::ton_core::errors::TonCoreError;
 use ton::ton_core::traits::tlb::TLB as _;
 use ton::ton_core::types::TonAddress;
-use ton::ton_core::types::tlb_core::{MsgAddressExt, TLBCoins};
+use ton::ton_core::types::tlb_core::{MsgAddressExt, TLBCoins, TLBEitherRef};
 use zeroize::Zeroizing;
 
 use super::KeyRotationMessageKind;
-use super::crypto::{SensitiveMnemonic, derive_half_key, derive_rotation_keys, derive_wallet};
+use super::crypto::{
+    SensitiveMnemonic, derive_half_key, derive_rotation_keys, derive_wallet,
+    derive_wallet_public_state,
+};
 use super::mnemonic::{Bip39Half, ENTROPY_LEN, RotationMnemonic};
 use crate::{Boc, Network, TonAddressString};
 
@@ -48,6 +51,7 @@ pub(crate) fn prepare_key_rotation(
     network: Network,
     expected_wallet: &TonAddressString,
     seqno: u32,
+    needs_state_init: bool,
     valid_until: u64,
     message_kind: KeyRotationMessageKind,
 ) -> Result<PreparedKeyRotationMaterial, KeyRotationError> {
@@ -75,6 +79,20 @@ pub(crate) fn prepare_key_rotation(
             continue;
         }
 
+        let state_init = if needs_state_init {
+            let (derived_address, state_init) = derive_wallet_public_state(
+                &current_keys.anchor.verifying_key().to_bytes(),
+                network,
+            )
+            .map_err(|_| KeyRotationError::Preparation)?;
+            if derived_address != wallet.address {
+                return Err(KeyRotationError::WalletIdentityMismatch);
+            }
+            Some(state_init)
+        } else {
+            None
+        };
+
         return prepare_with_new_half(
             &current,
             &current_keys.signing,
@@ -83,6 +101,7 @@ pub(crate) fn prepare_key_rotation(
             &wallet.address,
             wallet.wallet_id,
             seqno,
+            state_init,
             valid_until,
             message_kind,
         );
@@ -103,6 +122,7 @@ fn prepare_with_new_half(
     wallet_address: &TonAddress,
     wallet_id: i32,
     seqno: u32,
+    state_init: Option<StateInit>,
     valid_until: u32,
     message_kind: KeyRotationMessageKind,
 ) -> Result<PreparedKeyRotationMaterial, KeyRotationError> {
@@ -124,7 +144,7 @@ fn prepare_with_new_half(
     )
     .map_err(|_| KeyRotationError::Preparation)?;
     let signed_request = sign_cell(current_key, &request)?;
-    let message = wrap_signed_request(wallet_address, message_kind, signed_request)?;
+    let message = wrap_signed_request(wallet_address, message_kind, signed_request, state_init)?;
     let signed_boc = Boc::try_from(
         message
             .to_boc()
@@ -201,6 +221,7 @@ fn wrap_signed_request(
     wallet_address: &TonAddress,
     message_kind: KeyRotationMessageKind,
     signed_request: TonCell,
+    state_init: Option<StateInit>,
 ) -> Result<TonCell, KeyRotationError> {
     let info = match message_kind {
         KeyRotationMessageKind::External => CommonMsgInfo::ExtIn(CommonMsgInfoExtIn {
@@ -215,9 +236,11 @@ fn wrap_signed_request(
         }
     };
 
-    Msg::new(info, signed_request)
-        .to_cell()
-        .map_err(|_| KeyRotationError::Preparation)
+    let mut message = Msg::new(info, signed_request);
+    if let Some(state_init) = state_init {
+        message.init = Some(TLBEitherRef::new(state_init));
+    }
+    message.to_cell().map_err(|_| KeyRotationError::Preparation)
 }
 
 #[cfg(test)]
@@ -323,6 +346,7 @@ mod tests {
             Network::Testnet,
             &address,
             0,
+            false,
             u64::from(VALID_UNTIL),
             KeyRotationMessageKind::External,
         )
@@ -371,6 +395,7 @@ mod tests {
             Network::Testnet,
             &address,
             SEQNO,
+            false,
             u64::from(VALID_UNTIL),
             KeyRotationMessageKind::External,
         )
@@ -476,6 +501,7 @@ mod tests {
                 Network::Testnet,
                 &wrong,
                 0,
+                false,
                 u64::from(VALID_UNTIL),
                 KeyRotationMessageKind::External,
             ),
@@ -487,6 +513,7 @@ mod tests {
                 Network::Testnet,
                 &address,
                 0,
+                false,
                 u64::from(u32::MAX) + 1,
                 KeyRotationMessageKind::External,
             ),
@@ -532,6 +559,7 @@ mod tests {
             &wallet.address,
             wallet.wallet_id,
             SEQNO,
+            None,
             VALID_UNTIL,
             message_kind,
         )

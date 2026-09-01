@@ -340,8 +340,10 @@ are equal. After any rotation a 24-word phrase can sign requests for an already
 active account without changing its address.
 
 `WalletClient.prepareKeyRotation` constructs key-change data. The caller
-supplies only an expiration time and the message kind. The client uses its
-configured HTTP host to fetch a fresh `seqno`, then:
+supplies only an expiration time and the message kind. The client first loads
+fresh account state. An active contract uses its `seqno` getter; a nonexistent
+or uninitialized account uses `seqno` zero and receives anchor-based `StateInit`
+in the prepared message. The client then:
 
 1. reads and checks the current protected 12- or 24-word phrase.
 2. creates an independent 12-word signing half.
