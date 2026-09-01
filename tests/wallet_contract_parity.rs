@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use ton::ton_core::cell::{TonCell, TonHash};
 use ton::ton_core::traits::tlb::TLB as _;
-use ton::ton_wallet::{WalletData, WalletExtMsgBody, WalletInternalSignedBody};
+use ton::ton_wallet::{WalletData, WalletExtMsgBody, WalletInternalSignedBody, WalletVersion};
 
 fn source_vector_messages() -> Result<Vec<TonCell>, Box<dyn Error>> {
     [0xa0_u8, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7]
@@ -171,4 +171,12 @@ fn rust_serialization_matches_original_tolk_vectors() -> Result<(), Box<dyn Erro
         "131f1b9ad39ae9fe40b2bfe64618b563aa11458c5c0382c26971a2c006bb7819",
     )?;
     Ok(())
+}
+
+#[test]
+fn wallet_trampoline_code_matches_published_hash() -> Result<(), Box<dyn Error>> {
+    assert_hash(
+        WalletVersion::get_code(WalletVersion::Wallet)?,
+        "9149ae51c1e4689710cebf7830297b16acfbadb363a920a537893e7ffeeca768",
+    )
 }

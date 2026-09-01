@@ -11,8 +11,6 @@ import type {
   CreateWalletRequest,
   CreatedWallet,
   ImportWalletRequest,
-  PreparedKeyRotation,
-  PrepareKeyRotationRequest,
   RecoveryPhrase,
   WalletDescriptor,
 } from "./types"
@@ -62,12 +60,6 @@ export class WalletLifecycle {
   ): Promise<TonConnectProofSignature> {
     this.assertOpen()
     return (await this.raw.signTonConnectProof(request)) as TonConnectProofSignature
-  }
-
-  /** Creates the recovery phrase, public key, and signed BOC for one key rotation. */
-  async prepareKeyRotation(request: PrepareKeyRotationRequest): Promise<PreparedKeyRotation> {
-    this.assertOpen()
-    return (await this.raw.prepareKeyRotation(request)) as PreparedKeyRotation
   }
 
   close(): void {

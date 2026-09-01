@@ -31,8 +31,6 @@ pub(crate) enum KeyRotationError {
     InvalidMnemonic,
     #[error("the protected mnemonic does not belong to this wallet")]
     WalletIdentityMismatch,
-    #[error("the wallet signing key was already rotated")]
-    AlreadyRotated,
     #[error("the expiration timestamp exceeds uint32")]
     ExpirationOutOfRange,
     #[error("key-rotation data construction failed")]
@@ -58,9 +56,6 @@ pub(crate) fn prepare_key_rotation(
         .map_err(|_| KeyRotationError::InvalidMnemonic)?;
     let current =
         RotationMnemonic::parse(current_phrase).map_err(|_| KeyRotationError::InvalidMnemonic)?;
-    if !current.is_pre_rotation() {
-        return Err(KeyRotationError::AlreadyRotated);
-    }
     let wallet =
         derive_wallet(current_phrase, network).map_err(|_| KeyRotationError::InvalidMnemonic)?;
     if wallet.address != *expected_wallet.as_address() {
@@ -76,13 +71,13 @@ pub(crate) fn prepare_key_rotation(
         let new_half =
             Bip39Half::from_entropy(&entropy).map_err(|_| KeyRotationError::Preparation)?;
         let new_key = derive_half_key(&new_half);
-        if new_key.verifying_key().to_bytes() == current_keys.anchor.verifying_key().to_bytes() {
+        if new_key.verifying_key().to_bytes() == current_keys.signing.verifying_key().to_bytes() {
             continue;
         }
 
         return prepare_with_new_half(
             &current,
-            &current_keys.anchor,
+            &current_keys.signing,
             &new_half,
             &new_key,
             &wallet.address,
@@ -358,25 +353,119 @@ mod tests {
     }
 
     #[test]
-    fn preparation_rejects_rotated_wrong_wallet_and_oversized_expiration() {
+    fn repeated_rotation_uses_current_signing_key_and_preserves_anchor() {
         let rotated = SensitiveMnemonic::from_bytes(ROTATED_PHRASE.as_bytes().to_vec())
             .expect("rotated phrase parses");
         let wallet = derive_wallet(ROTATED_PHRASE, Network::Testnet).expect("wallet derives");
         let address = TonAddressString::from_address(&wallet.address, Network::Testnet);
-        assert!(matches!(
-            prepare_key_rotation(
-                &rotated,
-                Network::Testnet,
-                &address,
-                0,
-                u64::from(VALID_UNTIL),
-                KeyRotationMessageKind::External,
-            ),
-            Err(KeyRotationError::AlreadyRotated)
-        ));
+        let current = RotationMnemonic::parse(ROTATED_PHRASE).expect("rotated phrase parses");
+        let current_keys = derive_rotation_keys(&current);
+        assert_ne!(
+            current_keys.anchor.verifying_key().to_bytes(),
+            current_keys.signing.verifying_key().to_bytes(),
+            "the fixture must already contain a rotated signing key"
+        );
 
+        let material = prepare_key_rotation(
+            &rotated,
+            Network::Testnet,
+            &address,
+            SEQNO,
+            u64::from(VALID_UNTIL),
+            KeyRotationMessageKind::External,
+        )
+        .expect("an already rotated phrase can rotate again");
+        let message = Msg::<TonCell>::from_boc(material.signed_boc.as_bytes().to_vec())
+            .expect("rotation BOC decodes");
+
+        let mut parser = message.body.value.parser();
+        let outer_signature = parser.read_bits(SIGNATURE_BITS).expect("outer signature");
+        assert_eq!(
+            parser.read_num::<u32>(32).expect("opcode"),
+            CHANGE_PUBLIC_KEY_EXTERNAL_OPCODE
+        );
+        assert_eq!(
+            parser.read_num::<u32>(32).expect("wallet id"),
+            u32::from_be_bytes(wallet.wallet_id.to_be_bytes())
+        );
+        assert_eq!(
+            parser.read_num::<u32>(32).expect("valid until"),
+            VALID_UNTIL
+        );
+        assert_eq!(parser.read_num::<u32>(32).expect("seqno"), SEQNO);
+        let new_public_key = parser
+            .read_bits(PUBLIC_KEY_BITS)
+            .expect("new public key")
+            .try_into()
+            .expect("new public key has 32 bytes");
+        let proof_signature_cell = parser.read_next_ref().expect("proof signature ref");
+        let mut proof_signature_parser = proof_signature_cell.parser();
+        let proof_signature = proof_signature_parser
+            .read_bits(SIGNATURE_BITS)
+            .expect("proof signature")
+            .try_into()
+            .expect("proof signature has 64 bytes");
+        proof_signature_parser
+            .ensure_empty()
+            .expect("proof signature ends exactly");
+        parser.ensure_empty().expect("signed request ends exactly");
+
+        assert_eq!(new_public_key, material.new_public_key);
+        let request = build_change_public_key_request(
+            KeyRotationMessageKind::External,
+            wallet.wallet_id,
+            VALID_UNTIL,
+            SEQNO,
+            new_public_key,
+            proof_signature,
+        )
+        .expect("request rebuilds");
+        let signature =
+            Signature::from_slice(&outer_signature).expect("outer signature has 64 bytes");
+        let request_hash = request.cell_hash().expect("request hashes");
+        current_keys
+            .signing
+            .verifying_key()
+            .verify_strict(request_hash.as_slice(), &signature)
+            .expect("the current signing key authorizes repeated rotation");
+        assert!(
+            current_keys
+                .anchor
+                .verifying_key()
+                .verify_strict(request_hash.as_slice(), &signature)
+                .is_err(),
+            "the anchor key must not authorize a repeated rotation"
+        );
+
+        let replacement = material
+            .replacement_mnemonic
+            .as_str()
+            .expect("replacement phrase is UTF-8");
+        let replacement = RotationMnemonic::parse(replacement).expect("replacement phrase parses");
+        let replacement_keys = derive_rotation_keys(&replacement);
+        assert_eq!(
+            replacement_keys.anchor.verifying_key().to_bytes(),
+            current_keys.anchor.verifying_key().to_bytes(),
+            "repeated rotation must preserve the address anchor"
+        );
+        assert_eq!(
+            replacement_keys.signing.verifying_key().to_bytes(),
+            material.new_public_key,
+            "the replacement phrase must recover the new signing key"
+        );
+        assert_ne!(
+            material.new_public_key,
+            current_keys.signing.verifying_key().to_bytes(),
+            "rotation must replace the current signing key"
+        );
+    }
+
+    #[test]
+    fn preparation_rejects_wrong_wallet_and_oversized_expiration() {
         let current = SensitiveMnemonic::from_bytes(CURRENT_PHRASE.as_bytes().to_vec())
             .expect("current phrase parses");
+        let wallet = derive_wallet(CURRENT_PHRASE, Network::Testnet).expect("wallet derives");
+        let address = TonAddressString::from_address(&wallet.address, Network::Testnet);
         let wrong = TonAddressString::try_from(
             "0:1111111111111111111111111111111111111111111111111111111111111111",
         )
@@ -415,7 +504,7 @@ mod tests {
         [u8; 32],
     ) {
         let current = RotationMnemonic::parse(CURRENT_PHRASE).expect("current phrase parses");
-        let current_key = derive_rotation_keys(&current).anchor;
+        let current_key = derive_rotation_keys(&current).signing;
         let current_public_key = current_key.verifying_key().to_bytes();
         let new_half =
             Bip39Half::from_entropy(&[0x7f; ENTROPY_LEN]).expect("fixed entropy encodes");

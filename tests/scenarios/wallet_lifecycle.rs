@@ -67,13 +67,13 @@ fn key_rotation_preparation_returns_new_material_without_replacing_storage() {
 }
 
 #[test]
-fn key_rotation_preparation_rejects_an_already_rotated_phrase() {
+fn key_rotation_preparation_accepts_an_already_rotated_phrase() {
     let words = "notice tortoise soup strong gun divide offer process salon siren general carry clump left year void clutch tool case burden fix income champion lounge"
         .split_whitespace()
         .map(str::to_owned)
         .collect();
 
-    wallet_lifecycle_scenario("a distinct signing half cannot rotate twice")
+    wallet_lifecycle_scenario("a distinct signing half can rotate again")
         .when(import_wallet(
             "import",
             "rotated-wallet",
@@ -85,17 +85,18 @@ fn key_rotation_preparation_rejects_an_already_rotated_phrase() {
             "import",
             KeyRotationMessageKind::Internal,
         ))
-        .then(lifecycle_error(
+        .then(key_rotation_material_is(
             "rotation",
-            WalletLifecycleError::SigningKeyAlreadyRotated,
+            KeyRotationMessageKind::Internal,
         ))
+        .then(protected_secret_was_read_for_key_rotation("import"))
         .run();
 }
 
 #[test]
-fn prepared_external_key_rotation_executes_on_the_wallet_contract() {
-    execute_prepared_key_rotation_on_localnet()
-        .expect("the Wallet contract must accept the engine's prepared key rotation");
+fn repeated_external_key_rotation_executes_on_the_wallet_contract() {
+    execute_repeated_key_rotation_on_localnet()
+        .expect("the Wallet contract must accept both prepared key rotations");
 }
 
 #[test]

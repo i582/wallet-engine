@@ -8,6 +8,14 @@ This file records user-visible changes to Wallet Engine.
 
 - Added `detect_mnemonic_schemes`, which reports every scheme under which entered recovery words validate: `rotation` (importable), plus detection-only `ton` (passwordless legacy TON mnemonic) and `bip39` (24-word Multichain mnemonic). Applications use it to explain why an import was rejected; the engine still derives keys only from Rotation mnemonics.
 
+### Changed
+
+- **Breaking:** Moved `prepare_key_rotation` from `WalletLifecycle` to `WalletClient`. The request no longer contains a wallet descriptor or `seqno`; the client uses its configured wallet identity and fetches the current `seqno` through its provider transport.
+
+### Fixed
+
+- Wallet rev00 key rotation can be prepared repeatedly. Later rotations are authorized by the current signing half while preserving the anchor half and wallet address.
+
 ## [0.0.6] - 2026-08-26
 
 ### Added

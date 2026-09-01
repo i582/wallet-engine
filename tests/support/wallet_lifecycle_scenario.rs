@@ -4,12 +4,14 @@ use std::sync::Arc;
 use futures::executor::block_on;
 use wallet_engine::{
     CreateWalletRequest, CreatedWallet, ImportWalletRequest, KeyRotationMessageKind, Network,
-    PrepareKeyRotationRequest, PreparedKeyRotation, RecoveryPhrase, SecretAccessReason,
-    WalletDescriptor, WalletLifecycle, WalletLifecycleError,
+    NonEmptyString, PrepareKeyRotationRequest, PreparedKeyRotation, ProviderConfig, RecoveryPhrase,
+    SecretAccessReason, WalletClient, WalletClientConfig, WalletClientError, WalletDescriptor,
+    WalletLifecycle, WalletLifecycleError,
 };
 
-use super::host::MemoryPlatformHost;
+use super::host::{MemoryPlatformHost, ScenarioHttpHost};
 use super::localnet::LocalnetHttpHost;
+use super::scenario::wallet;
 use super::test_wallet::test_wallet;
 
 pub(crate) fn wallet_lifecycle_scenario(name: impl Into<String>) -> WalletLifecycleScenario {
@@ -19,37 +21,126 @@ pub(crate) fn wallet_lifecycle_scenario(name: impl Into<String>) -> WalletLifecy
     }
 }
 
-pub(crate) fn execute_prepared_key_rotation_on_localnet() -> Result<(), String> {
+pub(crate) fn execute_repeated_key_rotation_on_localnet() -> Result<(), String> {
     let platform_host = Arc::new(MemoryPlatformHost::default());
-    let lifecycle = WalletLifecycle::new(platform_host);
+    let lifecycle = WalletLifecycle::new(platform_host.clone());
     let fixture = test_wallet();
-    let descriptor = block_on(lifecycle.import_wallet(ImportWalletRequest {
-        record_id: "localnet-key-rotation".to_owned(),
+    let initial_descriptor = block_on(lifecycle.import_wallet(ImportWalletRequest {
+        record_id: "localnet-key-rotation-initial".to_owned(),
         network: Network::Testnet,
         recovery_words: fixture.recovery_words(),
     }))
     .map_err(|error| error.to_string())?;
-    let localnet = LocalnetHttpHost::start(descriptor.address.as_str(), "5000000000")?;
+    let wallet_address = initial_descriptor.address.clone();
+    let localnet = Arc::new(LocalnetHttpHost::start(
+        wallet_address.as_str(),
+        "5000000000",
+    )?);
 
     localnet.spam_transfers(1)?;
-    let prepared = block_on(lifecycle.prepare_key_rotation(PrepareKeyRotationRequest {
-        descriptor,
-        seqno: 1,
-        valid_until: u64::from(u32::MAX),
-        message_kind: KeyRotationMessageKind::External,
-    }))
+    let first_client =
+        localnet_wallet_client(initial_descriptor, localnet.clone(), platform_host.clone())?;
+    let first = block_on(
+        first_client.prepare_key_rotation(PrepareKeyRotationRequest {
+            valid_until: u64::from(u32::MAX),
+            message_kind: KeyRotationMessageKind::External,
+        }),
+    )
     .map_err(|error| error.to_string())?;
-    localnet.submit_external_boc(&prepared.signed_boc, 2)?;
+    if first.seqno != 1 {
+        return Err(format!(
+            "expected first provider seqno 1, got {}",
+            first.seqno
+        ));
+    }
+    localnet.submit_external_boc(&first.signed_boc, 2)?;
+    assert_localnet_public_key(&localnet, &first.new_public_key, "first")?;
 
-    let expected_public_key = prepared
-        .new_public_key
+    let second_descriptor = block_on(
+        lifecycle.import_wallet(ImportWalletRequest {
+            record_id: "localnet-key-rotation-second".to_owned(),
+            network: Network::Testnet,
+            recovery_words: first
+                .replacement_recovery_phrase
+                .phrase
+                .split_ascii_whitespace()
+                .map(str::to_owned)
+                .collect(),
+        }),
+    )
+    .map_err(|error| error.to_string())?;
+    if second_descriptor.address != wallet_address {
+        return Err(format!(
+            "re-importing the first replacement phrase changed the wallet address from {} to {}",
+            wallet_address.as_str(),
+            second_descriptor.address.as_str()
+        ));
+    }
+
+    let second_client = localnet_wallet_client(second_descriptor, localnet.clone(), platform_host)?;
+    let second = block_on(
+        second_client.prepare_key_rotation(PrepareKeyRotationRequest {
+            valid_until: u64::from(u32::MAX),
+            message_kind: KeyRotationMessageKind::External,
+        }),
+    )
+    .map_err(|error| error.to_string())?;
+    if second.seqno != 2 {
+        return Err(format!(
+            "expected second provider seqno 2, got {}",
+            second.seqno
+        ));
+    }
+    if second.new_public_key == first.new_public_key {
+        return Err("the second rotation reused the current signing key".to_owned());
+    }
+    localnet.submit_external_boc(&second.signed_boc, 3)?;
+    assert_localnet_public_key(&localnet, &second.new_public_key, "second")?;
+
+    Ok(())
+}
+
+fn localnet_wallet_client(
+    descriptor: WalletDescriptor,
+    localnet: Arc<LocalnetHttpHost>,
+    platform_host: Arc<MemoryPlatformHost>,
+) -> Result<Arc<WalletClient>, String> {
+    let record_id = NonEmptyString::try_from(descriptor.record_id.as_str())
+        .map_err(|error| error.to_string())?;
+    WalletClient::new(
+        WalletClientConfig {
+            record_id,
+            address: descriptor.address,
+            public_key: descriptor.public_key,
+            local_secret_ref: Some(descriptor.secret_ref),
+            network: descriptor.network,
+            send_validity_seconds: 300,
+            resolution_margin_seconds: 60,
+            providers: ProviderConfig {
+                toncenter_base_url: localnet.provider_base_url(),
+                dns_root_address: None,
+                request_timeout_ms: 15_000,
+            },
+        },
+        localnet,
+        platform_host,
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn assert_localnet_public_key(
+    localnet: &LocalnetHttpHost,
+    expected_public_key: &[u8],
+    rotation: &str,
+) -> Result<(), String> {
+    let expected_public_key = expected_public_key
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
     let actual_public_key = localnet.public_key_hex()?;
     if actual_public_key != expected_public_key {
         return Err(format!(
-            "expected rotated public key {expected_public_key}, got {actual_public_key}"
+            "expected {rotation} rotated public key {expected_public_key}, got {actual_public_key}"
         ));
     }
 
@@ -394,7 +485,7 @@ enum LifecycleResult {
     Created(Result<CreatedWallet, WalletLifecycleError>),
     Descriptor(Result<WalletDescriptor, WalletLifecycleError>),
     Phrase(Result<RecoveryPhrase, WalletLifecycleError>),
-    KeyRotation(Result<PreparedKeyRotation, WalletLifecycleError>),
+    KeyRotation(Result<PreparedKeyRotation, WalletClientError>),
     Unit(Result<(), WalletLifecycleError>),
 }
 
@@ -437,14 +528,32 @@ impl WalletLifecycleRunner {
                 message_kind,
             } => {
                 let descriptor = self.descriptor(&descriptor_from)?.clone();
-                let result = block_on(self.lifecycle.prepare_key_rotation(
-                    PrepareKeyRotationRequest {
-                        descriptor,
-                        seqno: 7,
-                        valid_until: 1_900_000_000,
-                        message_kind,
+                let http_host = Arc::new(ScenarioHttpHost::new(wallet().seqno(7), None));
+                let record_id = NonEmptyString::try_from(descriptor.record_id.as_str())
+                    .map_err(|error| error.to_string())?;
+                let client = WalletClient::new(
+                    WalletClientConfig {
+                        record_id,
+                        address: descriptor.address,
+                        public_key: descriptor.public_key,
+                        local_secret_ref: Some(descriptor.secret_ref),
+                        network: descriptor.network,
+                        send_validity_seconds: 300,
+                        resolution_margin_seconds: 60,
+                        providers: ProviderConfig {
+                            toncenter_base_url: "https://testnet.toncenter.com".to_owned(),
+                            dns_root_address: None,
+                            request_timeout_ms: 15_000,
+                        },
                     },
-                ));
+                    http_host,
+                    self.host.clone(),
+                )
+                .map_err(|error| error.to_string())?;
+                let result = block_on(client.prepare_key_rotation(PrepareKeyRotationRequest {
+                    valid_until: 1_900_000_000,
+                    message_kind,
+                }));
                 (operation, LifecycleResult::KeyRotation(result))
             }
             LifecycleAction::ReplaceProtectedSecret {
@@ -664,7 +773,6 @@ impl WalletLifecycleRunner {
             Some(LifecycleResult::Created(Err(error)))
             | Some(LifecycleResult::Descriptor(Err(error)))
             | Some(LifecycleResult::Phrase(Err(error)))
-            | Some(LifecycleResult::KeyRotation(Err(error)))
             | Some(LifecycleResult::Unit(Err(error))) => error,
             Some(_) => return Err(format!("operation `{operation}` succeeded")),
             None => return Err(format!("operation `{operation}` does not exist")),

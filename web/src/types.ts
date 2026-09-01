@@ -315,8 +315,6 @@ export interface CreatedWallet {
 export type KeyRotationMessageKind = "external" | "internal"
 
 export interface PrepareKeyRotationRequest {
-  readonly descriptor: WalletDescriptor
-  readonly seqno: number
   readonly validUntil: number
   readonly messageKind: KeyRotationMessageKind
 }

@@ -166,6 +166,18 @@ impl WalletClient {
         to_value(&result)
     }
 
+    /// Fetches the current seqno and prepares a signed Wallet rev00 key rotation.
+    #[wasm_bindgen(js_name = prepareKeyRotation)]
+    pub async fn prepare_key_rotation(&self, request: JsValue) -> Result<JsValue, JsValue> {
+        let request = from_value(request)?;
+        let prepared = self
+            .inner
+            .prepare_key_rotation(request)
+            .await
+            .map_err(|error| engine_error(&error))?;
+        to_value(&prepared)
+    }
+
     /// Builds an authorized TON encrypted-comment body.
     #[wasm_bindgen(js_name = createEncryptedComment)]
     pub async fn create_encrypted_comment(&self, request: JsValue) -> Result<JsValue, JsValue> {

@@ -5,7 +5,7 @@
 //! replaced on rotation. The halves are never joined into a single 24-word
 //! mnemonic and their entropies are never combined.
 //!
-//! Before the wallet's one-time key rotation the two halves are identical, so
+//! Before the wallet's first key rotation the two halves are identical, so
 //! the user holds a single 12-word phrase. [`RotationMnemonic::parse`] accepts
 //! that form and expands it; applications never duplicate words themselves.
 //!
@@ -331,7 +331,7 @@ impl RotationMnemonic {
 
     /// Builds the pre-rotation mnemonic: one half used for both keys.
     ///
-    /// Until the wallet's one-time key rotation the signing key equals the
+    /// Until the wallet's first key rotation the signing key equals the
     /// anchor key, so the user holds a single 12-word phrase. The engine owns
     /// this expansion; applications never duplicate the phrase themselves.
     pub(crate) fn from_single_half(half: Bip39Half) -> Self {
@@ -346,6 +346,7 @@ impl RotationMnemonic {
     }
 
     /// Whether both halves are identical, i.e. the key was never rotated.
+    #[cfg(test)]
     pub(crate) fn is_pre_rotation(&self) -> bool {
         self.anchor.words == self.signing.words
     }

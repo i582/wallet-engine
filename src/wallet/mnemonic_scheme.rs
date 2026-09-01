@@ -22,8 +22,8 @@ use super::mnemonic::{RotationMnemonic, is_bip39_24_phrase, is_ton_mnemonic};
 #[serde(rename_all = "camelCase")]
 pub enum MnemonicScheme {
     /// A rotation mnemonic (TEP-0003 section 3.3): 12 words before the
-    /// wallet's one-time key rotation or 24 words after it. The only scheme
-    /// wallet import accepts.
+    /// wallet's first key rotation or 24 words after it. The only scheme
+    /// wallet import accepts; later rotations replace the signing half.
     Rotation,
     /// A passwordless legacy 24-word TON mnemonic (TEP-0003 section 3.1).
     /// Recognized so the application can explain the rejection; never

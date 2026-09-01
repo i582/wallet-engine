@@ -18,6 +18,8 @@ import type {WalletStatuslessHost} from "./statusless-host"
 import type {
   CreateEncryptedCommentRequest,
   DecryptCommentRequest,
+  PreparedKeyRotation,
+  PrepareKeyRotationRequest,
   WalletClientConfig,
   WalletSnapshot,
   WalletUpdate,
@@ -124,6 +126,12 @@ export class WalletClient {
   async send(request: SendRequest): Promise<SendResult> {
     this.assertOpen()
     return (await this.raw.send(request)) as SendResult
+  }
+
+  /** Fetches the current seqno and prepares a signed Wallet rev00 key rotation. */
+  async prepareKeyRotation(request: PrepareKeyRotationRequest): Promise<PreparedKeyRotation> {
+    this.assertOpen()
+    return (await this.raw.prepareKeyRotation(request)) as PreparedKeyRotation
   }
 
   /** Returns a Base64 BOC suitable for SendMessageBody.rawPayload. */

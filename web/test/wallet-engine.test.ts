@@ -438,9 +438,25 @@ describe("high-level WASM API", () => {
     })
     expect(proof.signature).toHaveLength(64)
 
-    const rotation = await lifecycle.prepareKeyRotation({
-      descriptor: created.descriptor,
-      seqno: 0,
+    const client = await WalletClient.create(
+      {
+        ...walletConfig(created.descriptor),
+        localSecretRef: created.descriptor.secretRef,
+      },
+      {
+        platformHost: platform,
+        fetch: mockFetch(async (_input, init) => {
+          const body = new TextDecoder().decode(init?.body as Uint8Array)
+          const request = JSON.parse(body) as {method: string; params: Record<string, unknown>}
+          expect(request.method).toBe("runGetMethod")
+          expect(request.params.method).toBe("seqno")
+          return Response.json({ok: true, result: {stack: [["num", "0x2a"]]}})
+        }),
+      },
+    )
+    clients.push(client)
+
+    const rotation = await client.prepareKeyRotation({
       validUntil: 1_900_000_000,
       messageKind: "external",
     })
@@ -448,7 +464,7 @@ describe("high-level WASM API", () => {
     expect(rotation.newPublicKey).toHaveLength(32)
     expect(rotation.signedBoc.length).toBeGreaterThan(16)
     expect(rotation).toMatchObject({
-      seqno: 0,
+      seqno: 42,
       validUntil: 1_900_000_000,
       messageKind: "external",
     })

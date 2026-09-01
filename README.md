@@ -295,14 +295,15 @@ independently, and never joined into a single 24-word mnemonic. The TEP defines
 the derivation; this document does not repeat it.
 
 This is the only recovery scheme the engine supports. A new wallet starts
-before its one-time key rotation: the signing key equals the anchor key, so
-`createWallet` generates a single 12-word phrase. Rotation later gives the
-phrase its second, independent half. `importWallet` therefore accepts the
-phrase exactly as the user recorded it - 12 words before rotation or 24 words
-after it - and expands the 12-word form internally; applications never
-duplicate words themselves. TON mnemonics and plain Multichain mnemonics are
-rejected as invalid; `detectMnemonicSchemes` recognizes them so the
-application can explain the rejection.
+before its first key rotation: the signing key equals the anchor key, so
+`createWallet` generates a single 12-word phrase. The first rotation gives the
+phrase its second, independent half; later rotations replace only that signing
+half. `importWallet` therefore accepts the phrase exactly as the user recorded
+it - 12 words before the first rotation or 24 words after it - and expands the
+12-word form internally; applications never duplicate words themselves. TON
+mnemonics and plain Multichain mnemonics are rejected as invalid;
+`detectMnemonicSchemes` recognizes them so the application can explain the
+rejection.
 
 ### Compatibility
 
@@ -334,22 +335,25 @@ progress. Only the trampoline and the initial storage are deployed per
 account, so every wallet shares the config-resident implementation and its
 future revisions. The revision is not declared final. The initial `StateInit`
 and address use the anchor public key. Ordinary external and owner-authorized
-internal requests use the signing key. Before rotation the two keys are
-equal. After rotation a 24-word phrase can sign requests for an already
+internal requests use the signing key. Before the first rotation the two keys
+are equal. After any rotation a 24-word phrase can sign requests for an already
 active account without changing its address.
 
-`WalletLifecycle.prepareKeyRotation` constructs the one-time key-change data.
-The caller supplies a fresh `seqno`, an expiration time, and the message kind.
-The engine then:
+`WalletClient.prepareKeyRotation` constructs key-change data. The caller
+supplies only an expiration time and the message kind. The client uses its
+configured HTTP host to fetch a fresh `seqno`, then:
 
-1. reads and checks the protected 12-word phrase.
+1. reads and checks the current protected 12- or 24-word phrase.
 2. creates an independent 12-word signing half.
 3. signs the wallet-address proof with the new key.
-4. signs the `ChangePublicKey` request with the current anchor key.
-5. returns the complete 24-word phrase, new public key, and signed BOC.
+4. signs the `ChangePublicKey` request with the current signing key, which is
+   also the anchor key only before the first rotation.
+5. returns the replacement 24-word phrase, new public key, signed BOC, and the
+   `seqno` covered by that signature.
 
-The method does not change protected storage or submit the BOC. It also does
-not read `get_public_key` from chain state.
+The method does not change protected storage, submit the BOC, or read the
+current public key from chain state. The caller must use a protected phrase
+that matches the current on-chain signing key.
 
 Before submission, store the returned phrase in protected storage. Store the
 pending BOC in a durable journal. Until chain state resolves the request, block
@@ -387,13 +391,13 @@ color alone:
 
 ```mermaid
 flowchart TD
-    Lifecycle["WalletLifecycle<br/>create · import · reveal · rotate · delete"]
+    Lifecycle["WalletLifecycle<br/>create · import · reveal · delete"]
     Descriptor["WalletDescriptor<br/>public metadata + secret reference"]
     Lifecycle --> Descriptor
     Descriptor --> Client["WalletClient"]
     Client --> Read["refresh · loadMoreActivity"]
     Client --> Preview["previewSend"]
-    Client --> Send["send"]
+    Client --> Send["send · prepareKeyRotation"]
     Client --> Resolve["resolvePending"]
     Client --> Observe["snapshot · waitForChange"]
     Read --> Snapshot["WalletSnapshot"]

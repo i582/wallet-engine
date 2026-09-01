@@ -84,15 +84,4 @@ impl WalletLifecycle {
             .map_err(|error| engine_error(&error))?;
         to_value(&signature)
     }
-
-    #[wasm_bindgen(js_name = prepareKeyRotation)]
-    pub async fn prepare_key_rotation(&self, request: JsValue) -> Result<JsValue, JsValue> {
-        let request = from_value(request)?;
-        let prepared = self
-            .inner
-            .prepare_key_rotation(request)
-            .await
-            .map_err(|error| engine_error(&error))?;
-        to_value(&prepared)
-    }
 }

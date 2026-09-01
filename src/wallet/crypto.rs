@@ -198,7 +198,7 @@ pub(crate) fn derive_half_key(half: &Bip39Half) -> SigningKey {
 
 /// Generates the initial 12-word recovery phrase from one 128-bit draw.
 ///
-/// A new wallet starts before its one-time key rotation: the signing key
+/// A new wallet starts before its first key rotation: the signing key
 /// equals the anchor key, so the user records a single 12-word half. The
 /// engine expands it into both halves wherever a full rotation mnemonic is
 /// needed; the phrase gains its second, independent half at rotation. Any 16

@@ -120,23 +120,25 @@ the engine derives no keys from them.
 
 ## Prepare key rotation
 
-Create the second mnemonic half and the signed Wallet rev00 request:
+Create a new signing half and the signed Wallet rev00 request:
 
 ```kotlin
-val prepared = lifecycle.prepareKeyRotation(
+val prepared = client.prepareKeyRotation(
     PrepareKeyRotationRequest(
-        descriptor = descriptor,
-        seqno = freshSeqno,
         validUntil = validUntil,
         messageKind = KeyRotationMessageKind.EXTERNAL,
     ),
 )
 ```
 
-This call requests the protected secret with
+The client first fetches the current `seqno` through its configured HTTP host.
+It then requests the protected secret with
 `SecretAccessReason.PREPARE_KEY_ROTATION`. It returns a complete 24-word phrase,
-the new public key, and a signed BOC. It does not change protected storage or
-submit the BOC.
+the new public key, a signed BOC, and the `seqno` covered by the signature. It
+does not change protected storage or submit the BOC.
+
+For a later rotation, protected storage must contain the 24-word phrase from
+the last successful rotation.
 
 Before submission, store the phrase in protected storage. Store the pending
 BOC in a durable journal. Until the application resolves the on-chain result,
