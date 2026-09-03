@@ -1,7 +1,5 @@
 //! Toncenter HTTP request construction.
 
-use url::Url;
-
 use crate::{WalletClientConfig, WalletClientError};
 
 use super::http::{HttpHeader, HttpMethod, HttpRequest, HttpRequestId};
@@ -54,7 +52,7 @@ pub(crate) fn build_toncenter_v3_request(
 
 /// Builds a Toncenter URL below the configured deployment base.
 ///
-/// Callers provide the complete API-specific path as individual segments. This
+/// Callers provide the complete API-specific path as fixed, URL-safe segments. This
 /// keeps API version selection at the request site and avoids deriving one API
 /// root from another.
 pub(crate) fn build_toncenter_url(
@@ -70,25 +68,60 @@ fn build_provider_url(
     path: &[&str],
     query: &[(&str, &str)],
 ) -> Result<String, WalletClientError> {
-    let mut url = Url::parse(base).map_err(|_| WalletClientError::InvalidProviderBaseUrl)?;
-
+    // The configured base is already serialized; the host HTTP stack parses it.
+    // Reject delimiters that would put the appended API path outside its path.
+    let authority = base
+        .strip_prefix("https://")
+        .or_else(|| base.strip_prefix("http://"))
+        .and_then(|rest| rest.split('/').next())
+        .ok_or(WalletClientError::InvalidProviderBaseUrl)?;
+    if authority.is_empty()
+        || authority.starts_with(':')
+        || authority.contains('@')
+        || !base.is_ascii()
+        || base
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || matches!(byte, b' ' | b'?' | b'#' | b'\\'))
     {
-        let mut segments = url
-            .path_segments_mut()
-            .map_err(|_| WalletClientError::InvalidProviderBaseUrl)?;
-        let _ = segments.pop_if_empty();
-        for segment in path {
-            let _ = segments.push(segment);
+        return Err(WalletClientError::InvalidProviderBaseUrl);
+    }
+
+    let mut url = base.strip_suffix('/').unwrap_or(base).to_owned();
+    for segment in path {
+        url.push('/');
+        url.push_str(segment);
+    }
+    for (index, (key, value)) in query.iter().enumerate() {
+        url.push(if index == 0 { '?' } else { '&' });
+        append_encoded_query_component(&mut url, key);
+        url.push('=');
+        append_encoded_query_component(&mut url, value);
+    }
+
+    Ok(url)
+}
+
+/// Matches `application/x-www-form-urlencoded`: spaces become `+`, literal `+`
+/// becomes `%2B`, and UTF-8 bytes are escaped individually with uppercase hex.
+fn append_encoded_query_component(output: &mut String, value: &str) {
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_' => {
+                output.push(char::from(byte));
+            }
+            b' ' => output.push('+'),
+            _ => {
+                output.push('%');
+                for nibble in [byte >> 4, byte & 0x0f] {
+                    output.push(char::from(if nibble < 10 {
+                        b'0'.wrapping_add(nibble)
+                    } else {
+                        b'A'.wrapping_add(nibble.wrapping_sub(10))
+                    }));
+                }
+            }
         }
     }
-
-    url.set_query(None);
-    if !query.is_empty() {
-        let mut query_pairs = url.query_pairs_mut();
-        let _ = query_pairs.extend_pairs(query.iter().copied());
-    }
-
-    Ok(url.into())
 }
 
 #[cfg(test)]
@@ -170,5 +203,86 @@ mod tests {
             ),
             Err(WalletClientError::InvalidProviderBaseUrl)
         );
+    }
+
+    #[test]
+    fn encodes_query_data_without_changing_parameter_boundaries() {
+        assert_eq!(
+            build_provider_url(
+                "https://provider.example",
+                &["api", "v3", "transactionsByMessage"],
+                &[
+                    ("msg_hash", "a+/="),
+                    ("text &", "hello 🌍?#%~"),
+                    ("empty", "")
+                ],
+            )
+            .expect("valid provider base"),
+            "https://provider.example/api/v3/transactionsByMessage?msg_hash=a%2B%2F%3D&text+%26=hello+%F0%9F%8C%8D%3F%23%25%7E&empty="
+        );
+    }
+
+    #[test]
+    fn preserves_serialized_bases_and_nested_endpoints() {
+        for base in [
+            "https://provider.example/custom%20prefix",
+            "https://provider.example/custom/",
+            "https://provider.example/custom//",
+            "http://127.0.0.1:8080",
+            "http://[::1]:8080/",
+        ] {
+            let request = build_toncenter_v3_request(
+                &config(base),
+                HttpRequestId { value: 1 },
+                "nft/items",
+                &[],
+            )
+            .expect("valid provider base");
+            assert_eq!(
+                request.url,
+                format!(
+                    "{}/api/v3/nft/items",
+                    base.strip_suffix('/').unwrap_or(base)
+                ),
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_bases_that_are_not_serialized_http_endpoints() {
+        for base in [
+            "https://",
+            "https:///custom",
+            "https://:443",
+            "https://user@provider.example",
+            "https://provider.example?key=value",
+            "https://provider.example/#fragment",
+            "https://provider.example/custom path",
+            "https://provider.example/\r\n",
+            "https://provider.example/\u{7f}",
+            "https://provider.example\\custom",
+            "https://例子.example",
+        ] {
+            assert_eq!(
+                build_provider_url(base, &["api", "v2", "getTransactions"], &[]),
+                Err(WalletClientError::InvalidProviderBaseUrl),
+                "{base:?}",
+            );
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn query_encoding_matches_url_crate(key in ".*", value in ".*") {
+            let base = "https://provider.example/custom/";
+            let query = [(key.as_str(), value.as_str()), ("repeat", "1"), ("repeat", "2")];
+            let actual = build_provider_url(base, &["api", "v2", "getTransactions"], &query)
+                .expect("valid provider base");
+            let mut expected = url::Url::parse(base).expect("valid provider base");
+            let _ = expected.path_segments_mut().expect("hierarchical URL")
+                .pop_if_empty().extend(["api", "v2", "getTransactions"]);
+            let _ = expected.query_pairs_mut().extend_pairs(query);
+            proptest::prop_assert_eq!(actual, expected.as_str());
+        }
     }
 }
