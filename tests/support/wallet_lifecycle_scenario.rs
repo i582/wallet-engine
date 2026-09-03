@@ -55,17 +55,27 @@ pub(crate) fn execute_repeated_key_rotation_on_localnet() -> Result<(), String> 
             first.seqno
         ));
     }
-    let first_send = block_on(
-        first_client.send_boc(SendBocRequest {
-            operation_id: NonEmptyString::try_from("localnet-key-rotation-first".to_owned())
-                .map_err(|error| error.to_string())?,
-            force: false,
-            signed_boc: first.signed_boc.clone(),
-            seqno: first.seqno,
-            valid_until: first.valid_until,
-        }),
-    )
-    .map_err(|error| error.to_string())?;
+    let first_request = SendBocRequest {
+        operation_id: NonEmptyString::try_from("localnet-key-rotation-first".to_owned())
+            .map_err(|error| error.to_string())?,
+        force: false,
+        signed_boc: first.signed_boc.clone(),
+        seqno: first.seqno,
+        valid_until: first.valid_until,
+    };
+    let first_preview = block_on(first_client.preview_send_boc(first_request.clone()))
+        .map_err(|error| error.to_string())?;
+    if first_preview.message_boc_base64 != first.signed_boc {
+        return Err("prepared rotation preview changed the signed BOC".to_owned());
+    }
+    if first_preview.valid_until != first.valid_until {
+        return Err("prepared rotation preview changed the expiration".to_owned());
+    }
+    if !first_preview.messages.is_empty() {
+        return Err("prepared rotation preview unexpectedly exposed decoded messages".to_owned());
+    }
+    let first_send =
+        block_on(first_client.send_boc(first_request)).map_err(|error| error.to_string())?;
     if first_send.phase != SendPhase::Submitted {
         return Err(format!(
             "expected first rotation submission, got {:?}",

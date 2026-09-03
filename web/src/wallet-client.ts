@@ -170,6 +170,12 @@ export class WalletClient {
     return (await this.raw.previewSend(request)) as SendPreview
   }
 
+  /** Emulates an already signed external-message BOC without submitting it. */
+  async previewSendBoc(request: SendBocRequest): Promise<SendPreview> {
+    this.assertOpen()
+    return (await this.raw.previewSendBoc(request)) as SendPreview
+  }
+
   /** Loads fresh NFT state and requires a complete successful emulated transfer action. */
   async previewNftTransfer(request: NftTransferPreviewRequest): Promise<SendPreview> {
     this.assertOpen()

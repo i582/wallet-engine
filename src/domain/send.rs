@@ -228,12 +228,18 @@ pub struct SendPreviewRequest {
 #[serde(rename_all = "camelCase")]
 pub struct SendPreview {
     /// The complete ordered outgoing message batch that was emulated.
+    ///
+    /// This is empty for [`crate::WalletClient::preview_send_boc`] because a
+    /// caller-supplied signed message is preserved as an opaque BOC.
     pub messages: Vec<SendMessage>,
     /// The resolved wallet message expiration timestamp used by this emulation.
     /// A signed send resolves `EngineDefault` again from fresh provider time
     /// and preserves the same timestamp for `Exact`.
     pub valid_until: u64,
-    /// The complete fake-signed external message submitted for emulation.
+    /// The complete external message submitted for emulation.
+    ///
+    /// Intent previews use a fake signature; BOC previews preserve the caller's
+    /// exact signed message.
     /// The value is a standard padded Base64-encoded BOC. Clients can pass it
     /// to an independent emulator or explorer without reconstructing the message.
     pub message_boc_base64: Boc,

@@ -248,6 +248,18 @@ impl WalletClient {
         to_value(&preview)
     }
 
+    /// Emulates an already signed external-message BOC without submitting it.
+    #[wasm_bindgen(js_name = previewSendBoc)]
+    pub async fn preview_send_boc(&self, request: JsValue) -> Result<JsValue, JsValue> {
+        let request = from_value(request)?;
+        let preview = self
+            .inner
+            .preview_send_boc(request)
+            .await
+            .map_err(|error| engine_error(&error))?;
+        to_value(&preview)
+    }
+
     #[wasm_bindgen(js_name = previewNftTransfer)]
     pub async fn preview_nft_transfer(&self, request: JsValue) -> Result<JsValue, JsValue> {
         let request = from_value(request)?;

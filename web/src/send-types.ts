@@ -132,10 +132,11 @@ export interface SendPreviewRequest {
 
 /** One emulated transfer and its resolved message fields. */
 export interface SendPreview {
+  /** Empty for previewSendBoc because its signed message is preserved as an opaque BOC. */
   readonly messages: readonly SendMessage[]
   /** Resolved Unix expiration timestamp used by this emulation. */
   readonly validUntil: number
-  /** Complete fake-signed external-message BOC in standard padded Base64. */
+  /** Complete external-message BOC submitted for emulation in standard padded Base64. */
   readonly messageBocBase64: string
   readonly emulation: SendEmulation
 }
