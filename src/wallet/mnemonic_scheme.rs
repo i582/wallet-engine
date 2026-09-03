@@ -12,7 +12,24 @@
 
 use zeroize::Zeroizing;
 
+use super::WalletLifecycleError;
+use super::crypto::derive_half_key;
 use super::mnemonic::{RotationMnemonic, is_bip39_24_phrase, is_ton_mnemonic};
+
+/// Returns the 32-byte anchor public key of a 12- or 24-word Rotation mnemonic.
+///
+/// The anchor key is independent of network and does not change on key rotation.
+/// Both halves of a 24-word phrase must validate. No storage or network is used.
+#[uniffi::export]
+pub fn rotation_mnemonic_public_key(phrase: String) -> Result<Vec<u8>, WalletLifecycleError> {
+    let phrase = Zeroizing::new(phrase);
+    let mnemonic = RotationMnemonic::parse(&phrase)
+        .map_err(|_| WalletLifecycleError::InvalidRecoveryPhrase)?;
+    Ok(derive_half_key(mnemonic.anchor())
+        .verifying_key()
+        .to_bytes()
+        .to_vec())
+}
 
 /// A recovery-phrase scheme recognized by [`detect_mnemonic_schemes`].
 ///
@@ -85,6 +102,42 @@ mod tests {
     /// A valid post-rotation phrase with two distinct halves.
     const ROTATION_24: &str = "notice tortoise soup strong gun divide offer process salon siren general carry \
                                clump left year void clutch tool case burden fix income champion lounge";
+
+    #[test]
+    fn rotation_public_key_matches_independent_slip10_vector() {
+        let before =
+            "notice tortoise soup strong gun divide offer process salon siren general carry";
+        let expected = vec![
+            0xb1, 0x58, 0x18, 0xc2, 0xee, 0x75, 0x9a, 0x30, 0x0d, 0xb6, 0x62, 0x98, 0x8f, 0x9b,
+            0x0b, 0x48, 0x4e, 0x41, 0x35, 0x07, 0x10, 0x75, 0xd6, 0x7b, 0x47, 0x87, 0x04, 0x03,
+            0x0b, 0x2a, 0x15, 0x14,
+        ];
+        assert_eq!(
+            rotation_mnemonic_public_key(before.to_owned()).unwrap(),
+            expected
+        );
+        assert_eq!(
+            rotation_mnemonic_public_key(ROTATION_24.to_owned()).unwrap(),
+            expected
+        );
+        let normalized = format!("  {}\n", before.to_uppercase().replace(' ', "\t"));
+        assert_eq!(rotation_mnemonic_public_key(normalized).unwrap(), expected);
+    }
+
+    #[test]
+    fn rotation_public_key_rejects_invalid_phrases_and_signing_halves() {
+        for phrase in ["", "unknown", TON_24, BIP39_24] {
+            assert_eq!(
+                rotation_mnemonic_public_key(phrase.to_owned()),
+                Err(WalletLifecycleError::InvalidRecoveryPhrase)
+            );
+        }
+        let invalid_signing_half = format!("{ROTATION_12} {}", "abandon ".repeat(12));
+        assert_eq!(
+            rotation_mnemonic_public_key(invalid_signing_half),
+            Err(WalletLifecycleError::InvalidRecoveryPhrase)
+        );
+    }
 
     /// The passwordless TON mnemonic from the vendored `ton` crate's tests.
     const TON_24: &str = "dose ice enrich trigger test dove century still betray \
