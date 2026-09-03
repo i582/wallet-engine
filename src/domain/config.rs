@@ -37,6 +37,8 @@ pub struct ProviderConfig {
     /// deployment prefix is preserved, so `https://provider.example/toncenter`
     /// produces paths below `/toncenter/api/...`.
     /// Loopback HTTP URLs are accepted for local development networks.
+    /// Supply an already serialized ASCII URL, with any path escaping applied
+    /// and no credentials, query, or fragment. The engine does not normalize it.
     pub toncenter_base_url: String,
     /// Optional TON DNS root resolver override.
     ///
