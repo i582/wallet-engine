@@ -130,16 +130,17 @@ val prepared = client.prepareKeyRotation(
     ),
 )
 
-// Persist the replacement phrase in the application's protected storage first.
-val result = client.sendBoc(
-    SendBocRequest(
-        operationId = UUID.randomUUID().toString().lowercase(),
-        force = false,
-        signedBoc = prepared.signedBoc,
-        seqno = prepared.seqno,
-        validUntil = prepared.validUntil,
-    ),
+val request = SendBocRequest(
+    operationId = UUID.randomUUID().toString().lowercase(),
+    force = false,
+    signedBoc = prepared.signedBoc,
+    seqno = prepared.seqno,
+    validUntil = prepared.validUntil,
 )
+val preview = client.previewSendBoc(request)
+
+// Persist the replacement phrase in the application's protected storage first.
+val result = client.sendBoc(request)
 ```
 
 The client first fetches fresh account state through its configured HTTP host.
@@ -152,6 +153,11 @@ does not change protected storage or submit the BOC by itself.
 
 For a later rotation, protected storage must contain the 24-word phrase from
 the last successful rotation.
+
+`previewSendBoc` validates fresh `seqno`, destination, and expiration, then
+emulates the exact signed BOC without journaling or submitting it. Its returned
+message list is empty because it does not decode the opaque BOC into a
+`SendIntent`.
 
 Before `sendBoc`, store the phrase in protected storage. `sendBoc` validates
 fresh `seqno`, destination, and expiration, then stores the exact BOC in the

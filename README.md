@@ -401,7 +401,7 @@ flowchart TD
     Lifecycle --> Descriptor
     Descriptor --> Client["WalletClient"]
     Client --> Read["refresh · loadMoreActivity"]
-    Client --> Preview["previewSend"]
+    Client --> Preview["previewSend · previewSendBoc"]
     Client --> Send["send · sendBoc · prepareKeyRotation"]
     Client --> Resolve["resolvePending"]
     Client --> Observe["snapshot · waitForChange"]
@@ -972,6 +972,13 @@ signed message valid for longer.
 
 `previewTonConnect` accepts the complete TON Connect `SendRequest`. It keeps the
 dApp expiration, message order, payloads, and destination `StateInit` values.
+
+`previewSendBoc` accepts an already signed external-message BOC, validates its
+destination and the supplied fresh `seqno` and expiration, and emulates the
+exact bytes without journaling or submitting them. The returned message list is
+empty because the signed BOC remains opaque; `messageBocBase64` is the exact
+input BOC. Preview ignores the operation ID and `force`, so the same request can
+be passed to `sendBoc` after approval.
 
 `previewSignMessage` validates a sign-only intent from fresh public state. It
 does not report wallet-paid fees because a relayer supplies the inbound TON.

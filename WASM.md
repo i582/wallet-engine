@@ -174,14 +174,17 @@ const prepared = await client.prepareKeyRotation({
   messageKind: "external",
 })
 
-// Persist the replacement phrase in the application's protected storage first.
-const result = await client.sendBoc({
+const request = {
   operationId: crypto.randomUUID(),
   force: false,
   signedBoc: prepared.signedBoc,
   seqno: prepared.seqno,
   validUntil: prepared.validUntil,
-})
+}
+const preview = await client.previewSendBoc(request)
+
+// Persist the replacement phrase in the application's protected storage first.
+const result = await client.sendBoc(request)
 ```
 
 The client first fetches fresh account state through its configured HTTP host.
@@ -194,6 +197,11 @@ submit the BOC by itself.
 
 For a later rotation, protected storage must contain the 24-word phrase from
 the last successful rotation.
+
+`previewSendBoc` validates fresh `seqno`, destination, and expiration, then
+emulates the exact signed BOC without journaling or submitting it. Its returned
+message list is empty because it does not decode the opaque BOC into a
+`SendIntent`.
 
 Before `sendBoc`, store the phrase in protected storage. `sendBoc` validates
 fresh `seqno`, destination, and expiration, then stores the exact BOC in the
