@@ -13,7 +13,7 @@ pub(crate) mod send;
 pub(crate) mod slip_0010;
 pub(crate) mod transfer;
 
-pub use mnemonic_scheme::{MnemonicScheme, detect_mnemonic_schemes};
+pub use mnemonic_scheme::{MnemonicScheme, detect_mnemonic_schemes, rotation_mnemonic_public_key};
 
 use std::sync::Arc;
 
