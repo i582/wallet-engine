@@ -5,7 +5,7 @@ import {homedir, tmpdir} from "node:os"
 import path from "node:path"
 import process from "node:process"
 
-import {beginCell, Cell, Dictionary} from "@ton/core"
+import {Cell, Dictionary} from "@ton/core"
 
 const READY_TIMEOUT_MS: number = 15_000
 const TRANSACTION_TIMEOUT_MS: number = 5_000
@@ -58,11 +58,11 @@ export class ActonLocalnet {
       [
         "--project-root",
         directory,
-        "localnet",
+        "simulator",
         "start",
         "--port",
         port.toString(),
-        "--block-interval-ms",
+        "--block-time-ms",
         "50",
         "--no-mining",
       ],
@@ -88,40 +88,31 @@ export class ActonLocalnet {
    * Publishes the real wallet bytecode into the localnet blockchain config.
    *
    * Deployed accounts carry only the wallet trampoline, whose code jumps into
-   * the bytecode stored at config param -123 (already present on testnet). A
-   * fresh localnet config lacks that param, so every wallet execution would
-   * fail without this patch.
+   * the bytecode stored at config param -123 (already present on testnet).
+   * The fixture pins that parameter to the bytecode exercised by these tests.
    */
   private async installWalletBytecode(): Promise<void> {
-    const response: Response = await fetch(`${this.url}/acton_dumpState`)
-    const state: unknown = await response.json()
-    if (!response.ok || !isLocalnetState(state)) {
-      throw new Error(`Acton localnet state dump failed with HTTP ${response.status}`)
+    const response: Response = await fetch(`${this.url}/api/v2/getConfigAll`)
+    const body: unknown = await response.json()
+    const configBoc: string | undefined = blockchainConfigData(body)
+    if (!response.ok || configBoc === undefined) {
+      throw new Error(`Acton localnet config read failed with HTTP ${response.status}`)
     }
-
-    const configHash: string = state.globals.config_boc_hash
-    const entry: [string, string] | undefined = state.cas_entries.find(
-      pair => pair[0] === configHash,
-    )
-    if (entry === undefined) {
-      throw new Error("Acton localnet cell storage has no config cell")
-    }
-
     const params = Dictionary.loadDirect(
       Dictionary.Keys.Int(32),
       Dictionary.Values.Cell(),
-      Cell.fromBase64(entry[1]).asSlice(),
+      Cell.fromBase64(configBoc),
     )
-    params.set(
-      BYTECODE_CONFIG_KEY,
-      Cell.fromBase64(readFileSync(WALLET_TG_CODE_PATH, "utf8").trim()),
-    )
-    const patched: Cell = beginCell().storeDictDirect(params).endCell()
-
-    entry[0] = patched.hash().toString("hex")
-    entry[1] = patched.toBoc().toString("base64")
-    state.globals.config_boc_hash = entry[0]
-    await this.postControl("/acton_loadState", state)
+    const current: Cell | undefined = params.get(BYTECODE_CONFIG_KEY)
+    const bytecode: string = readFileSync(WALLET_TG_CODE_PATH, "utf8").trim()
+    if (current?.equals(Cell.fromBase64(bytecode))) {
+      return
+    }
+    await this.postControl("/acton_setConfigParam", {
+      index: BYTECODE_CONFIG_KEY,
+      boc: bytecode,
+      expectedHash: current?.hash().toString("hex") ?? null,
+    })
   }
 
   /**
@@ -319,39 +310,32 @@ async function delay(milliseconds: number): Promise<void> {
   await new Promise<void>(resolve => setTimeout(resolve, milliseconds))
 }
 
-/** The dumped localnet fields that the config patch reads and rewrites. */
-type LocalnetState = {
-  globals: {config_boc_hash: string} & Record<string, unknown>
-  cas_entries: [string, string][]
-} & Record<string, unknown>
-
-/** Narrows an untrusted state dump to the fields required by the config patch. */
-function isLocalnetState(value: unknown): value is LocalnetState {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "globals" in value &&
-    typeof value.globals === "object" &&
-    value.globals !== null &&
-    "config_boc_hash" in value.globals &&
-    typeof value.globals.config_boc_hash === "string" &&
-    "cas_entries" in value &&
-    Array.isArray(value.cas_entries) &&
-    value.cas_entries.every(
-      entry =>
-        Array.isArray(entry) &&
-        entry.length === 2 &&
-        typeof entry[0] === "string" &&
-        typeof entry[1] === "string",
-    )
-  )
-}
-
 /** The public wallet state stored in the trampoline account's data cell. */
 type WalletStorage = {
   readonly seqno: number
   readonly subwalletId: number
   readonly publicKey: Buffer
+}
+
+/** Extracts the blockchain config BoC from a Toncenter-compatible response. */
+function blockchainConfigData(value: unknown): string | undefined {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("result" in value) ||
+    typeof value.result !== "object" ||
+    value.result === null ||
+    !("config" in value.result)
+  ) {
+    return undefined
+  }
+  const {config} = value.result
+  return typeof config === "object" &&
+    config !== null &&
+    "bytes" in config &&
+    typeof config.bytes === "string"
+    ? config.bytes
+    : undefined
 }
 
 /** Extracts the account data BoC from a Toncenter-compatible response. */

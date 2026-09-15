@@ -113,11 +113,23 @@ const config = parseConfig(process.env.TON_CONNECT_DAPP_CONFIG);
 const servesInsecureHTTP = process.env.TON_CONNECT_INSECURE_HTTP === "1";
 const storage = new MemoryStorage();
 const state: ActorState = initialActorState(config);
+const walletsList = ["wallet-engine-test", "tonkeeper"].map((appName) => ({
+	app_name: appName,
+	name: appName,
+	image: config.manifest.iconUrl,
+	about_url: config.manifest.url,
+	universal_url: config.universalLink,
+	bridge: [{ type: "sse", url: config.bridgeUrl }],
+	platforms: ["chrome"],
+}));
 
 const connector = new TonConnect({
 	manifestUrl: config.manifestUrl,
 	storage,
 	disableAutoPauseConnection: true,
+	// Keep SDK metadata refreshes on the isolated bridge throughout the test.
+	walletsListSource: `data:application/json,${encodeURIComponent(JSON.stringify(walletsList))}`,
+	analytics: { mode: "off" },
 });
 if (config.inNetwork !== undefined) {
 	connector.setConnectionNetwork(config.inNetwork);
@@ -270,22 +282,30 @@ async function executeCommand(
 				error: null,
 			};
 			record("transaction_requested", command.transaction);
-			void connector
-				.sendTransaction(command.transaction, {
-					onRequestSent: () => record("transaction_sent"),
-				})
-				.then(
-					(result) => {
-						state.transaction.status = "success";
-						state.transaction.result = result;
-						record("transaction_succeeded", result);
-					},
-					(error) => {
-						state.transaction.status = "error";
-						state.transaction.error = actorError(error);
-						record("transaction_failed", state.transaction.error);
-					},
-				);
+			// The SDK registers its reply handler immediately after onRequestSent.
+			// Wait for that registration before letting a fast test wallet reply.
+			await new Promise<void>((resolve) => {
+				void connector
+					.sendTransaction(command.transaction, {
+						onRequestSent: () => {
+							record("transaction_sent");
+							resolve();
+						},
+					})
+					.then(
+						(result) => {
+							state.transaction.status = "success";
+							state.transaction.result = result;
+							record("transaction_succeeded", result);
+						},
+						(error) => {
+							state.transaction.status = "error";
+							state.transaction.error = actorError(error);
+							record("transaction_failed", state.transaction.error);
+							resolve();
+						},
+					);
+			});
 			sendJson(response, 202, { status: state.transaction.status });
 			return;
 		}
@@ -297,22 +317,28 @@ async function executeCommand(
 				error: null,
 			};
 			record("sign_message_requested", command.transaction);
-			void connector
-				.signMessage(command.transaction, {
-					onRequestSent: () => record("sign_message_sent"),
-				})
-				.then(
-					(result) => {
-						state.signMessage.status = "success";
-						state.signMessage.result = result;
-						record("sign_message_succeeded", result);
-					},
-					(error) => {
-						state.signMessage.status = "error";
-						state.signMessage.error = actorError(error);
-						record("sign_message_failed", state.signMessage.error);
-					},
-				);
+			await new Promise<void>((resolve) => {
+				void connector
+					.signMessage(command.transaction, {
+						onRequestSent: () => {
+							record("sign_message_sent");
+							resolve();
+						},
+					})
+					.then(
+						(result) => {
+							state.signMessage.status = "success";
+							state.signMessage.result = result;
+							record("sign_message_succeeded", result);
+						},
+						(error) => {
+							state.signMessage.status = "error";
+							state.signMessage.error = actorError(error);
+							record("sign_message_failed", state.signMessage.error);
+							resolve();
+						},
+					);
+			});
 			sendJson(response, 202, { status: state.signMessage.status });
 			return;
 		}

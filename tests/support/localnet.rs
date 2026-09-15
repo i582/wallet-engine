@@ -662,11 +662,11 @@ impl Localnet {
         let child = Command::new(&binary)
             .arg("--project-root")
             .arg(directory.path())
-            .arg("simulated-localnet")
+            .arg("simulator")
             .arg("start")
             .arg("--port")
             .arg(port.to_string())
-            .arg("--block-interval-ms")
+            .arg("--block-time-ms")
             .arg("50")
             .arg("--no-mining")
             .current_dir(directory.path())
@@ -723,79 +723,64 @@ impl Localnet {
     /// Publishes the real wallet bytecode into the localnet blockchain config.
     ///
     /// Deployed accounts carry only the wallet trampoline, whose code jumps
-    /// into the bytecode stored at config param -123 (already present on
-    /// testnet). A fresh localnet config lacks that param, so every wallet
-    /// execution would fail without this patch.
+    /// into config param -123. Pin that parameter to the fixture even if the
+    /// simulator's bundled wallet bytecode changes between Acton versions.
     fn install_wallet_bytecode(&self) -> Result<(), String> {
         const WALLET_TG_CODE_B64: &str = include_str!("wallet_tg_rev00.code");
         const BYTECODE_CONFIG_KEY: i32 = -123;
 
-        let (status, mut state) = request(
+        let (status, body) = request(
             &self.client,
             Method::GET,
-            &format!("{}/acton_dumpState", self.base_url),
+            &format!("{}/api/v2/getConfigAll", self.base_url),
             None,
         )?;
         if !(200..300).contains(&status) {
-            return Err(format!("localnet state dump failed with HTTP {status}"));
+            return Err(format!(
+                "localnet config read failed with HTTP {status}: {body}"
+            ));
         }
 
-        let config_hash = state
-            .pointer("/globals/config_boc_hash")
+        let config_boc = body
+            .pointer("/result/config/bytes")
             .and_then(Value::as_str)
-            .ok_or("localnet state dump has no config hash")?
-            .to_owned();
-        let config_entry = state
-            .pointer_mut("/cas_entries")
-            .and_then(Value::as_array_mut)
-            .ok_or("localnet state dump has no cell storage")?
-            .iter_mut()
-            .filter_map(Value::as_array_mut)
-            .find(|pair| pair.first().and_then(Value::as_str) == Some(config_hash.as_str()))
-            .ok_or("localnet cell storage has no config cell")?;
-        let config_boc = STANDARD
-            .decode(
-                config_entry[1]
-                    .as_str()
-                    .ok_or("localnet config cell is not base64")?,
-            )
+            .ok_or("localnet config response has no config cell")?;
+        let config_cell = TonCell::from_boc_base64(config_boc)
             .map_err(|error| format!("localnet config cell decoding failed: {error}"))?;
-
-        let config_cell = TonCell::from_boc(config_boc).map_err(|error| error.to_string())?;
         let dict_codec =
             TLBHashMap::<DictKeyAdapterUint<u32>, DictValAdapterTLB<TLBRef<TonCell>>>::new(32);
-        let mut params = dict_codec
+        let params = dict_codec
             .read(&mut config_cell.parser())
             .map_err(|error| format!("localnet config parsing failed: {error}"))?;
         let wallet_code = TonCell::from_boc_base64(WALLET_TG_CODE_B64.trim())
             .map_err(|error| error.to_string())?;
         let key = u32::from_be_bytes(BYTECODE_CONFIG_KEY.to_be_bytes());
-        params.insert(key, TLBRef::new(wallet_code));
-        let mut patched_builder = TonCell::builder();
-        dict_codec
-            .write(&mut patched_builder, &params)
-            .map_err(|error| format!("localnet config serialization failed: {error}"))?;
-        let patched = patched_builder.build().map_err(|error| error.to_string())?;
-
-        let patched_hash: String = patched
-            .cell_hash()
-            .map_err(|error| error.to_string())?
-            .as_slice()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
-        let patched_boc = STANDARD.encode(patched.to_boc().map_err(|error| error.to_string())?);
-        config_entry[0] = Value::String(patched_hash.clone());
-        config_entry[1] = Value::String(patched_boc);
-        *state
-            .pointer_mut("/globals/config_boc_hash")
-            .ok_or("localnet state dump lost its config hash")? = Value::String(patched_hash);
+        let current_hash = params
+            .get(&key)
+            .map(TLB::cell_hash)
+            .transpose()
+            .map_err(|error| error.to_string())?;
+        if current_hash.as_ref()
+            == Some(&wallet_code.cell_hash().map_err(|error| error.to_string())?)
+        {
+            return Ok(());
+        }
+        let expected_hash: Option<String> = current_hash.map(|hash| {
+            hash.as_slice()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect()
+        });
 
         let (status, body) = request(
             &self.client,
             Method::POST,
-            &format!("{}/acton_loadState", self.base_url),
-            Some(&state),
+            &format!("{}/acton_setConfigParam", self.base_url),
+            Some(&json!({
+                "index": BYTECODE_CONFIG_KEY,
+                "boc": WALLET_TG_CODE_B64.trim(),
+                "expectedHash": expected_hash,
+            })),
         )?;
         if (200..300).contains(&status) && body.get("ok").and_then(Value::as_bool) == Some(true) {
             Ok(())
