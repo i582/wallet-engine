@@ -1,6 +1,5 @@
 //! Validation of public configuration and send requests.
 
-use crate::wallet::crypto::derive_wallet_public_state;
 use crate::{WalletClientConfig, WalletClientError};
 
 pub(super) fn validate_config(config: &WalletClientConfig) -> Result<(), WalletClientError> {
@@ -12,11 +11,8 @@ pub(super) fn validate_config(config: &WalletClientConfig) -> Result<(), WalletC
         return Err(WalletClientError::InvalidLocalSecretReference);
     }
 
-    let (derived_address, _) = derive_wallet_public_state(&config.public_key, config.network)
-        .map_err(|_| WalletClientError::InvalidWalletPublicKey)?;
-
-    if config.address.as_address() != &derived_address {
-        return Err(WalletClientError::WalletIdentityMismatch);
+    if config.public_key.len() != 32 {
+        return Err(WalletClientError::InvalidWalletPublicKey);
     }
 
     Ok(())
@@ -25,7 +21,7 @@ pub(super) fn validate_config(config: &WalletClientConfig) -> Result<(), WalletC
 #[cfg(test)]
 mod tests {
     use super::validate_config;
-    use crate::wallet::crypto::derive_wallet_public_state;
+    use crate::wallet::crypto::{derive_wallet, derive_wallet_public_state};
     use crate::{
         Network, ProtectedSecretRef, ProviderConfig, WalletClientConfig, WalletClientError,
     };
@@ -56,20 +52,36 @@ mod tests {
     }
 
     #[test]
-    fn client_config_binds_the_public_key_to_the_source_address() {
+    fn client_config_accepts_a_rotated_signing_key_with_the_original_address() {
         let mut config = valid_config();
-        config.public_key[0] = 1;
-        assert_eq!(
-            validate_config(&config),
-            Err(WalletClientError::WalletIdentityMismatch)
-        );
+        let wallet = derive_wallet(
+            "notice tortoise soup strong gun divide offer process salon siren general carry clump left year void clutch tool case burden fix income champion lounge",
+            config.network,
+        )
+        .expect("rotated mnemonic must derive a wallet");
+        config.address = crate::TonAddressString::from_address(&wallet.address, config.network);
+        config.public_key = wallet.signing_public_key().to_vec();
+        let (derived_address, _) = derive_wallet_public_state(&config.public_key, config.network)
+            .expect("rotated signing key must derive a different initial state");
+        assert_ne!(config.address.as_address(), &derived_address);
 
-        let mut config = valid_config();
-        config.public_key.pop();
-        assert_eq!(
-            validate_config(&config),
-            Err(WalletClientError::InvalidWalletPublicKey)
-        );
+        assert_eq!(validate_config(&config), Ok(()));
+        config.local_secret_ref = Some(ProtectedSecretRef {
+            value: "wallet:validation-wallet:mnemonic".to_owned(),
+        });
+        assert_eq!(validate_config(&config), Ok(()));
+    }
+
+    #[test]
+    fn client_config_requires_a_32_byte_public_key() {
+        for length in [0, 31, 33] {
+            let mut config = valid_config();
+            config.public_key = vec![0; length];
+            assert_eq!(
+                validate_config(&config),
+                Err(WalletClientError::InvalidWalletPublicKey)
+            );
+        }
     }
 
     fn valid_config() -> WalletClientConfig {

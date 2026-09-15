@@ -498,12 +498,10 @@ flowchart TD
     SecretRef{"Local secret reference<br/>is absent or nonblank?"}
     New --> SecretRef
     SecretRef -- no --> BadSecretRef["CALL ERROR<br/>InvalidLocalSecretReference"]
-    SecretRef -- yes --> PublicKey{"Public key derives wallet state?"}
+    SecretRef -- yes --> PublicKey{"Public key has 32 bytes?"}
     PublicKey -- no --> BadKey["CALL ERROR<br/>InvalidWalletPublicKey"]
-    PublicKey -- yes --> Identity{"Address matches key + network?"}
-    Identity -- no --> BadIdentity["CALL ERROR<br/>WalletIdentityMismatch"]
     Initial["RETURN VALUE<br/>WalletSnapshot revision 0<br/>all resources idle"]
-    Identity -- yes --> Initial
+    PublicKey -- yes --> Initial
 
     Initial --> SnapshotCall["snapshot"]
     SnapshotCall --> Clone["RETURN VALUE<br/>immutable snapshot clone"]
@@ -521,7 +519,7 @@ flowchart TD
     classDef result fill:#dcfce7,stroke:#15803d,color:#14532d;
     classDef callError fill:#fee2e2,stroke:#b91c1c,color:#7f1d1d;
     class Initial,Clone,Changed result;
-    class BadSecretRef,BadKey,BadIdentity,Shut callError;
+    class BadSecretRef,BadKey,Shut callError;
 ```
 
 A public-key-only client has no `localSecretRef`. It can refresh, paginate,

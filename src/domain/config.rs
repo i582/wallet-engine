@@ -98,10 +98,11 @@ pub struct WalletClientConfig {
     pub record_id: NonEmptyString,
     /// The friendly TON address that the client reads and sends from.
     pub address: TonAddressString,
-    /// The raw 32-byte Ed25519 public key stored in this wallet.
+    /// The raw 32-byte Ed25519 public key used for wallet preflight.
     ///
-    /// This value is public metadata. The engine uses it to build a faithful
-    /// fake-signed message for preflight emulation without unlocking the mnemonic.
+    /// For an undeployed wallet, this must be the initial key that derives its
+    /// address and `StateInit`. For an active wallet, this can be the current
+    /// signing key after rotation; it need not derive the wallet address.
     pub public_key: Vec<u8>,
     /// The protected mnemonic reference used for local signing.
     ///
