@@ -437,6 +437,7 @@ describe("high-level WASM API", () => {
       payload: "single-use challenge",
     })
     expect(proof.signature).toHaveLength(64)
+    expect(proof.publicKey).toEqual(created.descriptor.publicKey)
 
     let submittedBoc: string | undefined
     const client = await WalletClient.create(

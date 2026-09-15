@@ -77,6 +77,11 @@ impl SensitiveWallet {
         self.signing.verifying_key().to_bytes()
     }
 
+    /// Signs the domain-separated TON Connect proof digest with the current key.
+    pub(crate) fn sign_ton_connect_proof_hash(&self, hash: &[u8; 32]) -> [u8; 64] {
+        self.signing.sign(hash).to_bytes()
+    }
+
     /// Builds and signs an external Wallet request while preserving anchor-based `StateInit`.
     pub(crate) fn create_ext_in_msg_with_modes(
         &self,

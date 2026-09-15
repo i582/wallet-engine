@@ -18,7 +18,6 @@ pub use mnemonic_scheme::{MnemonicScheme, detect_mnemonic_schemes, rotation_mnem
 
 use std::sync::Arc;
 
-use ed25519_dalek::{Signer as _, SigningKey};
 use ton::ton_core::{traits::tlb::TLB as _, types::TonAddress};
 use ton_connect_core::{RawAccountAddress, ton_proof_signing_hash};
 
@@ -76,6 +75,11 @@ pub struct TonConnectProofSignRequest {
 pub struct TonConnectProofSignature {
     /// Exact 64-byte Ed25519 signature.
     pub signature: Vec<u8>,
+    /// Current 32-byte Ed25519 signing public key used for this proof.
+    ///
+    /// Use this key in the accompanying `ton_addr` reply. After rotation it
+    /// differs from the anchor key in the descriptor and initial `StateInit`.
+    pub public_key: Vec<u8>,
 }
 
 /// Public account material sent in a TON Connect `ton_addr` reply.
@@ -88,7 +92,10 @@ pub struct TonConnectAccountInfo {
     pub network: String,
     /// Canonical standard-base64 wallet `StateInit` `BoC`.
     pub wallet_state_init: String,
-    /// Raw 32-byte Ed25519 public key.
+    /// Raw 32-byte Ed25519 public key advertised to the dApp.
+    ///
+    /// [`WalletLifecycle::ton_connect_account`] supplies the initial anchor
+    /// key. When signing a proof, replace it with the returned signing key.
     pub public_key: Vec<u8>,
 }
 
@@ -369,11 +376,13 @@ impl WalletLifecycle {
             .map_err(Into::into)
     }
 
-    /// Authorizes the protected key and signs a TON Connect ownership proof.
+    /// Authorizes the current signing key and signs a TON Connect ownership proof.
     ///
     /// Rust constructs the protocol digest itself. The caller cannot use this
     /// API as a generic Ed25519 signing oracle, and no mnemonic or private-key
     /// bytes cross the API boundary.
+    /// The returned public key must accompany the proof in `ton_addr`.
+    /// The host must block this operation while a key rotation is unresolved.
     pub async fn sign_ton_connect_proof(
         &self,
         request: TonConnectProofSignRequest,
@@ -397,7 +406,10 @@ impl WalletLifecycle {
         sign_ton_connect_proof(&secret, &request)
     }
 
-    /// Derives the public TON Connect account reply without reading a secret.
+    /// Derives initial TON Connect account material without reading a secret.
+    ///
+    /// Address and `StateInit` remain anchor-based after rotation. For a proof
+    /// reply, replace `public_key` with [`TonConnectProofSignature::public_key`].
     pub fn ton_connect_account(
         &self,
         descriptor: WalletDescriptor,
@@ -496,14 +508,9 @@ fn sign_ton_connect_proof(
         &request.payload,
     )
     .map_err(|_| WalletLifecycleError::TonConnectSigningFailed)?;
-    let signing_key = SigningKey::from_keypair_bytes(&wallet.key_pair.secret_key)
-        .map_err(|_| WalletLifecycleError::TonConnectSigningFailed)?;
-    if signing_key.verifying_key().to_bytes() != wallet.key_pair.public_key {
-        return Err(WalletLifecycleError::SecretWalletMismatch);
-    }
-
     Ok(TonConnectProofSignature {
-        signature: signing_key.sign(&digest).to_bytes().to_vec(),
+        signature: wallet.sign_ton_connect_proof_hash(&digest).to_vec(),
+        public_key: wallet.signing_public_key().to_vec(),
     })
 }
 
@@ -616,7 +623,7 @@ mod tests {
     }
 
     #[test]
-    fn ton_connect_proof_signing_is_bound_to_the_descriptor_and_fields()
+    fn ton_connect_proof_uses_rotated_signing_key_and_binds_descriptor_and_fields()
     -> Result<(), Box<dyn std::error::Error>> {
         let words = MNEMONIC
             .split_whitespace()
@@ -632,7 +639,12 @@ mod tests {
         };
         let signed = sign_ton_connect_proof(&secret, &request)?;
         let signature = <[u8; 64]>::try_from(signed.signature.as_slice())?;
-        let public_key = <[u8; 32]>::try_from(descriptor.public_key.as_slice())?;
+        let public_key = <[u8; 32]>::try_from(signed.public_key.as_slice())?;
+        let anchor_key = <[u8; 32]>::try_from(descriptor.public_key.as_slice())?;
+        let mnemonic = mnemonic::RotationMnemonic::parse(MNEMONIC)?;
+        let expected_signing_key = crypto::derive_half_key(mnemonic.signing());
+        assert_eq!(public_key, expected_signing_key.verifying_key().to_bytes());
+        assert_ne!(public_key, anchor_key, "fixture must contain a rotated key");
         let address = descriptor.address.as_address();
         let address_hash = <[u8; 32]>::try_from(address.hash.as_slice())?;
         let raw_address = RawAccountAddress::new(address.workchain, address_hash);
@@ -649,6 +661,12 @@ mod tests {
             &ton_connect_core::Ed25519PublicKey::from_bytes(public_key),
             ton_connect_core::SignatureDomain::Empty,
         )?);
+        assert!(!ton_connect_core::verify_signature(
+            &hash,
+            &ton_connect_core::Ed25519Signature::from_bytes(signature),
+            &ton_connect_core::Ed25519PublicKey::from_bytes(anchor_key),
+            ton_connect_core::SignatureDomain::Empty,
+        )?);
 
         let changed_hash = ton_proof_signing_hash(
             &raw_address,
@@ -662,6 +680,54 @@ mod tests {
             &ton_connect_core::Ed25519PublicKey::from_bytes(public_key),
             ton_connect_core::SignatureDomain::Empty,
         )?);
+
+        let mut wrong_request = request;
+        wrong_request.descriptor = valid_descriptor();
+        assert_eq!(
+            sign_ton_connect_proof(&secret, &wrong_request),
+            Err(WalletLifecycleError::SecretWalletMismatch)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ton_connect_proof_before_rotation_verifies_with_initial_account()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let secret = SensitiveMnemonic::from_words(
+            MNEMONIC
+                .split_whitespace()
+                .take(12)
+                .map(str::to_owned)
+                .collect(),
+        )?;
+        let descriptor =
+            derive_descriptor("ton-connect-before-rotation", Network::Testnet, &secret)?;
+        let account = derive_ton_connect_account(descriptor.clone())?;
+        let request = TonConnectProofSignRequest {
+            descriptor,
+            domain: "wallet.example".to_owned(),
+            timestamp: 1_800_000_000,
+            payload: "one-time challenge".to_owned(),
+        };
+        let signed = sign_ton_connect_proof(&secret, &request)?;
+        assert_eq!(signed.public_key, account.public_key);
+        let account = ton_connect_core::TonAddressItemReply::new(
+            RawAccountAddress::from_str(&account.address)?,
+            ton_connect_core::NetworkId::try_from(account.network.as_str())?,
+            ton_connect_core::WalletStateInit::try_from(account.wallet_state_init)?,
+            ton_connect_core::Ed25519PublicKey::from_bytes(<[u8; 32]>::try_from(
+                signed.public_key.as_slice(),
+            )?),
+        );
+        let proof = ton_connect_core::TonProof {
+            timestamp: ton_connect_core::Uint64String::from(request.timestamp),
+            domain: ton_connect_core::TonProofDomain::new(request.domain)?,
+            payload: request.payload,
+            signature: ton_connect_core::Ed25519Signature::from_bytes(<[u8; 64]>::try_from(
+                signed.signature.as_slice(),
+            )?),
+        };
+        assert!(proof.verify_with_account(&account)?);
         Ok(())
     }
 

@@ -132,7 +132,9 @@ the naming rules of Swift, Kotlin, and C++.
 6. Call `WalletLifecycle.ton_connect_account` for the selected wallet.
 7. If the prompt requests a proof, call
    `WalletLifecycle.sign_ton_connect_proof` with the approved manifest domain,
-   current Unix timestamp, and exact challenge.
+   current Unix timestamp, and exact challenge. Set the account's `public_key`
+   to the signing result's `public_key` before approving the connection. Keep
+   the account address and `wallet_state_init` returned by `ton_connect_account`.
 8. Create `TonConnectDevice` with the current platform, registered wallet name,
    and application version.
 9. Call `approve_connect` or `reject_connect`.
@@ -261,7 +263,23 @@ The browser runtime uses `https://connect.ton.org/bridge` by default. Set
 
 The proof-signing API constructs the TON Connect digest in Rust. It requests
 the protected recovery phrase with the `signTonConnectProof` access reason and
-returns only the 64-byte signature.
+signs with the wallet's current signing key. The result contains the 64-byte
+`signature` and its 32-byte `public_key` (`publicKey` in generated Swift and
+browser TypeScript). Use this public key in the connection's `ton_addr` reply
+whenever a proof is signed.
+
+Key rotation changes the signing key but preserves the wallet address and
+original, anchor-based `StateInit`. The synchronous `ton_connect_account` API
+returns that original account material; its public key must be replaced with
+the proof result's public key when constructing a connection with a proof.
+
+A verifier must authenticate the current signing key from trusted on-chain
+state for a deployed wallet whose key has rotated. An advertised `publicKey`
+alone does not prove control of the account. The `ton-connect-core`
+`TonProof.verify_with_account` helper verifies against the original standard
+wallet `StateInit` and therefore rejects a rotated signing key. Call
+`TonProof.verify` with the account address and an independently authenticated
+current public key to verify such proofs.
 
 ## Session storage security
 

@@ -33,6 +33,8 @@ export interface TonConnectProofSignRequest {
 export interface TonConnectProofSignature {
   /** Exact 64-byte Ed25519 signature. */
   readonly signature: number[]
+  /** Exact 32-byte current signing public key used to verify the proof. */
+  readonly publicKey: number[]
 }
 
 /** One capability requested during TON Connect connection. */

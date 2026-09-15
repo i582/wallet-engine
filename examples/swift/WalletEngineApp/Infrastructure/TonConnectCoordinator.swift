@@ -163,7 +163,7 @@ final class TonConnectCoordinator {
         isWorking = true
         diagnostic = nil
         do {
-            let account = try lifecycle.tonConnectAccount(for: descriptor)
+            var account = try lifecycle.tonConnectAccount(for: descriptor)
             let proof: TonConnectProofReply?
             if let payload = prompt.proofPayload {
                 let timestamp = Self.now
@@ -172,6 +172,12 @@ final class TonConnectCoordinator {
                     domain: manifest.domain,
                     timestamp: timestamp,
                     payload: payload
+                )
+                account = TonConnectAccountInfo(
+                    address: account.address,
+                    network: account.network,
+                    walletStateInit: account.walletStateInit,
+                    publicKey: signed.publicKey
                 )
                 proof = TonConnectProofReply(
                     timestamp: timestamp,

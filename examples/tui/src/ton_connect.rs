@@ -307,6 +307,7 @@ async fn connect_payload(
     domain: &str,
 ) -> Result<ConnectEventPayload> {
     let mut items = Vec::new();
+    let mut proof_public_key = None;
     for item in requested {
         match item {
             ConnectItem::TonAddr { .. } => {
@@ -322,6 +323,9 @@ async fn connect_payload(
                         payload: payload.clone(),
                     })
                     .await?;
+                let public_key = <[u8; 32]>::try_from(signed.public_key.as_slice())
+                    .map_err(|_| anyhow!("TON Connect proof public key is not 32 bytes"))?;
+                proof_public_key = Some(Ed25519PublicKey::from_bytes(public_key));
                 let signature = <[u8; 64]>::try_from(signed.signature.as_slice())
                     .map_err(|_| anyhow!("TON Connect signature is not 64 bytes"))?;
                 items.push(ConnectItemReply::TonProof(TonProofItemReply::new(
@@ -335,6 +339,13 @@ async fn connect_payload(
             }
             ConnectItem::Unsupported { .. } => {
                 items.push(ConnectItemReply::unsupported(item, None));
+            }
+        }
+    }
+    if let Some(public_key) = proof_public_key {
+        for item in &mut items {
+            if let ConnectItemReply::TonAddress(account) = item {
+                account.public_key = public_key;
             }
         }
     }

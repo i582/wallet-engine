@@ -5,6 +5,8 @@ import {
   TonConnectWallet,
   isNewerRequestId,
   parseTonConnectLink,
+  type ConnectItem,
+  type TonConnectProofSignRequest,
   type TonConnectStorage,
 } from "../src/ton-connect"
 import {deviceInfo} from "../src/ton-connect-protocol"
@@ -15,13 +17,16 @@ import type {WalletLifecycle} from "../src/wallet-lifecycle"
 const CLIENT_ID: string = "01".repeat(32)
 const WALLET_IDENTITY = {appName: "tonkeeper", appVersion: "0.1.0"} as const
 
-function connectLink(clientId: string = CLIENT_ID): string {
+function connectLink(
+  clientId: string = CLIENT_ID,
+  items: ConnectItem[] = [{name: "ton_addr", network: "-3"}],
+): string {
   const parameters = new URLSearchParams({
     v: "2",
     id: clientId,
     r: JSON.stringify({
       manifestUrl: "https://app.example/tonconnect-manifest.json",
-      items: [{name: "ton_addr", network: "-3"}],
+      items,
     }),
   })
   return `tc://?${parameters.toString()}`
@@ -45,6 +50,135 @@ describe("TON Connect wallet runtime", () => {
     expect(isNewerRequestId("184467440737095516160", "99999999999999999999")).toBe(true)
     expect(isNewerRequestId("-1", undefined)).toBe(false)
   })
+
+  test.each(["before", "after", "without"] as const)(
+    "returns and persists the matching account key with ton_addr %s ton_proof",
+    async addressOrder => {
+      const dappCrypto = new SessionCrypto()
+      const anchorPublicKey = Array.from({length: 32}, () => 1)
+      const signingPublicKey = Array.from({length: 32}, () => 2)
+      const signature = Array.from({length: 64}, () => 3)
+      const account = {
+        address: `0:${"11".repeat(32)}`,
+        network: "-3",
+        walletStateInit: "anchor-state-init",
+        publicKey: anchorPublicKey,
+      }
+      const descriptor = {
+        recordId: "rotated-proof-wallet",
+        address: "0QWallet",
+        publicKey: anchorPublicKey,
+        network: "testnet" as const,
+        secretRef: {value: "wallet-secret"},
+      }
+      const signRequests: TonConnectProofSignRequest[] = []
+      const responses: unknown[] = []
+      const storage = new MemoryTonConnectStorage(undefined)
+      const lifecycle = {
+        tonConnectAccount: () => account,
+        signTonConnectProof: async (request: TonConnectProofSignRequest) => {
+          signRequests.push(request)
+          return {signature, publicKey: signingPublicKey}
+        },
+      } as unknown as WalletLifecycle
+      const fetch = Object.assign(
+        async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+          const url = new URL(input instanceof Request ? input.url : input.toString())
+          if (url.hostname === "app.example") {
+            return Response.json({
+              url: "https://app.example",
+              name: "Example dApp",
+              iconUrl: "https://app.example/icon.png",
+            })
+          }
+          if (url.pathname.endsWith("/message")) {
+            responses.push(
+              JSON.parse(
+                dappCrypto.decrypt(
+                  Base64.decode(String(init?.body ?? "")).toUint8Array(),
+                  hexToByteArray(url.searchParams.get("client_id") ?? ""),
+                ),
+              ),
+            )
+          }
+          return new Response(undefined, {status: 200})
+        },
+        {preconnect: () => undefined},
+      ) as typeof globalThis.fetch
+      const wallet = new TonConnectWallet({
+        descriptor,
+        walletClient: {} as WalletClient,
+        lifecycle,
+        identity: WALLET_IDENTITY,
+        bridgeUrl: "https://bridge.example/bridge",
+        fetch,
+        storage,
+      })
+      wallet.onEvent(event => {
+        if (event.kind === "interaction") {
+          wallet.respond(event.interaction.id, true)
+        }
+      })
+      const addressItem = {name: "ton_addr", network: "-3"}
+      const proofItem = {name: "ton_proof", payload: "single-use challenge"}
+      const requestedItems = {
+        before: [addressItem, proofItem],
+        after: [proofItem, addressItem],
+        without: [addressItem],
+      }[addressOrder]
+      const expectedPublicKey = addressOrder === "without" ? anchorPublicKey : signingPublicKey
+
+      try {
+        await wallet.start(connectLink(dappCrypto.sessionId, requestedItems))
+
+        expect(signRequests).toEqual(
+          addressOrder === "without"
+            ? []
+            : [
+                {
+                  descriptor,
+                  domain: "app.example",
+                  timestamp: expect.any(Number),
+                  payload: proofItem.payload,
+                },
+              ],
+        )
+        expect(responses).toEqual([
+          {
+            event: "connect",
+            id: 0,
+            payload: {
+              items: requestedItems.map(item =>
+                item.name === "ton_addr"
+                  ? {
+                      ...account,
+                      name: "ton_addr",
+                      publicKey: addressOrder === "without" ? "01".repeat(32) : "02".repeat(32),
+                    }
+                  : {
+                      name: "ton_proof",
+                      proof: {
+                        timestamp: signRequests[0]?.timestamp,
+                        domain: {lengthBytes: 11, value: "app.example"},
+                        payload: proofItem.payload,
+                        signature: Base64.encode(new Uint8Array(signature)),
+                      },
+                    },
+              ),
+              device: deviceInfo(WALLET_IDENTITY),
+            },
+          },
+        ])
+        expect(JSON.parse(storage.value ?? "{}").account).toEqual({
+          ...account,
+          publicKey: expectedPublicKey,
+        })
+        expect(account.publicKey).toEqual(anchorPublicKey)
+      } finally {
+        await wallet.close()
+      }
+    },
+  )
 
   test("disconnect wins over an older in-flight cursor persistence", async () => {
     const walletCrypto = new SessionCrypto()

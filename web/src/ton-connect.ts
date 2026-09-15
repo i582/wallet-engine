@@ -117,7 +117,7 @@ export class TonConnectWallet {
     this.running = true
     try {
       const link: ParsedConnectLink = parseTonConnectLink(linkValue)
-      const account: TonConnectAccountInfo = this.lifecycle.tonConnectAccount(this.descriptor)
+      let account: TonConnectAccountInfo = this.lifecycle.tonConnectAccount(this.descriptor)
       enforceConnectRequest(link.request, account.network)
       const manifest: AppManifest = await loadManifest(
         this.fetch,
@@ -158,10 +158,13 @@ export class TonConnectWallet {
       }
 
       const items: unknown[] = []
-      for (const item of link.request.items) {
+      for (const [index, item] of link.request.items.entries()) {
         if (item.name === "ton_addr") {
-          items.push(accountReply(account))
-        } else if (item.name === "ton_proof" && typeof item.payload === "string") {
+          // Fill this item after signing so its public key matches the proof
+          // regardless of the requested item order.
+          continue
+        }
+        if (item.name === "ton_proof" && typeof item.payload === "string") {
           const timestamp: number = Math.floor(Date.now() / 1000)
           const signed = await this.lifecycle.signTonConnectProof({
             descriptor: this.descriptor,
@@ -169,7 +172,8 @@ export class TonConnectWallet {
             timestamp,
             payload: item.payload,
           })
-          items.push({
+          account = {...account, publicKey: signed.publicKey}
+          items[index] = {
             name: "ton_proof",
             proof: {
               // The TON Connect specification sends the timestamp as an
@@ -179,11 +183,13 @@ export class TonConnectWallet {
               payload: item.payload,
               signature: Base64.encode(new Uint8Array(signed.signature)),
             },
-          })
+          }
         } else {
-          items.push({name: item.name, error: {code: 400, message: "Method is not supported"}})
+          items[index] = {name: item.name, error: {code: 400, message: "Method is not supported"}}
         }
       }
+      items[link.request.items.findIndex(item => item.name === "ton_addr")] = accountReply(account)
+      this.account = account
       await this.postEncrypted(
         {
           event: "connect",
