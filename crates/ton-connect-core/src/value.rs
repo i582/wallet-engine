@@ -15,6 +15,37 @@ where
     T::deserialize(deserializer).map(Some)
 }
 
+/// Deserializes a `u64` sent either as a JSON number or as a canonical decimal string.
+///
+/// `@tonconnect/protocol` types and `@tonconnect/sdk` validation require a number
+/// where the specification text still shows a string, so both peers exist.
+pub(crate) fn deserialize_u64_number_or_string<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct NumberOrString;
+
+    impl de::Visitor<'_> for NumberOrString {
+        type Value = u64;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("an unsigned 64-bit integer or its canonical decimal string")
+        }
+
+        fn visit_u64<E: de::Error>(self, value: u64) -> Result<u64, E> {
+            Ok(value)
+        }
+
+        fn visit_str<E: de::Error>(self, value: &str) -> Result<u64, E> {
+            Uint64String::try_from(value)
+                .map(Uint64String::get)
+                .map_err(E::custom)
+        }
+    }
+
+    deserializer.deserialize_any(NumberOrString)
+}
+
 /// Protocol object that is valid only when it contains no properties.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct EmptyObject;

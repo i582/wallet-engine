@@ -6,8 +6,8 @@ use serde_json::Value;
 use crate::{
     AccountVerificationError, Ed25519PublicKey, Ed25519Signature, EmbeddedResponse, EmptyObject,
     HttpsUrl, NetworkId, NonEmptyVec, RawAccountAddress, ResponseValidationError, SignatureDomain,
-    SigningError, StandardWalletState, Uint64String, WalletStateError, WalletStateInit,
-    rpc::numeric_enum_serde, ton_proof_signing_hash, verify_signature,
+    SigningError, StandardWalletState, WalletStateError, WalletStateInit, rpc::numeric_enum_serde,
+    ton_proof_signing_hash, verify_signature,
 };
 
 /// Request for the connected wallet address and optional target network hint.
@@ -724,8 +724,12 @@ impl<'de> Deserialize<'de> for TonProofDomain {
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TonProof {
-    /// Unix signing time in seconds.
-    pub timestamp: Uint64String,
+    /// Unix signing time in seconds, written as a JSON number.
+    ///
+    /// `@tonconnect/sdk` drops a proof whose timestamp is not a number; a
+    /// canonical decimal string is still accepted on input.
+    #[serde(deserialize_with = "crate::value::deserialize_u64_number_or_string")]
+    pub timestamp: u64,
     /// Bound application domain.
     pub domain: TonProofDomain,
     /// Original dApp challenge.
@@ -737,12 +741,7 @@ pub struct TonProof {
 impl TonProof {
     /// Reconstructs the digest bound by this proof.
     pub fn signing_hash(&self, address: &RawAccountAddress) -> Result<[u8; 32], SigningError> {
-        ton_proof_signing_hash(
-            address,
-            self.domain.value(),
-            self.timestamp.get(),
-            &self.payload,
-        )
+        ton_proof_signing_hash(address, self.domain.value(), self.timestamp, &self.payload)
     }
 
     /// Verifies the proof signature with the connected account's trusted key.
@@ -1344,34 +1343,42 @@ mod tests {
     }
 
     #[test]
-    fn ton_proof_uses_string_timestamp_and_checks_domain_byte_length() -> Result<(), SigningError> {
+    fn ton_proof_writes_a_numeric_timestamp_and_checks_domain_byte_length()
+    -> Result<(), Box<dyn std::error::Error>> {
         let proof = TonProof {
-            timestamp: Uint64String::from(1_700_000_000),
+            timestamp: 1_700_000_000,
             domain: TonProofDomain::new("пример.рф".to_owned())?,
             payload: "nonce".to_owned(),
             signature: Ed25519Signature::from_bytes([0_u8; 64]),
         };
         assert_eq!(proof.domain.length_bytes(), 17);
-        let encoded = serde_json::to_string(&proof);
-        assert!(
-            encoded
-                .as_ref()
-                .is_ok_and(|json| json.contains(r#""timestamp":"1700000000""#))
-        );
+        let encoded = serde_json::to_string(&proof)?;
+        assert!(encoded.contains(r#""timestamp":1700000000,"#), "{encoded}");
+        assert_eq!(serde_json::from_str::<TonProof>(&encoded)?, proof);
 
-        let numeric_timestamp = r#"{
-            "timestamp":1700000000,
-            "domain":{"lengthBytes":11,"value":"example.com"},
-            "payload":"nonce",
-            "signature":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
-        }"#;
+        let with_timestamp = |timestamp: &str| {
+            format!(
+                r#"{{"timestamp":{timestamp},"domain":{{"lengthBytes":11,"value":"example.com"}},"payload":"nonce","signature":"{}"}}"#,
+                "A".repeat(86) + "=="
+            )
+        };
+        for accepted in ["1700000000", r#""1700000000""#] {
+            let parsed = serde_json::from_str::<TonProof>(&with_timestamp(accepted))?;
+            assert_eq!(parsed.timestamp, 1_700_000_000, "{accepted}");
+        }
+        for refused in [r#""01700000000""#, "-1", "1.5", r#""""#, "null"] {
+            assert!(
+                serde_json::from_str::<TonProof>(&with_timestamp(refused)).is_err(),
+                "{refused}"
+            );
+        }
+
         let wrong_utf8_length = r#"{
-            "timestamp":"1700000000",
+            "timestamp":1700000000,
             "domain":{"lengthBytes":9,"value":"пример.рф"},
             "payload":"nonce",
             "signature":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
         }"#;
-        assert!(serde_json::from_str::<TonProof>(numeric_timestamp).is_err());
         assert!(serde_json::from_str::<TonProof>(wrong_utf8_length).is_err());
         Ok(())
     }
@@ -1383,7 +1390,7 @@ mod tests {
         let signing_key = SigningKey::from_bytes(&[0x33; 32]);
         let public_key = Ed25519PublicKey::from_bytes(signing_key.verifying_key().to_bytes());
         let mut proof = TonProof {
-            timestamp: Uint64String::from(1_700_000_000),
+            timestamp: 1_700_000_000,
             domain: TonProofDomain::new("example.com".to_owned())?,
             payload: "single-use-nonce".to_owned(),
             signature: Ed25519Signature::from_bytes([0_u8; 64]),
@@ -1483,7 +1490,7 @@ mod tests {
             },
         ])?;
         let proof = TonProof {
-            timestamp: Uint64String::from(1),
+            timestamp: 1,
             domain: TonProofDomain::new("app.example".to_owned())?,
             payload: "wrong".to_owned(),
             signature: Ed25519Signature::from_bytes([0_u8; 64]),

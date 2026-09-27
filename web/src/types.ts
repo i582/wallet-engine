@@ -89,6 +89,13 @@ export interface CreateEncryptedCommentRequest {
   readonly recipientPublicKey?: number[] | null
 }
 
+/** Asks which key an encrypted comment for a recipient would use, without any secret. */
+export interface EncryptedCommentRecipientRequest {
+  readonly recipient: string
+  /** Optional 32-byte Ed25519 key, verified exactly as in `CreateEncryptedCommentRequest`. */
+  readonly recipientPublicKey?: number[] | null
+}
+
 /** Decrypts an encrypted-comment BOC from the specified sender. */
 export interface DecryptCommentRequest {
   readonly sender: string
@@ -261,6 +268,8 @@ export interface ProtectedSecretRead {
     | "encryptComment"
     | "decryptComment"
     | "revealRecoveryPhrase"
+    | "deriveTonConnectSessionKey"
+    | "signTonConnectData"
   readonly prompt: string
 }
 

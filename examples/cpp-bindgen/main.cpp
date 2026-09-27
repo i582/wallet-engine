@@ -188,6 +188,10 @@ QString secret_reason_text(SecretAccessReason reason) {
         return QStringLiteral("decrypt-comment");
     case SecretAccessReason::kRevealRecoveryPhrase:
         return QStringLiteral("reveal-recovery-phrase");
+    case SecretAccessReason::kDeriveTonConnectSessionKey:
+        return QStringLiteral("derive-ton-connect-session-key");
+    case SecretAccessReason::kSignTonConnectData:
+        return QStringLiteral("sign-ton-connect-data");
     }
     return QStringLiteral("unknown");
 }

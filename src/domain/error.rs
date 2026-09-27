@@ -317,4 +317,15 @@ pub enum WalletClientError {
     /// The client is shut down and accepts no new work.
     #[error("wallet client is shut down")]
     Shutdown,
+    /// The recipient's encrypted-comment public key could not be read now.
+    ///
+    /// The provider failed, limited, or cancelled the lookup, so nothing is
+    /// known about the recipient and the same request can be retried. It is
+    /// never returned when the recipient is known to be unable to receive an
+    /// encrypted comment; that is [`Self::EncryptedCommentUnavailable`].
+    #[error("encrypted-comment recipient lookup failed: {diagnostic}")]
+    EncryptedCommentLookupFailed {
+        /// Bounded developer-facing reason that contains no secret material.
+        diagnostic: String,
+    },
 }

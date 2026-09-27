@@ -343,8 +343,11 @@ const fn hex_value(byte: u8) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
-    use ton::ton_core::cell::TonCell;
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
+    use ton::ton_core::cell::{BoC, TonCell};
     use ton::ton_core::traits::tlb::TLB;
+    use ton_connect_core::test_boc;
 
     use super::*;
 
@@ -699,6 +702,59 @@ mod tests {
         }
     }
 
+    #[test]
+    fn refuses_a_bin_that_claims_every_cell_count_without_an_index() {
+        assert_refused_before_ton_core(&test_boc::huge_cell_count());
+    }
+
+    #[test]
+    fn refuses_a_bin_with_a_reference_past_the_last_cell() {
+        assert_refused_before_ton_core(&test_boc::REFERENCE_PAST_THE_LAST_CELL);
+    }
+
+    #[test]
+    fn refuses_a_5000_level_bin_chain_on_a_512_kib_stack() {
+        // Telegram parses links on its main thread, which reserves 1 MiB on
+        // Windows; 512 KiB is a stricter bound for the whole check.
+        on_stack(512 * 1024, || {
+            assert_refused_before_ton_core(&test_boc::chain(5000))
+        });
+    }
+
+    #[test]
+    fn valid_bins_still_parse_to_the_same_boc() {
+        let mut builder = TonCell::builder();
+        builder
+            .write_num(&0x1234_u16, 16)
+            .expect("a small cell must build");
+        let crc_boc = BoC::new(builder.build().expect("a small cell must build"))
+            .to_bytes(true)
+            .expect("a small cell must serialize");
+        // The TON C++ serializer's shape: an index of end offsets.
+        let indexed_empty = vec![
+            0xb5, 0xee, 0x9c, 0x72, 0x81, 0x01, 0x01, 0x01, 0x00, 0x02, 0x00, 0x02, 0x00, 0x00,
+        ];
+        // 1,025 cells are 1024 levels deep, the deepest accepted chain.
+        for bytes in [
+            TonCell::EMPTY_BOC.to_vec(),
+            crc_boc,
+            indexed_empty,
+            test_boc::chain(1025),
+        ] {
+            let link = bin_link(&bytes);
+            let parsed = on_stack(1 << 20, move || parse(&link));
+            let TonTransferPayload::Boc { boc } = parsed.payload else {
+                panic!("a bin link must carry a BOC payload");
+            };
+            assert_eq!(boc.as_bytes(), bytes.as_slice());
+            assert_eq!(
+                boc,
+                on_stack(1 << 20, move || Boc::try_from(bytes)
+                    .expect("fixture BOC must be valid"))
+            );
+        }
+    }
+
     fn parse(value: &str) -> ParsedTonTransferLink {
         parse_ton_transfer_link(value.to_owned()).expect("fixture link must be valid")
     }
@@ -722,5 +778,33 @@ mod tests {
                 encoded.contains(character).then_some(encoded)
             })
             .expect("the finite two-byte cell set must contain every standard Base64 character")
+    }
+
+    fn bin_link(bytes: &[u8]) -> String {
+        let encoded = STANDARD
+            .encode(bytes)
+            .replace('+', "%2B")
+            .replace('/', "%2F")
+            .replace('=', "%3D");
+        format!("ton://transfer/{RECIPIENT}?bin={encoded}")
+    }
+
+    fn on_stack<T: Send + 'static>(size: usize, job: impl FnOnce() -> T + Send + 'static) -> T {
+        std::thread::Builder::new()
+            .name("bin-parse".to_owned())
+            .stack_size(size)
+            .spawn(job)
+            .expect("the parse thread must start")
+            .join()
+            .expect("the parse thread must not panic")
+    }
+
+    fn assert_refused_before_ton_core(bytes: &[u8]) {
+        assert_eq!(
+            parse_error(&bin_link(bytes)),
+            TonTransferLinkError::InvalidBinaryPayload
+        );
+        let error = Boc::try_from(bytes.to_vec()).expect_err("a malformed BOC must fail");
+        assert!(error.rejected_before_ton_core(), "{error:?}");
     }
 }

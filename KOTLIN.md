@@ -181,9 +181,17 @@ for an uninitialized wallet. The engine verifies that the supplied key derives
 the recipient address using supported default wallet parameters; see
 [supplied-key verification](README.md#sending-gram). A mismatch is rejected
 before any HTTP request or protected-secret access. The default `null` uses the
-lookup. The engine requests the protected mnemonic with
+lookup, which reads the recipient account state and calls `get_public_key` on
+an active wallet. The engine requests the protected mnemonic with
 `SecretAccessReason.ENCRYPT_COMMENT`, and returns a BOC. Use that BOC as a
 `SendMessageBody.RawPayload`, then preview and send the same intent.
+
+`WalletClient.resolveEncryptedCommentRecipient` takes the same recipient and
+optional key and returns the key `createEncryptedComment` would encrypt for,
+without any protected-secret access. `EncryptedCommentUnavailable` means the
+recipient cannot receive an encrypted comment; `EncryptedCommentLookupFailed`
+means the provider did not answer and the call can be retried. See
+[recipient resolution](README.md#sending-gram).
 
 Encrypted activity has `encryptedComment` instead of `comment`. Decrypt it
 explicitly with `WalletClient.decryptComment`, passing the sender address. For

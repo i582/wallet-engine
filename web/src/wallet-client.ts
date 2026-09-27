@@ -21,6 +21,7 @@ import type {WalletStatuslessHost} from "./statusless-host"
 import type {
   CreateEncryptedCommentRequest,
   DecryptCommentRequest,
+  EncryptedCommentRecipientRequest,
   PreparedKeyRotation,
   PrepareKeyRotationRequest,
   WalletClientConfig,
@@ -153,6 +154,19 @@ export class WalletClient {
   async createEncryptedComment(request: CreateEncryptedCommentRequest): Promise<string> {
     this.assertOpen()
     return (await this.raw.createEncryptedComment(request)) as string
+  }
+
+  /**
+   * Returns the 32 key bytes `createEncryptedComment` would encrypt for, without
+   * any protected-secret access. Rejects with `encrypted comment is unavailable`
+   * when the recipient cannot receive one and with `encrypted-comment recipient
+   * lookup failed` when the provider did not answer.
+   */
+  async resolveEncryptedCommentRecipient(
+    request: EncryptedCommentRecipientRequest,
+  ): Promise<number[]> {
+    this.assertOpen()
+    return (await this.raw.resolveEncryptedCommentRecipient(request)) as number[]
   }
 
   /** Explicitly authorizes and decrypts one TON encrypted-comment BOC. */

@@ -214,6 +214,21 @@ impl WalletClient {
         to_value(&body)
     }
 
+    /// Resolves the recipient key an encrypted comment uses, without a secret.
+    #[wasm_bindgen(js_name = resolveEncryptedCommentRecipient)]
+    pub async fn resolve_encrypted_comment_recipient(
+        &self,
+        request: JsValue,
+    ) -> Result<JsValue, JsValue> {
+        let request = from_value(request)?;
+        let public_key = self
+            .inner
+            .resolve_encrypted_comment_recipient(request)
+            .await
+            .map_err(|error| engine_error(&error))?;
+        to_value(&public_key)
+    }
+
     /// Explicitly authorizes and decrypts a TON encrypted-comment body.
     #[wasm_bindgen(js_name = decryptComment)]
     pub async fn decrypt_comment(&self, request: JsValue) -> Result<JsValue, JsValue> {

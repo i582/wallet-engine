@@ -134,7 +134,12 @@ impl SessionCrypto {
         Ok(restored)
     }
 
-    fn from_secret_key(bytes: [u8; KEY_LENGTH]) -> Self {
+    /// Restores a session from raw X25519 secret-key bytes derived by the caller.
+    ///
+    /// The public key is recomputed from the secret, so the caller learns the
+    /// session `client_id` without persisting anything.
+    #[must_use]
+    pub fn from_secret_key(bytes: [u8; KEY_LENGTH]) -> Self {
         let secret_key = SecretKey::from(bytes);
         let client_id = ClientId::from_bytes(secret_key.public_key().to_bytes());
         Self {

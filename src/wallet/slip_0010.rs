@@ -59,11 +59,27 @@ impl fmt::Debug for ExtendedKey {
 ///
 /// SLIP-0010 names the halves `I_L`, which becomes the key, and `I_R`, which
 /// becomes the chain code.
+fn hmac_node(key: &[u8], parts: &[&[u8]]) -> ExtendedKey {
+    let output = hmac_sha512(key, parts);
+    let mut private_key = Zeroizing::new([0_u8; PRIVATE_KEY_LEN]);
+    let mut chain_code = Zeroizing::new([0_u8; CHAIN_CODE_LEN]);
+
+    let (left, right) = output.split_at(PRIVATE_KEY_LEN);
+    private_key.copy_from_slice(left);
+    chain_code.copy_from_slice(right);
+
+    ExtendedKey {
+        private_key,
+        chain_code,
+    }
+}
+
+/// HMAC-SHA512 of the concatenated `parts` under `key`, in memory wiped on drop.
 #[allow(
     clippy::expect_used,
     reason = "HMAC hashes over-long keys and pads short ones, so no key length is invalid"
 )]
-fn hmac_node(key: &[u8], parts: &[&[u8]]) -> ExtendedKey {
+pub(super) fn hmac_sha512(key: &[u8], parts: &[&[u8]]) -> Zeroizing<[u8; 64]> {
     let mut mac =
         Hmac::<Sha512>::new_from_slice(key).expect("HMAC-SHA512 accepts a key of any length");
     for part in parts {
@@ -71,18 +87,10 @@ fn hmac_node(key: &[u8], parts: &[&[u8]]) -> ExtendedKey {
     }
 
     let mut output = mac.finalize().into_bytes();
-    let mut private_key = Zeroizing::new([0_u8; PRIVATE_KEY_LEN]);
-    let mut chain_code = Zeroizing::new([0_u8; CHAIN_CODE_LEN]);
-
-    let (left, right) = output.split_at(PRIVATE_KEY_LEN);
-    private_key.copy_from_slice(left);
-    chain_code.copy_from_slice(right);
+    let mut tag = Zeroizing::new([0_u8; 64]);
+    tag.copy_from_slice(output.as_slice());
     output.as_mut_slice().zeroize();
-
-    ExtendedKey {
-        private_key,
-        chain_code,
-    }
+    tag
 }
 
 /// Derives the master node from a BIP-39 seed.

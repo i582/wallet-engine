@@ -508,6 +508,47 @@ impl SignDataPayload {
         }
     }
 
+    /// Computes the digest a wallet signs for this payload.
+    ///
+    /// `address` is the signing wallet, `domain` the dApp manifest domain, and
+    /// `timestamp` the Unix signing time in seconds; `signData` results carry
+    /// the same three values next to the echoed payload.
+    pub fn signing_hash(
+        &self,
+        address: &RawAccountAddress,
+        domain: &str,
+        timestamp: u64,
+    ) -> Result<[u8; 32], SigningError> {
+        match self {
+            Self::Text { text, .. } => sign_data_signing_hash(
+                address,
+                domain,
+                timestamp,
+                SignDataSigningPayload::Text(text),
+            ),
+            Self::Binary { bytes, .. } => {
+                let decoded = bytes
+                    .decode()
+                    .map_err(|_| SigningError::InvalidBase64Payload)?;
+                sign_data_signing_hash(
+                    address,
+                    domain,
+                    timestamp,
+                    SignDataSigningPayload::Binary(&decoded),
+                )
+            }
+            Self::Cell { schema, cell, .. } => sign_data_signing_hash(
+                address,
+                domain,
+                timestamp,
+                SignDataSigningPayload::Cell {
+                    schema,
+                    boc: cell.as_bytes(),
+                },
+            ),
+        }
+    }
+
     /// Validates optional network and signer constraints for `signData`.
     pub fn validate_context(
         &self,
@@ -866,34 +907,8 @@ pub struct SignDataResult {
 impl SignDataResult {
     /// Reconstructs the exact digest represented by this response.
     pub fn signing_hash(&self) -> Result<[u8; 32], SigningError> {
-        match &self.payload {
-            SignDataPayload::Text { text, .. } => sign_data_signing_hash(
-                &self.address,
-                &self.domain,
-                self.timestamp,
-                SignDataSigningPayload::Text(text),
-            ),
-            SignDataPayload::Binary { bytes, .. } => {
-                let decoded = bytes
-                    .decode()
-                    .map_err(|_| SigningError::InvalidBase64Payload)?;
-                sign_data_signing_hash(
-                    &self.address,
-                    &self.domain,
-                    self.timestamp,
-                    SignDataSigningPayload::Binary(&decoded),
-                )
-            }
-            SignDataPayload::Cell { schema, cell, .. } => sign_data_signing_hash(
-                &self.address,
-                &self.domain,
-                self.timestamp,
-                SignDataSigningPayload::Cell {
-                    schema,
-                    boc: cell.as_bytes(),
-                },
-            ),
-        }
+        self.payload
+            .signing_hash(&self.address, &self.domain, self.timestamp)
     }
 
     /// Verifies this `signData` response with the trusted account public key.

@@ -419,7 +419,7 @@ mod tests {
     use super::*;
     use crate::{
         Ed25519Signature, NetworkId, SignDataResult, SignDataSigningPayload, TonAddressItemReply,
-        TonProof, TonProofDomain, Uint64String, sign_data_signing_hash, ton_proof_signing_hash,
+        TonProof, TonProofDomain, sign_data_signing_hash, ton_proof_signing_hash,
     };
 
     const PUBLIC_KEY: [u8; 32] = [0x5a; 32];
@@ -618,7 +618,7 @@ mod tests {
         let payload = "single-use challenge";
         let hash = ton_proof_signing_hash(&address, domain, timestamp, payload)?;
         let proof = TonProof {
-            timestamp: Uint64String::from(timestamp),
+            timestamp,
             domain: TonProofDomain::new(domain.to_owned())?,
             payload: payload.to_owned(),
             signature: Ed25519Signature::from_bytes(signing_key.sign(&hash).to_bytes()),
@@ -662,7 +662,7 @@ mod tests {
             let payload = "some-random-secret";
             let hash = ton_proof_signing_hash(&address, "web", timestamp, payload)?;
             let mut proof = TonProof {
-                timestamp: Uint64String::from(timestamp),
+                timestamp,
                 domain: TonProofDomain::new("web".to_owned())?,
                 payload: payload.to_owned(),
                 signature: Ed25519Signature::from_bytes(signing_key.sign(&hash).to_bytes()),

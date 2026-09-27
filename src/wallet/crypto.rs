@@ -27,7 +27,7 @@ use ton::ton_wallet::{
 use zeroize::Zeroizing;
 
 use super::mnemonic::{Bip39Half, ENTROPY_LEN, RotationMnemonic};
-use super::slip_0010::{TON_ACCOUNT_PATH, derive_path, signing_key};
+use super::slip_0010::{TON_ACCOUNT_PATH, derive_path, hmac_sha512, signing_key};
 use crate::Network;
 
 #[derive(Debug, thiserror::Error)]
@@ -39,6 +39,9 @@ pub(crate) enum WalletCryptoError {
     #[error("wallet construction failed")]
     WalletConstruction,
 }
+
+/// Label that separates TON Connect session keys from every other use of the signing seed.
+const TON_CONNECT_SESSION_LABEL: &[u8] = b"tonconnect/session/v1";
 
 /// Mnemonic bytes owned by one Rust operation.
 ///
@@ -77,9 +80,23 @@ impl SensitiveWallet {
         self.signing.verifying_key().to_bytes()
     }
 
-    /// Signs the domain-separated TON Connect proof digest with the current key.
-    pub(crate) fn sign_ton_connect_proof_hash(&self, hash: &[u8; 32]) -> [u8; 64] {
-        self.signing.sign(hash).to_bytes()
+    /// Signs a domain-separated TON Connect digest (`ton_proof`, `signData`) with the current key.
+    ///
+    /// The digest is built by the protocol code, never taken from the caller.
+    pub(crate) fn sign_ton_connect_digest(&self, digest: &[u8; 32]) -> [u8; 64] {
+        self.signing.sign(digest).to_bytes()
+    }
+
+    /// Derives the X25519 secret of one TON Connect session from the current signing key.
+    ///
+    /// Scheme v1 of the `MTProto` TON Connect flow; `dapp_client_id` is the decoded
+    /// dApp public key and `nonce` the raw session salt issued by the server.
+    pub(crate) fn ton_connect_session_secret(
+        &self,
+        dapp_client_id: &[u8; 32],
+        nonce: &[u8],
+    ) -> Zeroizing<[u8; 32]> {
+        derive_ton_connect_session_secret(self.signing.as_bytes(), dapp_client_id, nonce)
     }
 
     /// Builds and signs an external Wallet request while preserving anchor-based `StateInit`.
@@ -201,6 +218,27 @@ pub(crate) fn derive_half_key(half: &Bip39Half) -> SigningKey {
     signing_key(&derive_path(half.to_seed("").as_slice(), &TON_ACCOUNT_PATH))
 }
 
+/// `sk = clamp(HMAC-SHA512(HMAC-SHA512(seed, label), A || nonce)[0..32])`.
+pub(crate) fn derive_ton_connect_session_secret(
+    seed: &[u8; 32],
+    dapp_client_id: &[u8; 32],
+    nonce: &[u8],
+) -> Zeroizing<[u8; 32]> {
+    let prk = hmac_sha512(seed, &[TON_CONNECT_SESSION_LABEL]);
+    let okm = hmac_sha512(prk.as_slice(), &[dapp_client_id.as_slice(), nonce]);
+    let mut secret = Zeroizing::new([0_u8; 32]);
+    let (head, _) = okm.split_at(32);
+    secret.copy_from_slice(head);
+    if let Some(first) = secret.first_mut() {
+        *first &= 0xf8;
+    }
+    if let Some(last) = secret.last_mut() {
+        *last &= 0x7f;
+        *last |= 0x40;
+    }
+    secret
+}
+
 /// Generates the initial 12-word recovery phrase from one 128-bit draw.
 ///
 /// A new wallet starts before its first key rotation: the signing key
@@ -302,6 +340,9 @@ mod tests {
     const ROTATION_PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about \
                                    zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong";
 
+    /// The first official BIP-39 half vector alone: the 12-word pre-rotation form.
+    const HALF: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
     fn hex(bytes: &[u8]) -> String {
         bytes.iter().map(|byte| format!("{byte:02x}")).collect()
     }
@@ -396,8 +437,6 @@ mod tests {
     #[test]
     fn twelve_word_phrase_derives_the_duplicated_wallet() -> Result<(), Box<dyn std::error::Error>>
     {
-        const HALF: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-
         let duplicated = format!("{HALF} {HALF}");
         let from_half = derive_wallet(HALF, Network::Testnet)?;
         let from_duplicated = derive_wallet(&duplicated, Network::Testnet)?;
@@ -445,5 +484,64 @@ mod tests {
             derive_wallet(TON_MNEMONIC, Network::Testnet),
             Err(WalletCryptoError::InvalidMnemonic)
         ));
+    }
+
+    /// The session secret pinned against an independent Python computation of
+    /// `clamp(HMAC-SHA512(HMAC-SHA512(seed, label), A || nonce)[0..32])` over
+    /// throwaway inputs.
+    #[test]
+    fn ton_connect_session_secret_matches_the_fixed_vector()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let seed: [u8; 32] = core::array::from_fn(|i| i as u8);
+        let a = "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"
+            .parse::<ton_connect_core::ClientId>()?
+            .to_bytes();
+        let nonce: [u8; 16] = core::array::from_fn(|i| 0xa0 + i as u8);
+
+        let secret = derive_ton_connect_session_secret(&seed, &a, &nonce);
+        assert_eq!(
+            hex(secret.as_slice()),
+            "a0ca52b8e8de99d0f834cb243f61edd4079886b64c196ca082b7f64e1511db5d"
+        );
+
+        let mut flipped = nonce;
+        flipped[0] ^= 1;
+        let other = derive_ton_connect_session_secret(&seed, &a, &flipped);
+        assert_ne!(other.as_slice(), secret.as_slice());
+        Ok(())
+    }
+
+    /// The session key comes from the signing half: it differs from the anchor
+    /// derivation after rotation and coincides with it before.
+    #[test]
+    fn ton_connect_session_secret_uses_the_signing_half() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let a = [0x11_u8; 32];
+        let nonce = [0x22_u8; 24];
+
+        let wallet = derive_wallet(ROTATION_PHRASE, Network::Testnet)?;
+        let keys = derive_rotation_keys(&RotationMnemonic::parse(ROTATION_PHRASE)?);
+        let from_wallet = wallet.ton_connect_session_secret(&a, &nonce);
+        let from_signing = derive_ton_connect_session_secret(keys.signing.as_bytes(), &a, &nonce);
+        let from_anchor = derive_ton_connect_session_secret(keys.anchor.as_bytes(), &a, &nonce);
+        assert_eq!(from_wallet.as_slice(), from_signing.as_slice());
+        assert_ne!(from_wallet.as_slice(), from_anchor.as_slice());
+
+        let half_wallet = derive_wallet(HALF, Network::Testnet)?;
+        let half_keys = derive_rotation_keys(&RotationMnemonic::parse(HALF)?);
+        let from_half_wallet = half_wallet.ton_connect_session_secret(&a, &nonce);
+        assert_eq!(
+            from_half_wallet.as_slice(),
+            derive_ton_connect_session_secret(half_keys.anchor.as_bytes(), &a, &nonce).as_slice()
+        );
+        assert_eq!(
+            from_half_wallet.as_slice(),
+            derive_ton_connect_session_secret(half_keys.signing.as_bytes(), &a, &nonce).as_slice()
+        );
+        assert_eq!(
+            half_wallet.signing_public_key(),
+            half_wallet.key_pair.public_key
+        );
+        Ok(())
     }
 }

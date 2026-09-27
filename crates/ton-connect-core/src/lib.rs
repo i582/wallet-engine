@@ -24,6 +24,9 @@ mod rpc;
 mod session;
 mod session_state;
 mod signing;
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub mod test_boc;
 mod value;
 mod wallet_state;
 mod wallets_list;
@@ -31,7 +34,7 @@ mod wallets_list;
 pub use account_address::{AccountAddress, AccountAddressError};
 pub use bridge::BridgeMessage;
 pub use capability::CapabilityError;
-pub use cell_boc::{CellBoc, CellBocError};
+pub use cell_boc::{CellBoc, CellBocError, validate_single_root_boc};
 pub use connect::{
     ConnectEvent, ConnectEventError, ConnectEventErrorCode, ConnectEventPayload, ConnectItem,
     ConnectItemError, ConnectItemErrorCode, ConnectItemReply, ConnectRequest,

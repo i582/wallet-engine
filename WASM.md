@@ -293,6 +293,21 @@ or protected-secret access. The engine asks the platform host for the protected
 mnemonic with reason `"encryptComment"`. Put `body` into the same immutable
 intent passed to `previewSend` and `send`.
 
+To learn whether a recipient can receive an encrypted comment without any
+protected-secret access, resolve its key first:
+
+```ts
+const key = await client.resolveEncryptedCommentRecipient({
+  recipient: destination,
+  recipientPublicKey: recipientKeyBytes, // Optional, verified as above.
+})
+```
+
+It returns the 32 key bytes `createEncryptedComment` would encrypt for. An
+`encrypted comment is unavailable` error means the recipient cannot receive
+one; `encrypted-comment recipient lookup failed` means the provider did not
+answer and the call can be retried.
+
 Encrypted activity exposes `encryptedComment` instead of `comment`. Decryption
 is explicit, so refresh never opens an authentication prompt:
 

@@ -90,38 +90,74 @@ pub(super) fn parse_seqno(body: &[u8]) -> Result<u32, DomainError> {
     }
 }
 
-pub(super) fn parse_public_key(body: &[u8]) -> Result<[u8; 32], DomainError> {
+/// What a `get_public_key` getter result says about the recipient contract.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum PublicKeyAnswer {
+    /// The contract returned this nonzero 256-bit key.
+    Key([u8; 32]),
+    /// The contract answered without a usable key: a failed TVM exit code, an
+    /// empty stack, or a value that is not a nonzero uint256.
+    NoKey(String),
+}
+
+/// Parses a Toncenter `runGetMethod` response for `get_public_key`.
+///
+/// `Err` means the provider gave no answer from the contract (a body that is
+/// not JSON, a provider `error`, `ok: false`, or no `result`), so nothing is
+/// known about the recipient and the lookup can be retried. An answer from
+/// the contract is `Ok`, with or without a key.
+pub(super) fn parse_public_key(body: &[u8]) -> Result<PublicKeyAnswer, DomainError> {
     let value: Value =
         serde_json::from_slice(body).map_err(|error| invalid_json(error.to_string()))?;
 
-    if let Some(error) = value.get("error") {
+    if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
         return Err(invalid_json(error.to_string()));
     }
+    if value.get("ok").and_then(Value::as_bool) == Some(false) {
+        return Err(invalid_json("the provider rejected the get-method request"));
+    }
+    let result = value
+        .get("result")
+        .ok_or_else(|| invalid_json("the provider returned no get-method result"))?;
+    Ok(match public_key_from_result(result) {
+        Ok(key) => PublicKeyAnswer::Key(key),
+        Err(reason) => PublicKeyAnswer::NoKey(reason.to_owned()),
+    })
+}
 
-    let first = value
-        .pointer("/result/stack/0")
-        .ok_or_else(|| invalid_json("missing public-key stack"))?;
-    let encoded =
-        stack_number(first).ok_or_else(|| invalid_json("invalid public-key stack value"))?;
+fn public_key_from_result(result: &Value) -> Result<[u8; 32], &'static str> {
+    // TVM exits 0 or 1 on success; any other exit leaves no answer on the stack.
+    if let Some(exit_code) = result.get("exit_code")
+        && !matches!(
+            exit_code
+                .as_i64()
+                .or_else(|| exit_code.as_str().and_then(|code| code.parse().ok())),
+            Some(0 | 1)
+        )
+    {
+        return Err("get_public_key exited with a failure code");
+    }
+
+    let first = result
+        .pointer("/stack/0")
+        .ok_or("get_public_key returned an empty stack")?;
+    let encoded = stack_number(first).ok_or("get_public_key returned a non-integer")?;
     let number = if let Some(hex) = encoded.strip_prefix("0x") {
         BigUint::parse_bytes(hex.as_bytes(), 16)
     } else {
         BigUint::parse_bytes(encoded.as_bytes(), 10)
     }
-    .ok_or_else(|| invalid_json("invalid public-key integer"))?;
-    if number == BigUint::default() {
-        return Err(invalid_json("public key is not a nonzero uint256"));
-    }
+    .ok_or("get_public_key returned an invalid integer")?;
     let bytes = number.to_bytes_be();
-    if bytes.is_empty() || bytes.len() > 32 {
-        return Err(invalid_json("public key is not a nonzero uint256"));
+    if number == BigUint::default() || bytes.len() > 32 {
+        return Err("get_public_key did not return a nonzero uint256");
     }
 
     let mut public_key = [0_u8; 32];
     let offset = 32_usize.saturating_sub(bytes.len());
     public_key
         .get_mut(offset..)
-        .ok_or_else(|| invalid_json("public key is not a uint256"))?
+        .ok_or("get_public_key did not return a nonzero uint256")?
         .copy_from_slice(&bytes);
     Ok(public_key)
 }
@@ -220,7 +256,7 @@ mod tests {
     use ton::ton_core::cell::TonCell;
 
     use super::{
-        SendBocResponse, build_public_key_request, build_send_boc_request,
+        PublicKeyAnswer, SendBocResponse, build_public_key_request, build_send_boc_request,
         is_explicit_send_rejection, parse_public_key, parse_send_response, parse_seqno,
     };
     use crate::{
@@ -274,22 +310,31 @@ mod tests {
             "11".repeat(32)
         );
         assert_eq!(
-            parse_public_key(encoded.as_bytes()).expect("uint256 key parses"),
-            [0x11; 32]
+            parse_public_key(encoded.as_bytes()),
+            Ok(PublicKeyAnswer::Key([0x11; 32]))
         );
+        let mut padded = [0_u8; 32];
+        padded[31] = 1;
         assert_eq!(
-            parse_public_key(br#"{"result":{"stack":[["num","1"]]}}"#)
-                .expect("short decimal key is left padded"),
-            {
-                let mut expected = [0_u8; 32];
-                expected[31] = 1;
-                expected
-            }
+            parse_public_key(br#"{"result":{"stack":[["num","1"]]}}"#),
+            Ok(PublicKeyAnswer::Key(padded)),
+            "a short decimal key is left padded"
         );
+        for exit_code in ["0", "1", r#""0""#] {
+            let body = format!(
+                r#"{{"ok":true,"error":null,"result":{{"exit_code":{exit_code},"stack":[["num","0x{}"]]}}}}"#,
+                "11".repeat(32)
+            );
+            assert_eq!(
+                parse_public_key(body.as_bytes()),
+                Ok(PublicKeyAnswer::Key([0x11; 32])),
+                "{exit_code}"
+            );
+        }
     }
 
     #[test]
-    fn rejects_invalid_public_keys() {
+    fn a_contract_answer_without_a_key_is_no_key() {
         for body in [
             r#"{"result":{"stack":[["num","0"]]}}"#.to_owned(),
             format!(
@@ -297,9 +342,34 @@ mod tests {
                 "11".repeat(33)
             ),
             r#"{"result":{"stack":[["cell","1"]]}}"#.to_owned(),
+            r#"{"ok":true,"result":{"exit_code":0,"stack":[]}}"#.to_owned(),
+            format!(
+                r#"{{"result":{{"exit_code":11,"stack":[["num","0x{}"]]}}}}"#,
+                "11".repeat(32)
+            ),
+            r#"{"result":{"exit_code":-13,"stack":[["num","7"]]}}"#.to_owned(),
         ] {
-            let error = parse_public_key(body.as_bytes()).expect_err("public key must fail");
-            assert_eq!(error.code, ErrorCode::InvalidProviderResponse);
+            assert!(
+                matches!(
+                    parse_public_key(body.as_bytes()),
+                    Ok(PublicKeyAnswer::NoKey(_))
+                ),
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_response_without_a_contract_answer_is_a_provider_error() {
+        for body in [
+            "<html>proxy</html>",
+            r#"{"ok":false,"error":"Ratelimit exceed","code":429}"#,
+            r#"{"ok":false,"code":500}"#,
+            r#"{"error":{"message":"LITE_SERVER_NETWORK"}}"#,
+            r#"{"ok":true}"#,
+        ] {
+            let error = parse_public_key(body.as_bytes()).expect_err("no contract answer");
+            assert_eq!(error.code, ErrorCode::InvalidProviderResponse, "{body}");
         }
     }
 

@@ -236,6 +236,11 @@ The parser validates addresses, decimal values, and single-root BOCs. It does
 not resolve chain state, check expiration, select bounce behavior, or authorize
 a send. Query parsing follows URI rules, so a literal `+` remains `+`.
 
+A `bin` BOC must pass the same envelope and depth checks as a TON Connect cell:
+its header counts must be backed by the input, its references must stay in
+range, and it may be at most 1024 cells deep, with every exotic cell laid out
+as TON requires.
+
 ### Mnemonic word list
 
 Swift, Kotlin, and TypeScript expose `mnemonicWordlist`. Rust and C++ expose
@@ -940,10 +945,11 @@ caller-built payload cell.
 
 For an encrypted transfer comment, call `createEncryptedComment` before
 preview. The engine uses the optional 32-byte Ed25519 `recipientPublicKey`, or
-calls `get_public_key` on the recipient wallet when it is omitted or `null`.
-Supplying the key skips that lookup and supports uninitialized wallets. The
-engine locally reconstructs supported default wallet `StateInit` values from
-the supplied key and requires one to derive the recipient address. A mismatch
+reads the recipient account state and calls `get_public_key` on an active
+recipient wallet when it is omitted or `null`. Supplying the key skips that
+lookup and supports uninitialized wallets. The engine locally reconstructs
+supported default wallet `StateInit` values from the supplied key and requires
+one to derive the recipient address. A mismatch
 is rejected before any HTTP request or protected-secret access. It authorizes
 the protected sender mnemonic through the platform host, applies the TON
 Ed25519/X25519, HMAC-SHA512, AES-256-CBC, and snake-cell format, and returns a
@@ -957,6 +963,21 @@ Supplied-key verification supports Wallet V1/V2, V3/V4 with default wallet IDs
 default ID, and the engine's Wallet rev00 with its default ID in workchain 0.
 Custom wallet IDs and unsupported initial parameters are rejected. This local
 verification applies only when `recipientPublicKey` is supplied.
+
+To learn whether a comment for a recipient can be encrypted before any secret
+is involved, call `resolveEncryptedCommentRecipient` with the same `recipient`
+and optional `recipientPublicKey`. It resolves the key exactly as
+`createEncryptedComment` does and returns the 32 bytes that call would encrypt
+for, but it never requests a protected secret, so a client without a local
+signing secret can call it too. A supplied key is verified locally, without an
+HTTP request and without taking the single-flight slot.
+`EncryptedCommentUnavailable` means the recipient cannot receive an encrypted
+comment: the supplied key does not derive its address, its wallet is not
+deployed or is frozen, or its contract returned no public key.
+`EncryptedCommentLookupFailed` means the provider failed, limited, or cancelled
+the lookup, so nothing is known about the recipient and the call can be
+retried. `createEncryptedComment` returns the same two errors, before it
+requests the secret.
 
 `SendAmount.all` must be the only message in its batch. Wallet V5 applies the
 batch in order.

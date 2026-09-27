@@ -596,9 +596,11 @@ describe("high-level WASM API", () => {
         },
         {
           platformHost: encryptedPlatform,
-          fetch: mockFetch(async () => {
+          fetch: mockFetch(async input => {
             fetchCount += 1
-            return Response.json({result: {stack: [["num", `0x${peerPublicKey}`]]}})
+            return String(input).includes("getAddressInformation")
+              ? accountResponse("active")
+              : Response.json({result: {stack: [["num", `0x${peerPublicKey}`]]}})
           }),
         },
       )
@@ -619,7 +621,8 @@ describe("high-level WASM API", () => {
       })
 
       expect(comment).toBe("private hello")
-      expect(fetchCount).toBe(keySource === "supplied" ? 0 : 1)
+      // The lookup reads the account state, then calls `get_public_key`.
+      expect(fetchCount).toBe(keySource === "supplied" ? 0 : 2)
       expect(secrets.reasons).toEqual(["encryptComment", "decryptComment"])
     },
   )
@@ -664,7 +667,71 @@ describe("high-level WASM API", () => {
     expect(fetchCount).toBe(0)
     expect(secrets.reasons).toEqual([])
   })
+
+  describe("encrypted-comment recipient resolution", () => {
+    const peerPublicKey = "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"
+
+    async function resolvingClient(state: string) {
+      const secrets = new RecordingSecrets()
+      const platform = new BrowserPlatformHost({secrets, journal: new MemoryJournal()})
+      const lifecycle = await WalletLifecycle.create(platform)
+      lifecycles.push(lifecycle)
+      const created = await lifecycle.createWallet({
+        recordId: `encrypted-comment-resolution-${state}`,
+        network: "testnet",
+      })
+      const urls: string[] = []
+      const client = await WalletClient.create(walletConfig(created.descriptor), {
+        platformHost: platform,
+        fetch: mockFetch(async input => {
+          urls.push(String(input))
+          return String(input).includes("getAddressInformation")
+            ? accountResponse(state)
+            : Response.json({
+                ok: true,
+                result: {exit_code: 0, stack: [["num", `0x${peerPublicKey}`]]},
+              })
+        }),
+      })
+      clients.push(client)
+      return {client, created, secrets, urls}
+    }
+
+    test("reads an active recipient's key without any secret access", async () => {
+      const {client, secrets, urls} = await resolvingClient("active")
+      const key = await client.resolveEncryptedCommentRecipient({recipient: `0:${"22".repeat(32)}`})
+      expect(Buffer.from(key).toString("hex")).toBe(peerPublicKey)
+      expect(urls).toHaveLength(2)
+      expect(secrets.reasons).toEqual([])
+    })
+
+    test("reports an undeployed recipient as unable to receive encrypted comments", async () => {
+      const {client, secrets, urls} = await resolvingClient("uninitialized")
+      await expect(
+        client.resolveEncryptedCommentRecipient({recipient: `0:${"22".repeat(32)}`}),
+      ).rejects.toThrow("encrypted comment is unavailable")
+      expect(urls).toHaveLength(1)
+      expect(secrets.reasons).toEqual([])
+    })
+
+    test("verifies a supplied key locally", async () => {
+      const {client, created, urls} = await resolvingClient("active")
+      const key = await client.resolveEncryptedCommentRecipient({
+        recipient: created.descriptor.address,
+        recipientPublicKey: created.descriptor.publicKey,
+      })
+      expect(key).toEqual(created.descriptor.publicKey)
+      expect(urls).toEqual([])
+    })
+  })
 })
+
+function accountResponse(state: string): Response {
+  return Response.json({
+    ok: true,
+    result: {balance: "1000000000", state, sync_utime: 1_800_000_000},
+  })
+}
 
 class RecordingSecrets extends MemorySecrets {
   readonly reasons: string[] = []

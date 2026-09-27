@@ -16,7 +16,7 @@ use ton_connect_core::{
     HeartbeatMode, HttpBridgeUrl, KnownAppRequest, NetworkId, PreparedBridgePost,
     RawAccountAddress, RawTransactionPayload, RpcError, RpcErrorCode, SendTransactionFeature,
     SignMessageFeature, SignMessageResult as ProtocolSignMessageResult, TonAddressItemReply,
-    TonProof, TonProofDomain, TonProofItemReply, TransactionPayload, Uint64String, WalletResponse,
+    TonProof, TonProofDomain, TonProofItemReply, TransactionPayload, WalletResponse,
     WalletResponseError, WalletResponseSuccess, WalletResult, WalletStateInit,
 };
 use wallet_engine::{
@@ -330,7 +330,7 @@ async fn connect_payload(
                     .map_err(|_| anyhow!("TON Connect signature is not 64 bytes"))?;
                 items.push(ConnectItemReply::TonProof(TonProofItemReply::new(
                     TonProof {
-                        timestamp: Uint64String::from(timestamp),
+                        timestamp,
                         domain: TonProofDomain::new(domain.to_owned())?,
                         payload: payload.clone(),
                         signature: Ed25519Signature::from_bytes(signature),

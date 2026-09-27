@@ -143,6 +143,10 @@ actor AppleWalletProtectedSecretStore {
             "Authenticate to decrypt this transfer comment."
         case .revealRecoveryPhrase:
             "Authenticate to reveal this wallet's recovery phrase."
+        case .deriveTonConnectSessionKey:
+            "Authenticate to connect this wallet with TON Connect."
+        case .signTonConnectData:
+            "Authenticate to sign data with TON Connect."
         }
     }
 

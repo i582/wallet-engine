@@ -28,6 +28,10 @@ ton_core = "0.1.4"
 url = "2.5.7"
 zeroize = "1.9.0"
 
+[features]
+# Hand-written malformed `BoC` fixtures for the tests of dependent crates.
+test-support = []
+
 [dev-dependencies]
 proptest = "1.11.0"
 

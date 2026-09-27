@@ -241,15 +241,16 @@ fn typescript_sign_data_schema_cases() {
     }
 }
 
-/// Ported from `validateTonProofItemReply` cases. The vectors use the current
-/// normative string timestamp, 64-byte signature, and item error catalogue.
+/// Ported from `validateTonProofItemReply` cases. Upstream requires a numeric
+/// timestamp (`isValidNumber(proof.timestamp)`); the specification text still
+/// shows a string, so a canonical decimal string is accepted as well.
 #[test]
 fn typescript_ton_proof_reply_schema_cases() {
     let signature = STANDARD.encode([0_u8; 64]);
     let proof = json!({
         "name": "ton_proof",
         "proof": {
-            "timestamp": "1",
+            "timestamp": 1,
             "domain": { "lengthBytes": 3, "value": "abc" },
             "payload": "some-payload",
             "signature": signature
@@ -257,6 +258,12 @@ fn typescript_ton_proof_reply_schema_cases() {
     });
     assert!(matches!(
         serde_json::from_value::<ConnectItemReply>(proof.clone()),
+        Ok(ConnectItemReply::TonProof(_))
+    ));
+    let mut string_timestamp = proof.clone();
+    string_timestamp["proof"]["timestamp"] = json!("1");
+    assert!(matches!(
+        serde_json::from_value::<ConnectItemReply>(string_timestamp),
         Ok(ConnectItemReply::TonProof(_))
     ));
     assert!(matches!(
@@ -278,8 +285,12 @@ fn typescript_ton_proof_reply_schema_cases() {
             json!({ "name": "ton_proof", "x": 1 }),
         ),
         (
-            "numeric timestamp",
-            json!({ "name": "ton_proof", "proof": { "timestamp": 1, "domain": { "lengthBytes": 3, "value": "abc" }, "payload": "p", "signature": STANDARD.encode([0_u8; 64]) } }),
+            "non-canonical string timestamp",
+            json!({ "name": "ton_proof", "proof": { "timestamp": "01", "domain": { "lengthBytes": 3, "value": "abc" }, "payload": "p", "signature": STANDARD.encode([0_u8; 64]) } }),
+        ),
+        (
+            "fractional timestamp",
+            json!({ "name": "ton_proof", "proof": { "timestamp": 1.5, "domain": { "lengthBytes": 3, "value": "abc" }, "payload": "p", "signature": STANDARD.encode([0_u8; 64]) } }),
         ),
         (
             "wrong domain length",

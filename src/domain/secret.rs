@@ -26,6 +26,10 @@ pub enum SecretAccessReason {
     DecryptComment,
     /// The user requested the recovery phrase.
     RevealRecoveryPhrase,
+    /// The engine needs the current signing key to derive a TON Connect session key.
+    DeriveTonConnectSessionKey,
+    /// The engine needs the current signing key to sign TON Connect signData.
+    SignTonConnectData,
 }
 
 /// A request to read and authorize access to protected secret bytes.

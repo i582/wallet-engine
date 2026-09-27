@@ -1763,7 +1763,7 @@ impl ScenarioRunner {
                     destination: TonAddressString::try_from(message.address.to_string())?,
                     amount: SendAmount::exact(message.amount.as_str().to_owned())?,
                     body,
-                    bounce: false,
+                    bounce: message.address.is_bounceable(),
                     state_init: message
                         .state_init
                         .as_ref()

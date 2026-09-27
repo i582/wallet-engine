@@ -11,6 +11,7 @@
 //! - [`WalletClient`] refreshes a wallet, loads activity, prepares or sends transfers and
 //!   caller-signed BOCs, and prepares key rotation with a fresh provider sequence number.
 //! - [`TonConnectSession`] manages one encrypted native TON Connect session.
+//! - [`TonConnectDerivedSession`] is one `MTProto`-relayed TON Connect session with a derived key.
 //!
 //! A minimum integration has these steps:
 //!

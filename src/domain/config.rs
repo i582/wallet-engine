@@ -27,6 +27,16 @@ pub enum Network {
     Testnet,
 }
 
+impl Network {
+    /// The TON `network_global_id` as TON Connect writes it (`NETWORK_ID`).
+    pub(crate) const fn global_id(self) -> &'static str {
+        match self {
+            Self::Mainnet => "-239",
+            Self::Testnet => "-3",
+        }
+    }
+}
+
 /// Configures the Toncenter endpoint.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]

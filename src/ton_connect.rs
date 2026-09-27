@@ -13,18 +13,27 @@ use ton_connect_client::{
     IncomingRequest, PersistedTonConnectClient, TonConnectClient, TonConnectClientConfig,
 };
 use ton_connect_core::{
-    AppManifest, CellBoc, ConnectEventErrorCode, ConnectEventPayload, ConnectItem,
+    AppManifest, CellBoc, ClientId, ConnectEventErrorCode, ConnectEventPayload, ConnectItem,
     ConnectItemReply, DeviceInfo, DevicePlatform, Ed25519PublicKey, Ed25519Signature,
     EmbeddedResponse, EmbeddedResponseError, Feature, HeartbeatMode, HttpBridgeUrl,
     KnownAppRequest, NetworkId, RawAccountAddress, RpcErrorCode, SendTransactionFeature,
     SignMessageFeature, SignMessageResult as ProtocolSignMessageResult, TonAddressItemReply,
-    TonProof, TonProofDomain, TonProofItemReply, TransactionPayload, Uint64String, WalletResponse,
+    TonProof, TonProofDomain, TonProofItemReply, TransactionPayload, WalletResponse,
     WalletResponseError, WalletResponseSuccess, WalletResult, WalletSessionPhase, WalletStateInit,
 };
 
 use crate::{
     Boc, NonEmptyString, SendAmount, SendExpiration, SendIntent, SendMessage, SendMessageBody,
     SendRequest, SignMessageRequest, TonConnectAccountInfo, WalletClientError, bounded_diagnostic,
+};
+
+mod derived;
+
+pub(crate) use self::derived::sign_data_digest;
+pub use self::derived::{
+    TonConnectConnectErrorCode, TonConnectDerivedRequest, TonConnectDerivedSession,
+    TonConnectDerivedSessionRequest, TonConnectSignDataPayload, TonConnectSignDataRequest,
+    TonConnectSignDataSignRequest, TonConnectSignedData,
 };
 
 /// Limits and bridge identity for one wallet-side TON Connect session.
@@ -188,6 +197,15 @@ pub enum TonConnectIncomingRequest {
         error_code: TonConnectRpcErrorCode,
         /// Sanitized protocol diagnostic.
         error_message: String,
+    },
+    /// A validated `signData` request of a derived session; the classic session reports it as `Unsupported`.
+    SignData {
+        /// Exact dApp request identifier.
+        id: String,
+        /// Exact RPC method name.
+        method: String,
+        /// Validated data to show and sign.
+        request: TonConnectSignDataRequest,
     },
 }
 
@@ -691,7 +709,7 @@ fn proof_reply(proof: &TonConnectProofReply) -> Result<TonProof, TonConnectSessi
     let signature = <[u8; 64]>::try_from(proof.signature.as_slice())
         .map_err(|_| failed("TON Connect proof signature must contain 64 bytes"))?;
     Ok(TonProof {
-        timestamp: Uint64String::from(proof.timestamp),
+        timestamp: proof.timestamp,
         domain: TonProofDomain::new(proof.domain.clone()).map_err(session_error)?,
         payload: proof.payload.clone(),
         signature: Ed25519Signature::from_bytes(signature),
@@ -707,7 +725,7 @@ fn decode_incoming(
     let method = incoming.request().method.clone();
     let decoded = match incoming.decode() {
         Ok(KnownAppRequest::SendTransaction(request)) => decode_transaction_request(
-            state,
+            &request_context(state)?,
             &id,
             method,
             request.payload,
@@ -715,7 +733,7 @@ fn decode_incoming(
             TransactionRequestKind::Send,
         )?,
         Ok(KnownAppRequest::SignMessage(request)) => decode_transaction_request(
-            state,
+            &request_context(state)?,
             &id,
             method,
             request.payload,
@@ -746,15 +764,20 @@ enum TransactionRequestKind {
     Sign,
 }
 
-/// Validates one raw transaction-shaped request against the connected account.
-fn decode_transaction_request(
+/// The connected account a transaction-shaped request is validated against.
+struct RequestContext<'a> {
+    /// The network the session connected on.
+    network: &'a NetworkId,
+    /// The connected wallet account address.
+    address: RawAccountAddress,
+    /// The wallet-side session key that scopes the operation identifier.
+    client_id: ClientId,
+}
+
+/// Resolves the connected account of a classic bridge session.
+fn request_context(
     state: &TonConnectSessionState,
-    request_id: &str,
-    method: String,
-    payload: TransactionPayload,
-    now: u64,
-    kind: TransactionRequestKind,
-) -> Result<TonConnectIncomingRequest, TonConnectSessionError> {
+) -> Result<RequestContext<'_>, TonConnectSessionError> {
     let network = state
         .connected_network
         .as_ref()
@@ -763,7 +786,23 @@ fn decode_transaction_request(
         .client
         .connected_address()
         .ok_or_else(|| failed("connected address is unavailable"))?;
-    if let Err(error) = payload.validate_context(now, network, &address) {
+    Ok(RequestContext {
+        network,
+        address,
+        client_id: state.client.client_id(),
+    })
+}
+
+/// Validates one raw transaction-shaped request against the connected account.
+fn decode_transaction_request(
+    context: &RequestContext<'_>,
+    request_id: &str,
+    method: String,
+    payload: TransactionPayload,
+    now: u64,
+    kind: TransactionRequestKind,
+) -> Result<TonConnectIncomingRequest, TonConnectSessionError> {
+    if let Err(error) = payload.validate_context(now, context.network, &context.address) {
         return Ok(unsupported_request(
             request_id.to_owned(),
             method,
@@ -821,15 +860,13 @@ fn decode_transaction_request(
             body: payload_boc.map_or(SendMessageBody::Empty, |boc| SendMessageBody::RawPayload {
                 boc,
             }),
-            bounce: false,
+            bounce: message.address.is_bounceable(),
             state_init,
         });
     }
-    let operation_id = NonEmptyString::try_from(format!(
-        "ton-connect:{}:{request_id}",
-        state.client.client_id()
-    ))
-    .map_err(session_error)?;
+    let operation_id =
+        NonEmptyString::try_from(format!("ton-connect:{}:{request_id}", context.client_id))
+            .map_err(session_error)?;
     let intent = SendIntent {
         expiration: payload
             .valid_until

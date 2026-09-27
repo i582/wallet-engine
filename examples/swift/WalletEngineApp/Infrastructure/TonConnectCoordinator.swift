@@ -40,6 +40,7 @@ extension TonConnectIncomingRequest {
         switch self {
         case .sendTransaction(let id, _, _),
              .signMessage(let id, _, _),
+             .signData(let id, _, _),
              .disconnect(let id, _),
              .unsupported(let id, _, _, _):
             id
@@ -269,7 +270,7 @@ final class TonConnectCoordinator {
                     requestId: id,
                     internalBoc: result.internalBoc
                 )
-            case .disconnect, .unsupported:
+            case .signData, .disconnect, .unsupported:
                 throw TonConnectCoordinatorError.invalidTransactionRequest
             }
         } catch {
@@ -411,6 +412,18 @@ final class TonConnectCoordinator {
             } catch {
                 diagnostic = Self.sanitized(error)
             }
+        case .signData(let id, _, _):
+            // Only derived (MTProto-relayed) sessions decode `signData`; a bridge
+            // session reports it as unsupported, so this is defensive.
+            do {
+                try await sendError(
+                    requestId: id,
+                    code: .methodNotSupported,
+                    message: "Method is not supported"
+                )
+            } catch {
+                diagnostic = Self.sanitized(error)
+            }
         }
     }
 
@@ -423,7 +436,7 @@ final class TonConnectCoordinator {
                 preview = .send(try await walletSession.previewTonConnect(sendRequest))
             case .signMessage(_, _, let signRequest):
                 preview = .sign(try await walletSession.previewSignMessage(signRequest))
-            case .disconnect, .unsupported:
+            case .signData, .disconnect, .unsupported:
                 return
             }
             approval = .transaction(

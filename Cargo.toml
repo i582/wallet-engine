@@ -66,6 +66,7 @@ zeroize = "=1.9.0"
 subtle = "2.6.1"
 
 [dev-dependencies]
+ton-connect-core = { workspace = true, features = ["test-support"] }
 bip39 = { version = "=2.2.2", default-features = false, features = ["alloc"] }
 proptest = "=1.11.0"
 reqwest = { version = "=0.12.28", default-features = false, features = ["blocking", "json", "rustls-tls"] }

@@ -175,6 +175,60 @@ For a wallet-initiated disconnect, call `disconnect` and deliver its prepared
 POST with the same durable sequence. Use `reject_connect` when the user rejects
 the initial connection.
 
+## MTProto-relayed sessions (derived keys)
+
+When a server relays TON Connect traffic as opaque `nonce || box` bytes between
+a dApp and every device of the user, each device must hold the same session key.
+`WalletLifecycle.derive_ton_connect_session` derives it from the wallet's
+current signing key, the dApp client id, and the per-session server nonce
+(reason `deriveTonConnectSessionKey`) and returns a `TonConnectDerivedSession`.
+
+1. Read `public_key_hex` (the session public key `W`) and `signing_public_key`
+   (the 32-byte key the session was derived from). `ton_addr` must advertise
+   `signing_public_key`: `encrypt_connect_event` refuses an account with any
+   other key, such as the anchor key `derive_ton_connect_account` returns after
+   a rotation, because dApps verify `ton_proof` and `signData` with it.
+2. Answer the server challenge with `open_challenge`: pass exactly
+   `ephemeral_pk(32) || nonce(24) || box(48)` and send back the 32-byte answer.
+3. Pass each relayed dApp body to `decrypt_request` with the current Unix time.
+   The returned `request` is validated exactly like `ingest_sse_chunk` does;
+   `request_id` is `None` when the dApp `id` is not a canonical decimal that
+   fits a signed 64-bit value, and the request is still returned so the host can
+   answer with the exact `id` string.
+4. Build replies with `encrypt_connect_event`, `encrypt_connect_error`,
+   `encrypt_send_success`, `encrypt_disconnect_success`, `encrypt_error`, and
+   `encrypt_disconnect_event`. Each returns raw `nonce || box` bytes, never
+   base64, and carries exactly the event or request id the caller supplies.
+   A connect event with a proof writes `proof.timestamp` as a JSON number, the
+   only form `@tonconnect/sdk` accepts (native bridge sessions do the same).
+
+The derived session advertises `SendTransaction` and `SignData` (`text`,
+`binary`, `cell`). A `signData` request decodes to `SignData` with its payload
+strings exactly as the dApp sent them, already validated against the session
+wallet; a mismatched `network` or `from`, invalid base64, or an invalid cell
+decodes as `Unsupported` with `BadRequest`. Every cell `BoC` a request carries
+(`signData` cells, `sendTransaction` payloads and `stateInit`s) is also invalid
+when it is deeper than 1024 cells, the TVM's own maximum, so a deep chain cannot
+exhaust the stack of the thread that decodes it. An exotic cell whose layout TON
+refuses (a pruned branch whose size or level mask does not match its data, or a
+library, Merkle proof or Merkle update cell of the wrong size or reference
+count) is invalid too. To answer it, sign the request
+with `WalletLifecycle.sign_ton_connect_data` (reason `signTonConnectData`) for the
+dApp manifest host the user approved (`app.example` or `localhost:3000`, never a
+URL) and the signing time, then pass the result to `encrypt_sign_data_success`.
+It checks the request against the session's network and wallet again and
+verifies the signature with the session's own signing public key, so a record
+signed by any other key is refused. `signMessage` still decodes as
+`Unsupported` with `MethodNotSupported`. The object keeps
+no replay state, no event counter, and nothing persisted: the server issues
+event ids and orders requests. A signing-key rotation changes the key of every
+later derivation; an existing session object stays valid in memory.
+
+The engine does not decode a `cell` payload by its TL-B schema. Display it
+the way the TON Connect specification requires for content the wallet does
+not parse: warn that the content being signed is unknown, as for `binary`,
+and show the dApp domain. Signing does not depend on the display.
+
 ## Durable bridge responses
 
 Each connect event, RPC response, or disconnect event creates a
