@@ -145,6 +145,12 @@ does not change protected storage or submit the BOC by itself.
 For a later rotation, protected storage must contain the 24-word phrase from
 the last successful rotation.
 
+The signed request also carries the replaced signing key encrypted with the new
+one (`encryptedOldPrivateKey`), which the contract publishes so that
+`decryptComment` can later open comments sent to earlier keys. The engine adds
+it automatically; the host stores and submits the BOC exactly as before. See
+[key-change log](README.md#key-change-log).
+
 `previewSendBoc` validates fresh `seqno`, destination, and expiration, then
 emulates the exact signed BOC without journaling or submitting it. Its returned
 message list is empty because it does not decode the opaque BOC into a
@@ -190,6 +196,19 @@ received activity the sender is `counterparty`; for sent activity it is the
 wallet address. This read uses `SecretAccessReason.decryptComment`, so refresh
 does not trigger device authentication. Plaintext is limited to 960 UTF-8
 bytes.
+
+`decryptComment` reads the protected phrase once per call and tries the current
+signing key, then the anchor key, without any HTTP request. When neither matches
+on a rotated wallet, it reads the wallet's `change_wallet_key` actions from
+Toncenter v3 (`/api/v3/actions`), recovers the earlier signing keys, and tries
+them. The history is public and cached in memory; recovered keys never leave the
+call and are never stored. `WalletClientError.EncryptedCommentLookupFailed`
+means the history is not available yet, for example because the indexer has not
+reported the latest rotation, and the call can be retried later.
+`WalletClientError.EncryptedCommentUnavailable` means no key of this wallet
+decrypts the body or the body is malformed. Comments sent to replaced keys need
+a provider that runs Toncenter indexer v1.3 or later. See [encrypted comment
+decryption](README.md#encrypted-comment-decryption).
 
 ## TON DNS
 

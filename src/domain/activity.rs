@@ -80,6 +80,11 @@ pub struct ActivityItem {
     pub comment: Option<String>,
     /// An opaque encrypted-comment body that can be passed to
     /// [`crate::WalletClient::decrypt_comment`].
+    ///
+    /// A sender encrypts to the signing key this wallet had at that time.
+    /// Decryption tries the current signing key and the anchor key first, then
+    /// signing keys that earlier rotations replaced, which it recovers from the
+    /// wallet's public key-change history.
     #[serde(default)]
     pub encrypted_comment: Option<Boc>,
     /// The source or destination address, if the provider supplies it.

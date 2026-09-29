@@ -12,7 +12,9 @@ Use Wallet Engine to:
 - read balances, enriched activity, and NFT collection metadata.
 - load additional history pages.
 - resolve `.ton` wallet records.
-- create and decrypt encrypted transfer comments.
+- create and decrypt encrypted transfer comments, including comments sent to
+  signing keys that a key rotation replaced.
+- rotate the wallet signing key without changing the wallet address.
 - sign and submit transfers.
 - connect dApps, sign `ton_proof`, and approve TON Connect transactions.
 - observe immutable wallet snapshots.
@@ -133,13 +135,16 @@ revision that you use to build the Rust library.
 
 ### Rust tests
 
-Install a current Acton CLI that supports `acton simulated-localnet`.
+Install a current Acton CLI that supports `acton simulator start`.
 
 `cargo nextest run` executes unit and scenario tests in parallel. Localnet
-scenarios start temporary Acton nodes on free loopback ports. The scenarios
-cover wallet deployment, transfers, refresh, pagination, cancellation, and
-concurrent chain changes. The TON Connect suite also starts the official Go
-bridge and a local TypeScript dApp actor.
+scenarios start temporary Acton simulators (`acton --project-root <temporary
+project> simulator start`) on free loopback ports and pin blockchain config
+param `-123` to the Wallet rev00 bytecode in
+`tests/support/wallet_tg_rev00.code`. The scenarios cover wallet deployment,
+transfers, refresh, pagination, cancellation, key rotation, and concurrent
+chain changes. The TON Connect suite also starts the official Go bridge and a
+local TypeScript dApp actor.
 
 If Acton is not in `PATH`, set the path explicitly:
 
@@ -334,15 +339,48 @@ Wallet V3R1 through V5R1 have no rotatable signing key, and the TEP forbids
 deploying them from a Rotation mnemonic.
 
 The engine embeds the wallet trampoline: a small code cell that jumps into
-the real Wallet rev00 bytecode stored at blockchain config param `-123`. The
-bytecode is present in the testnet config; the mainnet config vote is in
-progress. Only the trampoline and the initial storage are deployed per
+the real Wallet rev00 bytecode stored at blockchain config param `-123`. A
+Wallet rev00 revision is present in the testnet config; the mainnet config vote
+is in progress. Only the trampoline and the initial storage are deployed per
 account, so every wallet shares the config-resident implementation and its
 future revisions. The revision is not declared final. The initial `StateInit`
 and address use the anchor public key. Ordinary external and owner-authorized
 internal requests use the signing key. Before the first rotation the two keys
 are equal. After any rotation a 24-word phrase can sign requests for an already
 active account without changing its address.
+
+The engine targets the Wallet rev00 revision whose bytecode cell hash is
+`e30911420bef1191c09dce58b9df2b4ca4c2d9c383cc3b6a91170349ffa70e2c`. The
+testnet config holds it at param `-123`, and the localnet tests install the
+same bytecode there.
+
+#### Key-change log
+
+Words 13–24 of the phrase hold only the current signing key. To keep earlier
+signing keys recoverable, every `ChangePublicKey` request carries a second
+reference after the rotation-proof signature:
+
+```text
+encryptedOldPrivateKey = sha256(newPrivateKey ‖ "keyChangeSaltV1") XOR oldPrivateKey
+```
+
+Both private keys are 32-byte Ed25519 seeds: `oldPrivateKey` is the signing key
+being replaced, `newPrivateKey` is the key being installed, and the salt is the
+ASCII string `keyChangeSaltV1`. Only the holder of the new key can open the
+value. The reference holds exactly these 256 bits in both
+`ChangePublicKeyRequestE` (`0xFBBA99C8`, external) and
+`ChangePublicKeyRequestI` (`0xFBBA99C7`, internal).
+
+After a successful key change the contract emits an external-out log message
+with no destination (`addr_none`): opcode `0xEBA19948` (32 bits) followed by the
+256-bit `encryptedOldPrivateKey`, without references. Toncenter indexer v1.3
+and later reports the rotation as a `change_wallet_key` action whose details
+contain `new_public_key` and `encrypted_old_private_key`. Starting from the
+current key, `decryptComment` opens each record with the key after it and so
+recovers every earlier signing key; see
+[Encrypted comment decryption](#encrypted-comment-decryption).
+
+#### Prepare a key rotation
 
 `WalletClient.prepareKeyRotation` constructs key-change data. The caller
 supplies only an expiration time and the message kind. The client first loads
@@ -353,9 +391,12 @@ in the prepared message. The client then:
 1. reads and checks the current protected 12- or 24-word phrase.
 2. creates an independent 12-word signing half.
 3. signs the wallet-address proof with the new key.
-4. signs the `ChangePublicKey` request with the current signing key, which is
-   also the anchor key only before the first rotation.
-5. returns the replacement 24-word phrase, new public key, signed BOC, and the
+4. encrypts the current signing key with the new key as
+   `encryptedOldPrivateKey`.
+5. signs the `ChangePublicKey` request, which carries the proof signature and
+   `encryptedOldPrivateKey` as its two references, with the current signing
+   key. That key is also the anchor key only before the first rotation.
+6. returns the replacement 24-word phrase, new public key, signed BOC, and the
    `seqno` covered by that signature.
 
 The method does not change protected storage, submit the BOC by itself, or read the
@@ -370,8 +411,11 @@ destination, stores the exact BOC in the same wallet-wide durable journal as
 `SendResult`; `submissionUnknown`, `resolvePending`, `cancelSend`, and blocking
 of another send use the same workflow as transfers.
 
-The engine rejects deployment from a post-rotation 24-word phrase. The initial
-contract expects the anchor key until the on-chain key change is complete.
+The engine rejects deployment from a post-rotation 24-word phrase, for
+transfers and for `prepareKeyRotation` alike: `prepareKeyRotation` on a
+nonexistent or uninitialized account returns `KeyRotationUnavailable` unless
+the protected phrase is the initial 12-word one. The initial contract expects
+the anchor key until the on-chain key change is complete.
 
 ### Host and API impact
 
@@ -383,7 +427,10 @@ rotation or 24 words after it. Protected storage holds one secret.
 
 Key-rotation preparation requests protected-secret access with
 `SecretAccessReason.prepareKeyRotation`. The result contains recovery words,
-so applications must treat the complete result as secret data.
+so applications must treat the complete result as secret data. The engine
+adds `encryptedOldPrivateKey` to the signed BOC itself, so hosts need no extra
+step. The value is meant to become public on-chain: only the new signing key
+can open it.
 
 ## Wallet flow diagrams
 
@@ -551,7 +598,9 @@ the sender address to `WalletClient.decryptComment`. For a received item the
 sender is `counterparty`; for a sent item it is the configured wallet address.
 The call asks `WalletPlatformHost` for the protected mnemonic with
 `SecretAccessReason.decryptComment`, so an ordinary refresh never opens an
-authentication prompt.
+authentication prompt. The call can also decrypt comments sent to a signing key
+that a rotation replaced; see
+[Encrypted comment decryption](#encrypted-comment-decryption).
 
 ```mermaid
 flowchart TD
@@ -595,6 +644,47 @@ flowchart TD
 
 `DomainError` classifies transport, provider protocol, rate limit,
 cancellation, and host-policy failures and includes retry advice.
+
+#### Encrypted comment decryption
+
+A sender encrypts a comment to the key that this wallet's `get_public_key`
+getter returns at that time, which is the current signing key. After a
+rotation, older comments can therefore use a key that the recovery phrase no
+longer holds. `decryptComment` tries every signing key it can recover:
+
+1. It reads the protected phrase once per call and derives the current signing
+   key (words 13–24) and the anchor key (words 1–12). It tries the current
+   signing key, then the anchor key, without any HTTP request. Comments that
+   this engine sent use the signing key current at that time on the sender
+   side, so those sent before a later rotation are recovered like received
+   ones.
+2. When neither key matches and the wallet has rotated, that is, the two keys
+   differ, it reads the wallet's `change_wallet_key` actions from Toncenter v3:
+   `GET {toncenterBaseUrl}/api/v3/actions?account=<wallet address>&action_type=change_wallet_key&limit=100&offset=<n>&sort=desc`,
+   newest first, reading at most 10 pages. It keeps only successful key changes
+   of this wallet.
+3. Starting from the current key, it opens the encrypted old key of the
+   rotation that installed it, then repeats with the opened key until it
+   reaches the anchor key, and tries the recovered keys.
+
+An unrotated wallet never requests the history. The history holds only public
+data: installed public keys and old keys encrypted with their successors. The
+client caches it in memory and reuses it while it still contains the rotation
+that installed the current signing key, so later calls normally send no HTTP
+request. Recovered private keys exist only inside the call. The engine never
+returns or stores them and clears them before the call returns. While the call
+runs, it holds the client's single-flight slot, so `send`, `sendBoc`, and other
+slot users return `SendAlreadyInProgress` until it finishes.
+
+`EncryptedCommentLookupFailed` means that the history is not available yet:
+the provider failed, limited, or cancelled a request, returned an unreadable
+page, or reported a history that does not yet include the rotation that
+installed the current signing key because the indexer lags behind the chain.
+Retry later. `EncryptedCommentUnavailable` means that no key of this wallet
+decrypts the body, or that the body is malformed.
+
+Comments sent to a replaced key need a provider that runs Toncenter indexer
+v1.3 or later, which reports `change_wallet_key` actions with both keys.
 
 ### Load more activity
 
@@ -952,8 +1042,9 @@ supported default wallet `StateInit` values from the supplied key and requires
 one to derive the recipient address. A mismatch
 is rejected before any HTTP request or protected-secret access. It authorizes
 the protected sender mnemonic through the platform host, applies the TON
-Ed25519/X25519, HMAC-SHA512, AES-256-CBC, and snake-cell format, and returns a
-complete BOC. Put that BOC in `SendMessageBody.rawPayload`, then preview and
+Ed25519/X25519, HMAC-SHA512, AES-256-CBC, and snake-cell format with the
+wallet's current signing key as the sender key, and returns a complete BOC.
+That is the key the wallet's `get_public_key` reports. Put that BOC in `SendMessageBody.rawPayload`, then preview and
 send the same immutable intent. Plaintext is limited to 960 UTF-8 bytes.
 See the [TON encrypted-comments
 format](https://docs.ton.org/llms/contracts/standard/wallets/interact/content.md#encrypted-comments).
@@ -977,7 +1068,9 @@ deployed or is frozen, or its contract returned no public key.
 `EncryptedCommentLookupFailed` means the provider failed, limited, or cancelled
 the lookup, so nothing is known about the recipient and the call can be
 retried. `createEncryptedComment` returns the same two errors, before it
-requests the secret.
+requests the secret. `decryptComment` uses the same two errors for its
+key-change history; see
+[Encrypted comment decryption](#encrypted-comment-decryption).
 
 `SendAmount.all` must be the only message in its batch. Wallet V5 applies the
 batch in order.
@@ -1118,6 +1211,16 @@ refresh when its product behavior requires new wallet data.
 
 The engine clears the secret buffers that it owns. The FFI boundary and the
 host language can create additional copies.
+
+Earlier signing keys that `decryptComment` recovers are secret material with
+the same protection as the recovery phrase: each one decrypts the comments
+sent to it. They never cross the FFI boundary; the engine keeps them only for
+the call and clears them. Anyone who learns a signing key can open every
+earlier published key from the public key-change history, so a leaked phrase
+also exposes the comments sent to those earlier keys. The history itself
+holds only public data: installed public keys and old keys encrypted with
+their successors. The engine caches it in memory without protection, and the
+host transports it as an ordinary provider response.
 
 The host must limit the lifetime of these copies. The host must clear mutable
 byte buffers after each callback. Immutable client strings cannot be reliably

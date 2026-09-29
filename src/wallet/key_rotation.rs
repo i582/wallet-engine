@@ -17,6 +17,7 @@ use super::crypto::{
     SensitiveMnemonic, derive_half_key, derive_rotation_keys, derive_wallet,
     derive_wallet_public_state,
 };
+use super::key_history::encrypt_old_private_key;
 use super::mnemonic::{Bip39Half, ENTROPY_LEN, RotationMnemonic};
 use crate::{Boc, Network, TonAddressString};
 
@@ -26,6 +27,7 @@ const CHANGE_PUBLIC_KEY_INTERNAL_OPCODE: u32 = 0xfbba_99c7;
 const CHANGE_PUBLIC_KEY_EXTERNAL_OPCODE: u32 = 0xfbba_99c8;
 const SIGNATURE_BITS: usize = 512;
 const PUBLIC_KEY_BITS: usize = 256;
+const ENCRYPTED_PRIVATE_KEY_BITS: usize = 256;
 const MAX_KEY_GENERATION_ATTEMPTS: usize = 8;
 
 #[derive(Debug, thiserror::Error)]
@@ -36,6 +38,8 @@ pub(crate) enum KeyRotationError {
     WalletIdentityMismatch,
     #[error("the expiration timestamp exceeds uint32")]
     ExpirationOutOfRange,
+    #[error("a rotated recovery phrase requires an already deployed wallet")]
+    RotatedWalletRequiresActiveAccount,
     #[error("key-rotation data construction failed")]
     Preparation,
 }
@@ -64,6 +68,11 @@ pub(crate) fn prepare_key_rotation(
         derive_wallet(current_phrase, network).map_err(|_| KeyRotationError::InvalidMnemonic)?;
     if wallet.address != *expected_wallet.as_address() {
         return Err(KeyRotationError::WalletIdentityMismatch);
+    }
+    // Deployment stores the anchor key, so only the 12-word phrase, whose
+    // signing key is the anchor, can sign a request that also deploys.
+    if needs_state_init && !wallet.is_pre_rotation() {
+        return Err(KeyRotationError::RotatedWalletRequiresActiveAccount);
     }
     let valid_until =
         u32::try_from(valid_until).map_err(|_| KeyRotationError::ExpirationOutOfRange)?;
@@ -141,6 +150,7 @@ fn prepare_with_new_half(
         seqno,
         new_public_key,
         proof_signature.to_bytes(),
+        encrypt_old_private_key(current_key, new_key),
     )
     .map_err(|_| KeyRotationError::Preparation)?;
     let signed_request = sign_cell(current_key, &request)?;
@@ -178,6 +188,11 @@ fn build_rotation_proof(wallet_address: &TonAddress) -> Result<TonCell, TonCoreE
     builder.build()
 }
 
+/// Builds `ChangePublicKeyRequestE` or `ChangePublicKeyRequestI`.
+///
+/// The rotation proof and the encrypted old private key are separate refs, in
+/// that order. The contract loads the second ref as exactly 256 bits and
+/// publishes it in its key-changed log.
 fn build_change_public_key_request(
     message_kind: KeyRotationMessageKind,
     wallet_id: i32,
@@ -185,6 +200,7 @@ fn build_change_public_key_request(
     seqno: u32,
     new_public_key: [u8; 32],
     proof_signature: [u8; 64],
+    encrypted_old_private_key: [u8; 32],
 ) -> Result<TonCell, TonCoreError> {
     let opcode = match message_kind {
         KeyRotationMessageKind::External => CHANGE_PUBLIC_KEY_EXTERNAL_OPCODE,
@@ -192,6 +208,8 @@ fn build_change_public_key_request(
     };
     let mut signature = TonCell::builder();
     signature.write_bits(proof_signature, SIGNATURE_BITS)?;
+    let mut encrypted_old_key = TonCell::builder();
+    encrypted_old_key.write_bits(encrypted_old_private_key, ENCRYPTED_PRIVATE_KEY_BITS)?;
 
     let mut request = TonCell::builder();
     request.write_num(&opcode, 32)?;
@@ -200,6 +218,7 @@ fn build_change_public_key_request(
     request.write_num(&seqno, 32)?;
     request.write_bits(new_public_key, PUBLIC_KEY_BITS)?;
     request.write_ref(signature.build()?)?;
+    request.write_ref(encrypted_old_key.build()?)?;
     request.build()
 }
 
@@ -246,9 +265,11 @@ fn wrap_signed_request(
 #[cfg(test)]
 mod tests {
     use ed25519_dalek::{Signature, VerifyingKey};
+    use ton::ton_core::cell::CellParser;
     use ton::ton_core::traits::tlb::TLB as _;
     use ton::ton_core::types::tlb_core::MsgAddress;
 
+    use super::super::key_history::decrypt_old_private_key;
     use super::*;
 
     const CURRENT_PHRASE: &str =
@@ -270,13 +291,14 @@ mod tests {
         assert_eq!(info.dst, wallet.address.to_msg_address_int());
         assert!(message.init.is_none());
 
-        assert_signed_request(
+        let encrypted_old_private_key = assert_signed_request(
             &message.body.value,
             &request,
             current_public_key,
             CHANGE_PUBLIC_KEY_EXTERNAL_OPCODE,
             new_public_key,
         );
+        assert_old_key_is_recoverable(encrypted_old_private_key);
         assert_rotation_proof(&proof, &request, new_public_key);
         assert_eq!(material.new_public_key, new_public_key);
         assert_eq!(
@@ -285,7 +307,7 @@ mod tests {
         );
         assert_eq!(
             request.cell_hash().expect("request hashes").to_string(),
-            "5527695BB1558A7489A2378399386D77AD019C64768ED57F281979D124383FFE"
+            "A6E5EA5F66D9DFD7095C3480F805909903D7A6FE7940A4A909921ED328535C05"
         );
 
         let replacement = material
@@ -302,7 +324,7 @@ mod tests {
 
         assert_eq!(
             message.cell_hash().expect("message hashes").to_string(),
-            "8242D2902CEE23814342B5058C741149F993F73A5D649A9F4BA41895D391954A"
+            "2BC55A0B534FD1FC0E0EC370C2E86AB0107F1912C3AE7CE2DB0D2491D32CB401"
         );
     }
 
@@ -322,16 +344,17 @@ mod tests {
         assert!(!info.bounce);
         assert!(message.init.is_none());
 
-        assert_signed_request(
+        let encrypted_old_private_key = assert_signed_request(
             &message.body.value,
             &request,
             current_public_key,
             CHANGE_PUBLIC_KEY_INTERNAL_OPCODE,
             new_public_key,
         );
+        assert_old_key_is_recoverable(encrypted_old_private_key);
         assert_eq!(
             message.cell_hash().expect("message hashes").to_string(),
-            "C8017E316393EC14C2A01DAF9C10F008793E84A375DF31DCF1ECF53D729B5EC4"
+            "68F5DD38A320F74A3E313D02D7CB60FFC75AA124DBB77F1D2CD668F47BE4F915"
         );
     }
 
@@ -433,6 +456,7 @@ mod tests {
         proof_signature_parser
             .ensure_empty()
             .expect("proof signature ends exactly");
+        let encrypted_old_private_key = read_encrypted_old_private_key(&mut parser);
         parser.ensure_empty().expect("signed request ends exactly");
 
         assert_eq!(new_public_key, material.new_public_key);
@@ -443,6 +467,7 @@ mod tests {
             SEQNO,
             new_public_key,
             proof_signature,
+            encrypted_old_private_key,
         )
         .expect("request rebuilds");
         let signature =
@@ -483,6 +508,54 @@ mod tests {
             current_keys.signing.verifying_key().to_bytes(),
             "rotation must replace the current signing key"
         );
+        assert_eq!(
+            decrypt_old_private_key(&encrypted_old_private_key, &replacement_keys.signing)
+                .as_bytes(),
+            current_keys.signing.as_bytes(),
+            "the new key must open the replaced signing key, not the anchor"
+        );
+    }
+
+    #[test]
+    fn only_the_initial_phrase_can_rotate_and_deploy_together() {
+        let initial = SensitiveMnemonic::from_bytes(CURRENT_PHRASE.as_bytes().to_vec())
+            .expect("initial phrase parses");
+        let rotated = SensitiveMnemonic::from_bytes(ROTATED_PHRASE.as_bytes().to_vec())
+            .expect("rotated phrase parses");
+        let wallet = derive_wallet(CURRENT_PHRASE, Network::Testnet).expect("wallet derives");
+        let address = TonAddressString::from_address(&wallet.address, Network::Testnet);
+
+        for message_kind in [
+            KeyRotationMessageKind::External,
+            KeyRotationMessageKind::Internal,
+        ] {
+            assert!(matches!(
+                prepare_key_rotation(
+                    &rotated,
+                    Network::Testnet,
+                    &address,
+                    0,
+                    true,
+                    u64::from(VALID_UNTIL),
+                    message_kind,
+                ),
+                Err(KeyRotationError::RotatedWalletRequiresActiveAccount)
+            ));
+        }
+
+        let deploying = prepare_key_rotation(
+            &initial,
+            Network::Testnet,
+            &address,
+            0,
+            true,
+            u64::from(VALID_UNTIL),
+            KeyRotationMessageKind::External,
+        )
+        .expect("the initial phrase deploys and rotates");
+        let message = Msg::<TonCell>::from_boc(deploying.signed_boc.as_bytes().to_vec())
+            .expect("rotation BOC decodes");
+        assert!(message.init.is_some(), "the request deploys the wallet");
     }
 
     #[test]
@@ -549,6 +622,7 @@ mod tests {
             SEQNO,
             new_public_key,
             proof_signature,
+            encrypt_old_private_key(&current_key, &new_key),
         )
         .expect("request builds");
         let material = prepare_with_new_half(
@@ -574,7 +648,7 @@ mod tests {
         current_public_key: [u8; 32],
         expected_opcode: u32,
         new_public_key: [u8; 32],
-    ) {
+    ) -> [u8; 32] {
         let mut parser = signed.parser();
         let signature = parser.read_bits(SIGNATURE_BITS).expect("outer signature");
         assert_eq!(parser.read_num::<u32>(32).expect("opcode"), expected_opcode);
@@ -591,6 +665,7 @@ mod tests {
         let proof_signature = parser.read_next_ref().expect("proof signature ref");
         assert_eq!(proof_signature.data_len_bits(), SIGNATURE_BITS);
         assert!(proof_signature.refs().is_empty());
+        let encrypted_old_private_key = read_encrypted_old_private_key(&mut parser);
         parser.ensure_empty().expect("signed request ends exactly");
 
         let signature = Signature::from_slice(&signature).expect("signature has 64 bytes");
@@ -604,6 +679,41 @@ mod tests {
                 &signature,
             )
             .expect("current key verifies the request");
+        encrypted_old_private_key
+    }
+
+    /// Reads the second request ref, which the contract loads as exactly 256 bits.
+    fn read_encrypted_old_private_key(parser: &mut CellParser<'_>) -> [u8; 32] {
+        let cell = parser
+            .read_next_ref()
+            .expect("encrypted old private key ref");
+        assert_eq!(cell.data_len_bits(), ENCRYPTED_PRIVATE_KEY_BITS);
+        assert!(cell.refs().is_empty());
+        let mut cell_parser = cell.parser();
+        let encrypted = cell_parser
+            .read_bits(ENCRYPTED_PRIVATE_KEY_BITS)
+            .expect("encrypted old private key")
+            .try_into()
+            .expect("encrypted old private key has 32 bytes");
+        cell_parser
+            .ensure_empty()
+            .expect("encrypted old private key ends exactly");
+        encrypted
+    }
+
+    /// The deterministic rotation replaces the 12-word key with the fixed-entropy half.
+    fn assert_old_key_is_recoverable(encrypted_old_private_key: [u8; 32]) {
+        let current = RotationMnemonic::parse(CURRENT_PHRASE).expect("current phrase parses");
+        let current_key = derive_rotation_keys(&current).signing;
+        let new_key = derive_half_key(
+            &Bip39Half::from_entropy(&[0x7f; ENTROPY_LEN]).expect("fixed entropy encodes"),
+        );
+        assert_ne!(encrypted_old_private_key, *current_key.as_bytes());
+        assert_eq!(
+            decrypt_old_private_key(&encrypted_old_private_key, &new_key).as_bytes(),
+            current_key.as_bytes(),
+            "the new signing key must open the replaced one"
+        );
     }
 
     fn assert_rotation_proof(proof: &TonCell, request: &TonCell, new_public_key: [u8; 32]) {

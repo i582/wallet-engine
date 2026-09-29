@@ -3,18 +3,26 @@ use std::sync::Arc;
 use std::thread;
 
 use futures::executor::block_on;
+use sha2::{Digest as _, Sha256};
+use ton::block_tlb::CommonMsgInfo;
 use wallet_engine::{
-    CreateWalletRequest, CreatedWallet, ImportWalletRequest, KeyRotationMessageKind, Network,
-    NonEmptyString, PrepareKeyRotationRequest, PreparedKeyRotation, ProviderConfig, RecoveryPhrase,
+    Boc, CreateEncryptedCommentRequest, CreateWalletRequest, CreatedWallet, DecryptCommentRequest,
+    ImportWalletRequest, KeyRotationMessageKind, Network, NonEmptyString,
+    PrepareKeyRotationRequest, PreparedKeyRotation, ProviderConfig, RecoveryPhrase,
     SecretAccessReason, SendAmount, SendBocRequest, SendExpiration, SendIntent, SendMessage,
-    SendMessageBody, SendPhase, SendRequest, UnsignedDecimalString, WalletClient,
+    SendMessageBody, SendPhase, SendRequest, TonAddressString, UnsignedDecimalString, WalletClient,
     WalletClientConfig, WalletClientError, WalletDescriptor, WalletLifecycle, WalletLifecycleError,
 };
 
 use super::host::{MemoryPlatformHost, RequestKind, ScenarioHttpHost};
-use super::localnet::LocalnetHttpHost;
+use super::localnet::{
+    LocalnetHttpHost, change_key_request_public_key, parse_key_changed_log, transaction_aborted,
+};
 use super::scenario::wallet;
-use super::test_wallet::test_wallet;
+use super::test_wallet::{rotation_anchor_key_pair, test_wallet};
+
+/// Domain-separation salt of Wallet rev00's encrypted old private key.
+const KEY_CHANGE_SALT: &[u8] = b"keyChangeSaltV1";
 
 pub(crate) fn wallet_lifecycle_scenario(name: impl Into<String>) -> WalletLifecycleScenario {
     WalletLifecycleScenario {
@@ -24,6 +32,142 @@ pub(crate) fn wallet_lifecycle_scenario(name: impl Into<String>) -> WalletLifecy
 }
 
 pub(crate) fn execute_repeated_key_rotation_on_localnet() -> Result<(), String> {
+    rotate_twice_on_localnet(|_| Ok(())).map(|_| ())
+}
+
+/// Decrypts comments sent to every signing key of a twice-rotated wallet.
+///
+/// The wallet rotates K0 (anchor) -> K1 -> K2 on localnet. While K1 is
+/// current, an independent sender encrypts a comment to the key the wallet's
+/// `get_public_key` reports, exactly as another wallet would. After the second
+/// rotation the recovery phrase holds only K0 and K2, so the engine must read
+/// the key-change history (served by the localnet indexer shim from the real
+/// contract logs) and recover K1 from the encrypted old key K2's rotation
+/// published. Comments to K2 and K0 decrypt without any history request, and
+/// the history read for K1 is cached.
+pub(crate) fn execute_comment_to_replaced_signing_key_decrypts_on_localnet() -> Result<(), String> {
+    const LOST_KEY_COMMENT: &str = "sent while K1 was the signing key";
+    const CURRENT_KEY_COMMENT: &str = "sent to the current key K2";
+    const ANCHOR_KEY_COMMENT: &str = "sent to the anchor key K0";
+
+    let rotation = rotate_twice_on_localnet(|context| {
+        let sender = comment_sender(context)?;
+        let lost_key_comment = sender.encrypt_to_on_chain_key(context, LOST_KEY_COMMENT)?;
+        Ok((sender, lost_key_comment))
+    })?;
+    let RepeatedKeyRotation {
+        context,
+        second,
+        between_rotations: (sender, lost_key_comment),
+    } = rotation;
+    let current_key_comment = sender.encrypt_to_on_chain_key(&context, CURRENT_KEY_COMMENT)?;
+    let anchor_key_comment = block_on(sender.client.create_encrypted_comment(
+        CreateEncryptedCommentRequest {
+            recipient: context.wallet_address.clone(),
+            comment: ANCHOR_KEY_COMMENT.to_owned(),
+            recipient_public_key: Some(test_wallet().public_key()),
+        },
+    ))
+    .map_err(|error| format!("encrypting to the anchor key failed: {error}"))?;
+
+    // Only the latest phrase remains: anchor K0 plus signing K2. K1 is gone.
+    let rotated_descriptor = block_on(
+        context.lifecycle.import_wallet(ImportWalletRequest {
+            record_id: "localnet-key-rotation-latest".to_owned(),
+            network: Network::Testnet,
+            recovery_words: second
+                .replacement_recovery_phrase
+                .phrase
+                .split_ascii_whitespace()
+                .map(str::to_owned)
+                .collect(),
+        }),
+    )
+    .map_err(|error| error.to_string())?;
+    if rotated_descriptor.address != context.wallet_address {
+        return Err("the latest replacement phrase changed the wallet address".to_owned());
+    }
+    let rotated_client = localnet_wallet_client(
+        rotated_descriptor,
+        context.localnet.clone(),
+        context.platform_host.clone(),
+    )?;
+    let decrypt = |body: &Boc| {
+        block_on(rotated_client.decrypt_comment(DecryptCommentRequest {
+            sender: sender.address.clone(),
+            body: body.clone(),
+        }))
+        .map_err(|error| error.to_string())
+    };
+    let expect_comment = |body: &Boc, expected: &str, key: &str| {
+        let actual = decrypt(body)?;
+        if actual == expected {
+            Ok(())
+        } else {
+            Err(format!(
+                "the comment to {key} decrypted to {actual:?}, expected {expected:?}"
+            ))
+        }
+    };
+    let expect_history_requests = |expected: usize, step: &str| {
+        let actual = context.localnet.key_change_action_request_count();
+        if actual == expected {
+            Ok(())
+        } else {
+            Err(format!(
+                "expected {expected} key-change history requests {step}, got {actual}"
+            ))
+        }
+    };
+
+    expect_comment(&current_key_comment, CURRENT_KEY_COMMENT, "K2")?;
+    expect_comment(&anchor_key_comment, ANCHOR_KEY_COMMENT, "K0")?;
+    expect_history_requests(0, "after decrypting with keys the phrase holds")?;
+
+    expect_comment(&lost_key_comment, LOST_KEY_COMMENT, "the replaced key K1")?;
+    expect_history_requests(1, "after recovering the replaced key")?;
+    expect_comment(&lost_key_comment, LOST_KEY_COMMENT, "K1 again")?;
+    expect_history_requests(1, "after reusing the cached history")?;
+
+    let other_sender_error = block_on(rotated_client.decrypt_comment(DecryptCommentRequest {
+        sender: context.wallet_address.clone(),
+        body: lost_key_comment,
+    }))
+    .expect_err("a comment authenticated for another sender must not decrypt");
+    if !matches!(
+        other_sender_error,
+        WalletClientError::EncryptedCommentUnavailable { .. }
+    ) {
+        return Err(format!(
+            "expected no key to decrypt a comment for another sender, got {other_sender_error}"
+        ));
+    }
+    expect_history_requests(1, "after a failed decryption with the cached history")
+}
+
+/// Shared localnet state of one rotating wallet.
+struct LocalnetRotationContext {
+    platform_host: Arc<MemoryPlatformHost>,
+    lifecycle: Arc<WalletLifecycle>,
+    localnet: Arc<LocalnetHttpHost>,
+    wallet_address: TonAddressString,
+}
+
+/// A wallet that rotated K0 (anchor) -> K1 -> K2 on localnet.
+struct RepeatedKeyRotation<T> {
+    context: LocalnetRotationContext,
+    second: PreparedKeyRotation,
+    between_rotations: T,
+}
+
+/// Rotates the fixture wallet twice with external requests on localnet.
+///
+/// Each rotation must confirm, install its key on-chain, and emit the
+/// contract's key-changed log with the old key encrypted under the new one.
+/// `between_rotations` runs while K1 is the wallet's current signing key.
+fn rotate_twice_on_localnet<T>(
+    between_rotations: impl FnOnce(&LocalnetRotationContext) -> Result<T, String>,
+) -> Result<RepeatedKeyRotation<T>, String> {
     let platform_host = Arc::new(MemoryPlatformHost::default());
     let lifecycle = WalletLifecycle::new(platform_host.clone());
     let fixture = test_wallet();
@@ -38,6 +182,8 @@ pub(crate) fn execute_repeated_key_rotation_on_localnet() -> Result<(), String> 
         wallet_address.as_str(),
         "5000000000",
     )?);
+    let initial_phrase =
+        std::str::from_utf8(fixture.recovery_phrase_bytes()).map_err(|error| error.to_string())?;
 
     localnet.spam_transfers(1)?;
     let first_client =
@@ -92,6 +238,15 @@ pub(crate) fn execute_repeated_key_rotation_on_localnet() -> Result<(), String> 
         ));
     }
     assert_localnet_public_key(&localnet, &first.new_public_key, "first")?;
+    assert_key_changed_log(&localnet, &first, initial_phrase, "first")?;
+
+    let context = LocalnetRotationContext {
+        platform_host: platform_host.clone(),
+        lifecycle: lifecycle.clone(),
+        localnet: localnet.clone(),
+        wallet_address: wallet_address.clone(),
+    };
+    let between_rotations = between_rotations(&context)?;
 
     let second_descriptor = block_on(
         lifecycle.import_wallet(ImportWalletRequest {
@@ -158,8 +313,163 @@ pub(crate) fn execute_repeated_key_rotation_on_localnet() -> Result<(), String> 
         ));
     }
     assert_localnet_public_key(&localnet, &second.new_public_key, "second")?;
+    assert_key_changed_log(
+        &localnet,
+        &second,
+        &first.replacement_recovery_phrase.phrase,
+        "second",
+    )?;
 
+    Ok(RepeatedKeyRotation {
+        context,
+        second,
+        between_rotations,
+    })
+}
+
+/// An independent wallet that encrypts comments to the rotating wallet.
+struct CommentSender {
+    address: TonAddressString,
+    client: Arc<WalletClient>,
+}
+
+impl CommentSender {
+    /// Encrypts a comment to the key the recipient's `get_public_key` reports now.
+    fn encrypt_to_on_chain_key(
+        &self,
+        context: &LocalnetRotationContext,
+        comment: &str,
+    ) -> Result<Boc, String> {
+        block_on(
+            self.client
+                .create_encrypted_comment(CreateEncryptedCommentRequest {
+                    recipient: context.wallet_address.clone(),
+                    comment: comment.to_owned(),
+                    recipient_public_key: None,
+                }),
+        )
+        .map_err(|error| format!("encrypting {comment:?} to the on-chain key failed: {error}"))
+    }
+}
+
+/// Imports the fixture's other wallet as a comment sender on the same localnet.
+///
+/// Encrypting needs no deployment or funds: the sender only resolves the
+/// recipient's key through the localnet provider and signs locally.
+fn comment_sender(context: &LocalnetRotationContext) -> Result<CommentSender, String> {
+    let phrase = std::str::from_utf8(test_wallet().other_recovery_phrase_bytes())
+        .map_err(|error| error.to_string())?;
+    let descriptor = block_on(context.lifecycle.import_wallet(ImportWalletRequest {
+        record_id: "localnet-comment-sender".to_owned(),
+        network: Network::Testnet,
+        recovery_words: phrase.split_whitespace().map(str::to_owned).collect(),
+    }))
+    .map_err(|error| error.to_string())?;
+    let address = descriptor.address.clone();
+    let client = localnet_wallet_client(
+        descriptor,
+        context.localnet.clone(),
+        context.platform_host.clone(),
+    )?;
+    Ok(CommentSender { address, client })
+}
+
+/// Checks the key-changed log of the wallet transaction that executed `rotation`.
+///
+/// The transaction must emit exactly one external-out message: opcode
+/// `0xEBA19948` followed by `sha256(new_seed ‖ "keyChangeSaltV1") XOR old_seed`.
+/// The expected value is computed here from the recovery phrases, without the
+/// engine's key-history code.
+fn assert_key_changed_log(
+    localnet: &LocalnetHttpHost,
+    rotation: &PreparedKeyRotation,
+    old_phrase: &str,
+    label: &str,
+) -> Result<(), String> {
+    let transactions = localnet.wallet_transactions()?;
+    let mut executed = transactions.iter().filter(|transaction| {
+        transaction.msgs.in_msg.as_ref().is_some_and(|message| {
+            change_key_request_public_key(&message.body.value)
+                .is_some_and(|key| key.as_slice() == rotation.new_public_key.as_slice())
+        })
+    });
+    let (Some(transaction), None) = (executed.next(), executed.next()) else {
+        return Err(format!(
+            "expected exactly one wallet transaction for the {label} rotation"
+        ));
+    };
+    if transaction_aborted(transaction) {
+        return Err(format!("the {label} rotation transaction was aborted"));
+    }
+    let logs = transaction
+        .msgs
+        .out_msgs
+        .iter()
+        .filter(|message| matches!(message.info, CommonMsgInfo::ExtOut(_)))
+        .collect::<Vec<_>>();
+    let [log] = logs.as_slice() else {
+        return Err(format!(
+            "expected the {label} rotation to emit exactly one external-out message, got {}",
+            logs.len()
+        ));
+    };
+    let logged =
+        parse_key_changed_log(log).map_err(|error| format!("{label} rotation: {error}"))?;
+
+    let (old_seed, _) = signing_seed(old_phrase)?;
+    let (new_seed, new_public_key) = signing_seed(&rotation.replacement_recovery_phrase.phrase)?;
+    if new_public_key.as_slice() != rotation.new_public_key.as_slice() {
+        return Err(format!(
+            "the {label} replacement phrase does not hold the installed signing key"
+        ));
+    }
+    let mask = Sha256::new()
+        .chain_update(new_seed)
+        .chain_update(KEY_CHANGE_SALT)
+        .finalize();
+    let expected = mask
+        .iter()
+        .zip(old_seed)
+        .map(|(mask, old)| mask ^ old)
+        .collect::<Vec<_>>();
+    if logged.as_slice() != expected.as_slice() {
+        return Err(format!(
+            "the {label} rotation logged an encrypted old key that is not sha256(new_seed ‖ salt) XOR old_seed"
+        ));
+    }
+    if logged == old_seed {
+        return Err(format!(
+            "the {label} rotation published the old key in plaintext"
+        ));
+    }
     Ok(())
+}
+
+/// Independently derives the Ed25519 seed and public key of a phrase's signing key.
+///
+/// A 12-word phrase signs with its anchor; a 24-word rotation phrase signs
+/// with words 13-24, which use the same derivation as the anchor half.
+fn signing_seed(phrase: &str) -> Result<([u8; 32], [u8; 32]), String> {
+    let words = phrase.split_whitespace().collect::<Vec<_>>();
+    let signing_half = match words.len() {
+        12 => words.join(" "),
+        24 => words
+            .get(12..)
+            .ok_or_else(|| "a 24-word phrase has a signing half".to_owned())?
+            .join(" "),
+        count => {
+            return Err(format!(
+                "expected a 12- or 24-word phrase, got {count} words"
+            ));
+        }
+    };
+    let key_pair = rotation_anchor_key_pair(&signing_half)?;
+    let seed = key_pair
+        .secret_key
+        .get(..32)
+        .and_then(|seed| <[u8; 32]>::try_from(seed).ok())
+        .ok_or_else(|| "an Ed25519 key pair starts with its 32-byte seed".to_owned())?;
+    Ok((seed, key_pair.public_key))
 }
 
 pub(crate) fn execute_uninitialized_key_rotation_deploys_with_zero_seqno_on_localnet()
@@ -208,6 +518,50 @@ pub(crate) fn execute_uninitialized_key_rotation_deploys_with_zero_seqno_on_loca
     assert_localnet_public_key(&localnet, &prepared.new_public_key, "initial deployment")?;
 
     Ok(())
+}
+
+/// A rotated 24-word phrase cannot deploy: the deployed contract would store
+/// the anchor key while the request is signed with words 13-24.
+pub(crate) fn execute_rotated_phrase_cannot_rotate_an_undeployed_wallet_on_localnet()
+-> Result<(), String> {
+    const REPLACEMENT_HALF: &str =
+        "clump left year void clutch tool case burden fix income champion lounge";
+    let platform_host = Arc::new(MemoryPlatformHost::default());
+    let lifecycle = WalletLifecycle::new(platform_host.clone());
+    let mut recovery_words = test_wallet().recovery_words();
+    recovery_words.extend(REPLACEMENT_HALF.split_whitespace().map(str::to_owned));
+    let descriptor = block_on(lifecycle.import_wallet(ImportWalletRequest {
+        record_id: "localnet-rotated-undeployed-key-rotation".to_owned(),
+        network: Network::Testnet,
+        recovery_words,
+    }))
+    .map_err(|error| error.to_string())?;
+    if descriptor.address.as_str() != test_wallet().testnet_address() {
+        return Err("the rotated phrase must keep the anchor address".to_owned());
+    }
+    let localnet = Arc::new(LocalnetHttpHost::start(
+        descriptor.address.as_str(),
+        "5000000000",
+    )?);
+    let client = localnet_wallet_client(descriptor, localnet.clone(), platform_host)?;
+
+    match prepare_external_rotation_result(&client).map(|_| "prepared rotation material") {
+        Err(WalletClientError::KeyRotationUnavailable { diagnostic })
+            if diagnostic.contains("requires an already deployed wallet") => {}
+        other => {
+            return Err(format!(
+                "expected a rejected rotation of an undeployed wallet, got {other:?}"
+            ));
+        }
+    }
+    if localnet.submitted_boc().is_some() {
+        return Err("a rejected rotation must not reach the provider".to_owned());
+    }
+    // The slot is released: the same client can still prepare other work.
+    match prepare_external_rotation_result(&client).map(|_| "prepared rotation material") {
+        Err(WalletClientError::KeyRotationUnavailable { .. }) => Ok(()),
+        other => Err(format!("expected the same rejection again, got {other:?}")),
+    }
 }
 
 pub(crate) fn execute_key_rotation_confirmation_after_restart_on_localnet() -> Result<(), String> {
@@ -389,11 +743,16 @@ fn localnet_key_rotation_fixture(record_id: &str) -> Result<LocalnetKeyRotationF
 }
 
 fn prepare_external_rotation(client: &WalletClient) -> Result<PreparedKeyRotation, String> {
+    prepare_external_rotation_result(client).map_err(|error| error.to_string())
+}
+
+fn prepare_external_rotation_result(
+    client: &WalletClient,
+) -> Result<PreparedKeyRotation, WalletClientError> {
     block_on(client.prepare_key_rotation(PrepareKeyRotationRequest {
         valid_until: u64::from(u32::MAX),
         message_kind: KeyRotationMessageKind::External,
     }))
-    .map_err(|error| error.to_string())
 }
 
 fn key_rotation_send_request(

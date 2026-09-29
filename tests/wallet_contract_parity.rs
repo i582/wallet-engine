@@ -180,3 +180,14 @@ fn wallet_trampoline_code_matches_published_hash() -> Result<(), Box<dyn Error>>
         "9149ae51c1e4689710cebf7830297b16acfbadb363a920a537893e7ffeeca768",
     )
 }
+
+/// The localnet fixture is the Wallet rev00 bytecode that emits the key-changed
+/// log with the encrypted old private key. Toncenter recognizes this code hash.
+#[test]
+fn localnet_wallet_bytecode_matches_the_key_change_log_revision() -> Result<(), Box<dyn Error>> {
+    let code = TonCell::from_boc_base64(include_str!("support/wallet_tg_rev00.code").trim())?;
+    assert_hash(
+        &code,
+        "e30911420bef1191c09dce58b9df2b4ca4c2d9c383cc3b6a91170349ffa70e2c",
+    )
+}

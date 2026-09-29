@@ -9,7 +9,8 @@
 //!
 //! - [`WalletLifecycle`] creates, imports, reveals, and deletes wallets.
 //! - [`WalletClient`] refreshes a wallet, loads activity, prepares or sends transfers and
-//!   caller-signed BOCs, and prepares key rotation with a fresh provider sequence number.
+//!   caller-signed BOCs, prepares key rotation with a fresh provider sequence number, and
+//!   decrypts encrypted comments with the current, anchor, or replaced signing keys.
 //! - [`TonConnectSession`] manages one encrypted native TON Connect session.
 //! - [`TonConnectDerivedSession`] is one `MTProto`-relayed TON Connect session with a derived key.
 //!

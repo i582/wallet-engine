@@ -2,6 +2,7 @@
 
 use futures::channel::oneshot;
 
+use crate::wallet::key_history::KeyChange;
 use crate::wallet::send::SendWorkflow;
 use crate::{
     HttpRequestId, WalletClientConfig, WalletClientError, WalletOperationOutcome, WalletSnapshot,
@@ -55,6 +56,11 @@ pub(super) struct State {
 
     /// Reports whether the provider can have another NFT page.
     pub(super) nfts_has_more: bool,
+
+    /// The provider's last reported key-change history of this wallet.
+    /// It holds only public data: installed public keys and old keys encrypted with their successors.
+    /// Comment decryption reuses it while it still contains the current signing key.
+    pub(super) key_changes: Option<Vec<KeyChange>>,
 
     /// The next provider request number for this client instance.
     /// Allocation never reuses a number, even when request construction later fails.

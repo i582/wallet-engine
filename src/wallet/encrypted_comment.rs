@@ -3,6 +3,7 @@
 use aes::Aes256;
 use aes::cipher::{BlockDecrypt, BlockEncrypt, KeyInit};
 use curve25519_dalek::edwards::CompressedEdwardsY;
+use ed25519_dalek::SigningKey;
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha512};
 use subtle::ConstantTimeEq as _;
@@ -11,7 +12,8 @@ use ton::ton_core::cell::TonCell;
 use ton::ton_core::traits::tlb::TLB as _;
 use zeroize::Zeroizing;
 
-use super::crypto::derive_wallet;
+use super::crypto::{RotationKeys, derive_rotation_keys, derive_wallet_public_state};
+use super::mnemonic::RotationMnemonic;
 use crate::{Boc, Network, TonAddressString};
 
 /// TON encrypted-comment message-body opcode.
@@ -54,7 +56,23 @@ pub(crate) enum EncryptedCommentError {
     CellEncoding,
 }
 
+impl EncryptedCommentError {
+    /// Reports whether the error means only that the tried key is not the one the body uses.
+    ///
+    /// A wrong own key yields either an invalid peer key after the XOR step or a
+    /// message-key mismatch. Every other error describes the body itself.
+    pub(crate) const fn is_key_mismatch(&self) -> bool {
+        matches!(
+            self,
+            Self::AuthenticationFailed | Self::InvalidPeerPublicKey
+        )
+    }
+}
+
 /// Encrypts a UTF-8 comment and returns the complete message-body BOC.
+///
+/// The sender key is the wallet's current signing key, the key its contract's
+/// `get_public_key` reports, so the header matches the on-chain sender key.
 pub(crate) fn encrypt_comment(
     mnemonic_bytes: &[u8],
     network: Network,
@@ -66,12 +84,7 @@ pub(crate) fn encrypt_comment(
         return Err(EncryptedCommentError::CommentTooLong);
     }
 
-    let wallet = wallet_for_comment(mnemonic_bytes, network, expected_sender)?;
-    let sender_seed = Zeroizing::new(
-        wallet.key_pair.secret_key[..PUBLIC_KEY_BYTES]
-            .try_into()
-            .map_err(|_| EncryptedCommentError::InvalidMnemonic)?,
-    );
+    let sender = comment_keys(mnemonic_bytes, network, expected_sender)?.signing;
     let recipient_public_key: [u8; PUBLIC_KEY_BYTES] = recipient_public_key
         .try_into()
         .map_err(|_| EncryptedCommentError::InvalidPeerPublicKey)?;
@@ -84,8 +97,8 @@ pub(crate) fn encrypt_comment(
         u8::try_from(prefix_length).map_err(|_| EncryptedCommentError::InvalidBody)?;
 
     encrypt_with_prefix(
-        &sender_seed,
-        wallet.key_pair.public_key,
+        sender.as_bytes(),
+        sender.verifying_key().to_bytes(),
         recipient_public_key,
         expected_sender,
         comment.as_bytes(),
@@ -93,22 +106,51 @@ pub(crate) fn encrypt_comment(
     )
 }
 
-/// Decrypts one complete encrypted-comment message-body BOC.
-pub(crate) fn decrypt_comment(
+/// Derives the anchor and current signing keys of this wallet's protected mnemonic.
+///
+/// Comments use the signing key current when they were sent: this engine
+/// encrypts with it, and other wallets encrypt to the key the contract's
+/// `get_public_key` reports. Comments sent before a rotation, and those
+/// encrypted to a supplied initial key, use the anchor or an earlier signing
+/// key. Only the anchor determines the wallet address, so the identity check
+/// does not depend on rotation.
+pub(crate) fn comment_keys(
     mnemonic_bytes: &[u8],
     network: Network,
     expected_wallet: &TonAddressString,
+) -> Result<RotationKeys, EncryptedCommentError> {
+    let mnemonic =
+        std::str::from_utf8(mnemonic_bytes).map_err(|_| EncryptedCommentError::InvalidMnemonic)?;
+    let mnemonic =
+        RotationMnemonic::parse(mnemonic).map_err(|_| EncryptedCommentError::InvalidMnemonic)?;
+    let keys = derive_rotation_keys(&mnemonic);
+    let (address, _) = derive_wallet_public_state(&keys.anchor.verifying_key().to_bytes(), network)
+        .map_err(|_| EncryptedCommentError::InvalidMnemonic)?;
+    if address != *expected_wallet.as_address() {
+        return Err(EncryptedCommentError::WalletIdentityMismatch);
+    }
+    Ok(keys)
+}
+
+/// Decrypts one complete encrypted-comment message-body BOC with the first
+/// key that authenticates it.
+///
+/// A key the body does not use fails the message-key check, so trying several
+/// keys never accepts a wrong plaintext. An error that describes the body
+/// itself stops the search. `AuthenticationFailed` means no key matched.
+pub(crate) fn decrypt_comment_with_keys<'a>(
+    keys: impl IntoIterator<Item = &'a SigningKey>,
     sender: &TonAddressString,
     body: &Boc,
 ) -> Result<String, EncryptedCommentError> {
-    let wallet = wallet_for_comment(mnemonic_bytes, network, expected_wallet)?;
-    let own_public_key = wallet.key_pair.public_key;
-    let own_seed = Zeroizing::new(
-        wallet.key_pair.secret_key[..PUBLIC_KEY_BYTES]
-            .try_into()
-            .map_err(|_| EncryptedCommentError::InvalidMnemonic)?,
-    );
-    decrypt_with_key(&own_seed, own_public_key, sender, body)
+    for key in keys {
+        match decrypt_with_key(key.as_bytes(), key.verifying_key().to_bytes(), sender, body) {
+            Ok(comment) => return Ok(comment),
+            Err(error) if error.is_key_mismatch() => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Err(EncryptedCommentError::AuthenticationFailed)
 }
 
 fn decrypt_with_key(
@@ -187,21 +229,6 @@ pub(crate) fn is_encrypted_comment_body(body: &TonCell) -> bool {
 
 pub(crate) fn validate_encrypted_comment_body(body: &Boc) -> Result<(), EncryptedCommentError> {
     encrypted_payload(body).map(|_| ())
-}
-
-fn wallet_for_comment(
-    mnemonic_bytes: &[u8],
-    network: Network,
-    expected_wallet: &TonAddressString,
-) -> Result<super::crypto::SensitiveWallet, EncryptedCommentError> {
-    let mnemonic =
-        std::str::from_utf8(mnemonic_bytes).map_err(|_| EncryptedCommentError::InvalidMnemonic)?;
-    let wallet =
-        derive_wallet(mnemonic, network).map_err(|_| EncryptedCommentError::InvalidMnemonic)?;
-    if wallet.address != *expected_wallet.as_address() {
-        return Err(EncryptedCommentError::WalletIdentityMismatch);
-    }
-    Ok(wallet)
 }
 
 fn encrypt_with_prefix(
@@ -434,9 +461,9 @@ fn decrypt_aes_256_cbc(
 mod tests {
     use base64::Engine as _;
     use base64::engine::general_purpose::STANDARD;
-    use ed25519_dalek::SigningKey;
     use ton::ton_core::cell::TonCell;
 
+    use super::super::crypto::derive_wallet;
     use super::*;
 
     const SENDER_SEED: [u8; 32] = [
@@ -584,6 +611,159 @@ mod tests {
         assert!(matches!(
             decrypt_with_key(&RECIPIENT_SEED, recipient_public, &sender, &tampered),
             Err(EncryptedCommentError::AuthenticationFailed)
+        ));
+    }
+
+    fn prefix_for(comment: &[u8]) -> Vec<u8> {
+        let length = padded_prefix_length(comment.len()).expect("prefix length");
+        let mut prefix = vec![0_u8; length];
+        prefix[0] = length as u8;
+        prefix
+    }
+
+    #[test]
+    fn candidate_keys_are_tried_until_one_authenticates() {
+        let sender = TonAddressString::try_from(ADDRESS).expect("valid sender");
+        let sender_key = SigningKey::from_bytes(&SENDER_SEED);
+        let recipient_key = SigningKey::from_bytes(&RECIPIENT_SEED);
+        let unrelated: Vec<SigningKey> = (1_u8..=4)
+            .map(|byte| SigningKey::from_bytes(&[byte; 32]))
+            .collect();
+        let body = encrypt_with_prefix(
+            &SENDER_SEED,
+            sender_key.verifying_key().to_bytes(),
+            recipient_key.verifying_key().to_bytes(),
+            &sender,
+            b"old key",
+            &prefix_for(b"old key"),
+        )
+        .expect("comment encrypts");
+
+        assert_eq!(
+            decrypt_comment_with_keys(unrelated.iter().chain([&recipient_key]), &sender, &body)
+                .expect("the matching key decrypts"),
+            "old key"
+        );
+        assert_eq!(
+            decrypt_comment_with_keys([&sender_key], &sender, &body)
+                .expect("the sender decrypts its own comment"),
+            "old key"
+        );
+        assert!(matches!(
+            decrypt_comment_with_keys(&unrelated, &sender, &body),
+            Err(EncryptedCommentError::AuthenticationFailed)
+        ));
+        assert!(matches!(
+            decrypt_comment_with_keys(std::iter::empty(), &sender, &body),
+            Err(EncryptedCommentError::AuthenticationFailed)
+        ));
+        let other_sender = TonAddressString::try_from(
+            "0:2222222222222222222222222222222222222222222222222222222222222222",
+        )
+        .expect("valid sender");
+        assert!(
+            matches!(
+                decrypt_comment_with_keys([&recipient_key], &other_sender, &body),
+                Err(EncryptedCommentError::AuthenticationFailed)
+            ),
+            "the sender address stays authenticated salt"
+        );
+    }
+
+    #[test]
+    fn a_body_error_after_authentication_stops_the_key_search() {
+        let sender = TonAddressString::try_from(ADDRESS).expect("valid sender");
+        let recipient_key = SigningKey::from_bytes(&RECIPIENT_SEED);
+        let body = encrypt_with_prefix(
+            &SENDER_SEED,
+            SigningKey::from_bytes(&SENDER_SEED)
+                .verifying_key()
+                .to_bytes(),
+            recipient_key.verifying_key().to_bytes(),
+            &sender,
+            &[0xff, 0xfe],
+            &prefix_for(&[0xff, 0xfe]),
+        )
+        .expect("comment encrypts");
+
+        assert!(matches!(
+            decrypt_comment_with_keys(
+                [&recipient_key, &SigningKey::from_bytes(&SENDER_SEED)],
+                &sender,
+                &body
+            ),
+            Err(EncryptedCommentError::InvalidUtf8)
+        ));
+        assert!(EncryptedCommentError::AuthenticationFailed.is_key_mismatch());
+        assert!(EncryptedCommentError::InvalidPeerPublicKey.is_key_mismatch());
+        assert!(!EncryptedCommentError::InvalidBody.is_key_mismatch());
+        assert!(!EncryptedCommentError::InvalidUtf8.is_key_mismatch());
+    }
+
+    #[test]
+    fn a_rotated_wallet_sends_with_its_current_signing_key() {
+        let rotated = "notice tortoise soup strong gun divide offer process salon siren general carry clump left year void clutch tool case burden fix income champion lounge";
+        let wallet = derive_wallet(rotated, Network::Testnet).expect("wallet derives");
+        let address = TonAddressString::from_address(&wallet.address, Network::Testnet);
+        let recipient_key = SigningKey::from_bytes(&RECIPIENT_SEED);
+        let recipient_public = recipient_key.verifying_key().to_bytes();
+
+        let body = encrypt_comment(
+            rotated.as_bytes(),
+            Network::Testnet,
+            &address,
+            &recipient_public,
+            "from the signing key",
+        )
+        .expect("comment encrypts");
+
+        let payload = encrypted_payload(&body).expect("payload parses");
+        let sender_public: [u8; 32] =
+            std::array::from_fn(|index| payload[index] ^ recipient_public[index]);
+        assert_eq!(sender_public, wallet.signing_public_key());
+        assert_ne!(sender_public, wallet.key_pair.public_key);
+        assert_eq!(
+            decrypt_comment_with_keys([&recipient_key], &address, &body)
+                .expect("the recipient decrypts"),
+            "from the signing key"
+        );
+        let keys = comment_keys(rotated.as_bytes(), Network::Testnet, &address).expect("keys");
+        assert_eq!(
+            decrypt_comment_with_keys([&keys.signing], &address, &body)
+                .expect("the sender decrypts its own comment"),
+            "from the signing key"
+        );
+        assert!(matches!(
+            decrypt_comment_with_keys([&keys.anchor], &address, &body),
+            Err(EncryptedCommentError::AuthenticationFailed)
+        ));
+    }
+
+    #[test]
+    fn comment_keys_return_both_halves_of_a_rotated_phrase() {
+        let rotated = "notice tortoise soup strong gun divide offer process salon siren general carry clump left year void clutch tool case burden fix income champion lounge";
+        let wallet = derive_wallet(rotated, Network::Testnet).expect("wallet derives");
+        let address = TonAddressString::from_address(&wallet.address, Network::Testnet);
+
+        let keys = comment_keys(rotated.as_bytes(), Network::Testnet, &address)
+            .expect("keys derive for the own wallet");
+
+        assert_eq!(
+            keys.anchor.verifying_key().to_bytes(),
+            wallet.key_pair.public_key
+        );
+        assert_eq!(
+            keys.signing.verifying_key().to_bytes(),
+            wallet.signing_public_key()
+        );
+        assert_ne!(keys.anchor.as_bytes(), keys.signing.as_bytes());
+        assert!(matches!(
+            comment_keys(rotated.as_bytes(), Network::Mainnet, &address),
+            Err(EncryptedCommentError::WalletIdentityMismatch)
+        ));
+        assert!(matches!(
+            comment_keys(b"not a phrase", Network::Testnet, &address),
+            Err(EncryptedCommentError::InvalidMnemonic)
         ));
     }
 }

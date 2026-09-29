@@ -5,6 +5,7 @@
 
 pub(crate) mod crypto;
 pub(crate) mod encrypted_comment;
+pub(crate) mod key_history;
 pub(crate) mod key_rotation;
 pub(crate) mod mnemonic;
 mod mnemonic_scheme;
@@ -196,6 +197,14 @@ pub struct PrepareKeyRotationRequest {
 /// storage. It must store `signed_boc` as a pending durable record. Words 13-24
 /// are the new signing half. Until chain state resolves the request, the host
 /// must block ordinary signing.
+///
+/// The signed request also carries `encryptedOldPrivateKey`, computed over
+/// 32-byte Ed25519 seeds as
+/// `sha256(new_private_key ‖ "keyChangeSaltV1") XOR old_private_key`, where the
+/// old key is the signing key being replaced. Only the new key opens it. The
+/// contract publishes it in its key-changed log, so
+/// [`crate::WalletClient::decrypt_comment`] can later recover the replaced key.
+/// The engine adds it to `signed_boc`; the host handles nothing extra.
 #[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct PreparedKeyRotation {
@@ -204,6 +213,9 @@ pub struct PreparedKeyRotation {
     /// New raw 32-byte Ed25519 signing public key stored by the contract on success.
     pub new_public_key: Vec<u8>,
     /// Complete external or relaxed internal signed message as a validated BOC.
+    ///
+    /// Its `ChangePublicKey` request holds two references: the new key's
+    /// wallet-address proof signature and the encrypted old private key.
     pub signed_boc: Boc,
     /// Sequence number covered by the signed request.
     pub seqno: u32,

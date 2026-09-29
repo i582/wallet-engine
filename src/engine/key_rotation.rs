@@ -20,9 +20,21 @@ impl WalletClient {
     ///
     /// The client first fetches fresh account state through its configured
     /// provider. Active wallets use the on-chain `seqno` getter, while an
-    /// account without deployed contract code uses sequence number zero. The
-    /// client then asks the host to unlock the protected phrase. It does not
-    /// update protected storage and does not submit the returned BOC.
+    /// account without deployed contract code uses sequence number zero and
+    /// attaches anchor-based `StateInit`; only the initial 12-word phrase can
+    /// sign such a deploying request, so a post-rotation phrase then fails with
+    /// `KeyRotationUnavailable`. The client then asks the host to unlock the
+    /// protected phrase. It does not update protected storage and does not
+    /// submit the returned BOC.
+    ///
+    /// The request, signed with the current signing key, carries the new key's
+    /// wallet-address proof signature and the current signing key encrypted
+    /// with the new one as
+    /// `sha256(new_private_key ‖ "keyChangeSaltV1") XOR old_private_key`.
+    /// The contract revision with bytecode hash
+    /// `e30911420bef1191c09dce58b9df2b4ca4c2d9c383cc3b6a91170349ffa70e2c`
+    /// publishes that value in its key-changed log, which lets
+    /// [`WalletClient::decrypt_comment`] recover the replaced key later.
     pub async fn prepare_key_rotation(
         &self,
         request: PrepareKeyRotationRequest,
@@ -146,6 +158,10 @@ impl WalletClient {
             KeyRotationError::ExpirationOutOfRange => {
                 self.fail_key_rotation(generation, "the expiration timestamp exceeds uint32")
             }
+            KeyRotationError::RotatedWalletRequiresActiveAccount => self.fail_key_rotation(
+                generation,
+                "a rotated recovery phrase requires an already deployed wallet",
+            ),
             KeyRotationError::Preparation => self.fail_key_rotation(
                 generation,
                 "failed to generate, sign, or serialize key-rotation data",

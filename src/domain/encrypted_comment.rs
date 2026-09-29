@@ -44,6 +44,13 @@ pub struct EncryptedCommentRecipientRequest {
 }
 
 /// Requests explicit decryption of one encrypted-comment message body.
+///
+/// [`crate::WalletClient::decrypt_comment`] reads the protected mnemonic once
+/// and tries the current signing key, then the anchor key, without any HTTP
+/// request. When neither matches and the wallet has rotated its key, it reads
+/// the wallet's `change_wallet_key` history from Toncenter v3, recovers each
+/// earlier signing key from the encrypted old key its rotation published, and
+/// tries those keys. Recovered keys never leave the call.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct DecryptCommentRequest {
@@ -51,7 +58,7 @@ pub struct DecryptCommentRequest {
     ///
     /// TON binds this bounceable, URL-safe, non-test-only address to the
     /// authentication tag. For an incoming activity item this is its
-    /// `counterparty`.
+    /// `counterparty`; for an outgoing item it is this wallet's address.
     pub sender: TonAddressString,
     /// Complete message-body cell encoded as a Base64 BOC.
     pub body: Boc,

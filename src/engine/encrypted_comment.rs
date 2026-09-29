@@ -1,11 +1,15 @@
 //! Explicit encrypted-comment preparation and decryption workflows.
 
+use ed25519_dalek::SigningKey;
+
 use crate::domain::{SecretAccessReason, bounded_diagnostic};
 use crate::transport::build_toncenter_v2_request;
+use crate::wallet::crypto::RotationKeys;
 use crate::wallet::encrypted_comment::{
-    EncryptedCommentError, MAX_ENCRYPTED_COMMENT_BYTES, decrypt_comment as decrypt_body,
+    EncryptedCommentError, MAX_ENCRYPTED_COMMENT_BYTES, comment_keys, decrypt_comment_with_keys,
     encrypt_comment as encrypt_body, validate_encrypted_comment_body,
 };
+use crate::wallet::key_history::{KeyChange, recover_signing_keys};
 use crate::wallet::recipient_public_key::verify_recipient_public_key;
 use crate::{
     AccountStatus, Boc, CreateEncryptedCommentRequest, DecryptCommentRequest,
@@ -14,6 +18,9 @@ use crate::{
 };
 
 use super::WalletClient;
+use super::key_history::{
+    MAX_KEY_CHANGE_PAGES, build_key_change_request, history_reaches, parse_key_change_page,
+};
 use super::provider::parse_account;
 use super::send_http::{PublicKeyAnswer, build_public_key_request, parse_public_key};
 use super::send_state::SensitiveBytes;
@@ -33,7 +40,8 @@ impl WalletClient {
     ///
     /// The engine uses the supplied recipient public key or calls the recipient
     /// wallet's `get_public_key` get-method, then asks the platform host to
-    /// authorize this wallet's protected mnemonic.
+    /// authorize this wallet's protected mnemonic. The sender key is this
+    /// wallet's current signing key.
     /// A supplied key must locally derive the recipient's address using supported
     /// default wallet parameters. Verification happens before secret authorization.
     /// No secret is requested when the comment is already too large.
@@ -165,6 +173,22 @@ impl WalletClient {
     ///
     /// The caller supplies the sender address because TON uses its bounceable,
     /// URL-safe, non-test-only representation as authenticated salt.
+    ///
+    /// The body may use any signing key this wallet ever had. The engine first
+    /// tries the current signing key and the anchor key, which the recovery
+    /// phrase holds, without any HTTP request. When neither matches and the
+    /// wallet has rotated its key, the engine reads the wallet's
+    /// `change_wallet_key` actions from Toncenter v3, recovers each earlier
+    /// signing key from the encrypted old key its rotation published, and tries
+    /// those. The secret is read once per call and recovered keys never leave
+    /// it. The history holds no secret; later calls reuse it while it still
+    /// contains the rotation that installed the current signing key.
+    ///
+    /// `EncryptedCommentLookupFailed` means the provider did not answer or did
+    /// not return a history that reaches the current signing key yet; a retry
+    /// can succeed.
+    /// `EncryptedCommentUnavailable` means no key of this wallet decrypts the
+    /// body or the body is malformed.
     pub async fn decrypt_comment(
         &self,
         request: DecryptCommentRequest,
@@ -208,21 +232,114 @@ impl WalletClient {
                 .map_err(|error| self.fail_encrypted_comment(generation, error.to_string()))?,
         );
         self.ensure_encrypted_comment_current(generation)?;
-        let comment = match decrypt_body(
-            secret.as_slice(),
-            config.network,
-            &config.address,
-            &request.sender,
-            &request.body,
-        ) {
-            Ok(comment) => comment,
+        let keys = match comment_keys(secret.as_slice(), config.network, &config.address) {
+            Ok(keys) => keys,
             Err(EncryptedCommentError::InvalidMnemonic) => {
                 return Err(self.finish_invalid_protected_secret(generation));
             }
             Err(error) => return Err(self.fail_encrypted_comment(generation, error.to_string())),
         };
+        drop(secret);
+        let RotationKeys { anchor, signing } = keys;
+        let anchor_public_key = anchor.verifying_key().to_bytes();
+        let signing_public_key = signing.verifying_key().to_bytes();
+        let rotated = anchor_public_key != signing_public_key;
+
+        let mut own_keys: Vec<&SigningKey> = vec![&signing];
+        if rotated {
+            own_keys.push(&anchor);
+        }
+        match decrypt_comment_with_keys(own_keys, &request.sender, &request.body) {
+            Ok(comment) => {
+                self.complete_encrypted_comment_operation(generation)?;
+                return Ok(comment);
+            }
+            Err(error) if rotated && error.is_key_mismatch() => {}
+            Err(error) => return Err(self.fail_encrypted_comment(generation, error.to_string())),
+        }
+        drop(anchor);
+
+        // Only earlier signing keys remain. They are recovered from public
+        // history with the current key, which stays in memory until then.
+        let changes = self
+            .key_change_history(generation, &signing_public_key)
+            .await?;
+        if !history_reaches(&changes, &signing_public_key) {
+            return Err(self.fail_encrypted_comment_lookup(
+                generation,
+                "the provider's key-change history does not include the current signing key yet",
+            ));
+        }
+        let earlier_keys = recover_signing_keys(&anchor_public_key, &signing, &changes);
+        drop(signing);
+        let comment = match decrypt_comment_with_keys(&earlier_keys, &request.sender, &request.body)
+        {
+            Ok(comment) => comment,
+            Err(error) => {
+                return Err(self.fail_encrypted_comment(generation, error.to_string()));
+            }
+        };
         self.complete_encrypted_comment_operation(generation)?;
         Ok(comment)
+    }
+}
+
+impl WalletClient {
+    /// Returns this wallet's key-change history while `generation` holds the
+    /// resolution slot.
+    ///
+    /// A cached history that already contains the rotation installing
+    /// `current_public_key` is complete for every older key and is reused.
+    /// Otherwise the engine reads all pages again and caches the result. Every
+    /// failure releases the slot.
+    async fn key_change_history(
+        &self,
+        generation: u64,
+        current_public_key: &[u8; 32],
+    ) -> Result<Vec<KeyChange>, WalletClientError> {
+        {
+            let state = self.lock()?;
+            if let Some(changes) = &state.key_changes
+                && history_reaches(changes, current_public_key)
+            {
+                return Ok(changes.clone());
+            }
+        }
+
+        let mut changes = Vec::new();
+        let mut offset = 0_usize;
+        for _ in 0..MAX_KEY_CHANGE_PAGES {
+            let (request, address) = {
+                let built = self.lock().and_then(|mut state| {
+                    if !state.is_current(OperationFamily::Resolution, generation) {
+                        return Err(WalletClientError::StateUnavailable);
+                    }
+                    let id = state.allocate_request_id()?;
+                    let request = build_key_change_request(&state.config, id, offset)?;
+                    Ok((request, state.config.address.clone()))
+                });
+                built.inspect_err(|_| self.discard_encrypted_comment_operation(generation))?
+            };
+            let body = self
+                .execute_encrypted_comment_request(generation, &request)
+                .await?;
+            let page = parse_key_change_page(&body, &address).map_err(|error| {
+                self.fail_encrypted_comment_lookup(generation, error.developer_message)
+            })?;
+            offset = offset.saturating_add(page.raw_count);
+            let has_more = page.has_more();
+            changes.extend(page.changes);
+            if !has_more {
+                break;
+            }
+        }
+
+        let mut state = self.lock()?;
+        if !state.is_current(OperationFamily::Resolution, generation) {
+            return Err(WalletClientError::StateUnavailable);
+        }
+        state.key_changes = Some(changes.clone());
+        Ok(changes)
     }
 }
 
@@ -299,10 +416,11 @@ impl WalletClient {
         };
 
         let body = self
-            .execute_recipient_request(generation, &account_request)
+            .execute_encrypted_comment_request(generation, &account_request)
             .await?;
-        let account = parse_account(&body)
-            .map_err(|error| self.fail_recipient_lookup(generation, error.developer_message))?;
+        let account = parse_account(&body).map_err(|error| {
+            self.fail_encrypted_comment_lookup(generation, error.developer_message)
+        })?;
         match account.status {
             AccountStatus::Active => {}
             AccountStatus::Nonexistent | AccountStatus::Uninitialized => {
@@ -318,7 +436,7 @@ impl WalletClient {
                 ));
             }
             AccountStatus::Unknown => {
-                return Err(self.fail_recipient_lookup(
+                return Err(self.fail_encrypted_comment_lookup(
                     generation,
                     "the provider returned an unrecognized recipient account state",
                 ));
@@ -326,18 +444,20 @@ impl WalletClient {
         }
 
         let body = self
-            .execute_recipient_request(generation, &public_key_request)
+            .execute_encrypted_comment_request(generation, &public_key_request)
             .await?;
         match parse_public_key(&body) {
             Ok(PublicKeyAnswer::Key(key)) => Ok(key),
             Ok(PublicKeyAnswer::NoKey(reason)) => {
                 Err(self.fail_encrypted_comment(generation, reason))
             }
-            Err(error) => Err(self.fail_recipient_lookup(generation, error.developer_message)),
+            Err(error) => {
+                Err(self.fail_encrypted_comment_lookup(generation, error.developer_message))
+            }
         }
     }
 
-    async fn execute_recipient_request(
+    async fn execute_encrypted_comment_request(
         &self,
         generation: u64,
         request: &HttpRequest,
@@ -347,7 +467,9 @@ impl WalletClient {
             .await
         {
             Ok(Ok(body)) => Ok(body),
-            Ok(Err(error)) => Err(self.fail_recipient_lookup(generation, error.developer_message)),
+            Ok(Err(error)) => {
+                Err(self.fail_encrypted_comment_lookup(generation, error.developer_message))
+            }
             Err(error) => {
                 self.discard_encrypted_comment_operation(generation);
                 Err(error)
@@ -355,7 +477,7 @@ impl WalletClient {
         }
     }
 
-    fn fail_recipient_lookup(
+    fn fail_encrypted_comment_lookup(
         &self,
         generation: u64,
         message: impl AsRef<str>,
@@ -682,14 +804,11 @@ mod tests {
         )
         .expect("comment encrypts with the supplied key");
 
-        let plaintext = decrypt_body(
-            RECIPIENT_MNEMONIC.as_bytes(),
-            Network::Testnet,
-            &recipient,
-            &source,
-            &body,
-        )
-        .expect("recipient decrypts the comment");
+        let recipient_keys =
+            comment_keys(RECIPIENT_MNEMONIC.as_bytes(), Network::Testnet, &recipient)
+                .expect("recipient keys derive");
+        let plaintext = decrypt_comment_with_keys([&recipient_keys.signing], &source, &body)
+            .expect("recipient decrypts the comment");
         assert_eq!(plaintext, "secret for an undeployed wallet");
         assert!(http.requests.lock().expect("request lock").is_empty());
         assert_eq!(
@@ -1022,5 +1141,475 @@ mod tests {
             assert!(platform.reasons.lock().expect("reason lock").is_empty());
             assert!(slot_released(&client));
         }
+    }
+
+    /// Key-change history fixtures: the anchor half of [`MNEMONIC`], the lost
+    /// signing half K1 (words 13-24 of [`MNEMONIC`]), and the current half K2.
+    mod history {
+        use std::collections::VecDeque;
+
+        use super::*;
+        use crate::wallet::crypto::{RotationKeys, derive_half_key, derive_rotation_keys};
+        use crate::wallet::encrypted_comment::encrypt_comment;
+        use crate::wallet::key_history::encrypt_old_private_key;
+        use crate::wallet::mnemonic::{Bip39Half, RotationMnemonic};
+
+        const SENDER_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+        pub(super) struct Keys {
+            pub(super) anchor: SigningKey,
+            pub(super) lost: SigningKey,
+            pub(super) current: SigningKey,
+            pub(super) current_phrase: String,
+        }
+
+        pub(super) fn keys() -> Keys {
+            let rotated = RotationMnemonic::parse(MNEMONIC).expect("fixture parses");
+            let RotationKeys { anchor, signing } = derive_rotation_keys(&rotated);
+            let current_half = Bip39Half::from_entropy(&[0x42; 16]).expect("fixed entropy encodes");
+            let current_phrase = format!(
+                "{} {}",
+                rotated.anchor().to_phrase().as_str(),
+                current_half.to_phrase().as_str()
+            );
+            Keys {
+                anchor,
+                lost: signing,
+                current: derive_half_key(&current_half),
+                current_phrase,
+            }
+        }
+
+        fn hex(bytes: &[u8]) -> String {
+            bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+        }
+
+        pub(super) fn rotation(
+            wallet: &TonAddressString,
+            old: &SigningKey,
+            new: &SigningKey,
+        ) -> serde_json::Value {
+            serde_json::json!({
+                "action_id": hex(&new.verifying_key().to_bytes()),
+                "success": true,
+                "type": "change_wallet_key",
+                "details": {
+                    "source": null,
+                    "destination": wallet.as_str(),
+                    "new_public_key": hex(&new.verifying_key().to_bytes()),
+                    "rotation_signature": null,
+                    "encrypted_old_private_key": hex(&encrypt_old_private_key(old, new)),
+                }
+            })
+        }
+
+        pub(super) fn full_history(
+            wallet: &TonAddressString,
+            keys: &Keys,
+        ) -> Vec<serde_json::Value> {
+            vec![
+                rotation(wallet, &keys.lost, &keys.current),
+                rotation(wallet, &keys.anchor, &keys.lost),
+            ]
+        }
+
+        pub(super) fn page(actions: Vec<serde_json::Value>) -> Vec<u8> {
+            serde_json::to_vec(&serde_json::json!({
+                "actions": actions,
+                "address_book": {},
+                "metadata": {}
+            }))
+            .expect("page JSON")
+        }
+
+        pub(super) fn sender() -> TonAddressString {
+            let wallet = derive_wallet(SENDER_MNEMONIC, Network::Testnet).expect("sender derives");
+            TonAddressString::from_address(&wallet.address, Network::Testnet)
+        }
+
+        /// A comment from [`SENDER_MNEMONIC`] encrypted to `recipient`.
+        pub(super) fn comment_to(recipient: &SigningKey, text: &str) -> Boc {
+            encrypt_comment(
+                SENDER_MNEMONIC.as_bytes(),
+                Network::Testnet,
+                &sender(),
+                &recipient.verifying_key().to_bytes(),
+                text,
+            )
+            .expect("comment encrypts")
+        }
+
+        pub(super) enum Reply {
+            Page(Vec<u8>),
+            Status(u16),
+            HostFailure,
+        }
+
+        /// Answers only `/api/v3/actions`, with scripted replies in order.
+        pub(super) struct HistoryHost {
+            pub(super) replies: Mutex<VecDeque<Reply>>,
+            pub(super) requests: Mutex<Vec<HttpRequest>>,
+        }
+
+        impl HistoryHost {
+            pub(super) fn new(replies: Vec<Reply>) -> Arc<Self> {
+                Arc::new(Self {
+                    replies: Mutex::new(replies.into()),
+                    requests: Mutex::new(Vec::new()),
+                })
+            }
+
+            pub(super) fn urls(&self) -> Vec<String> {
+                self.requests
+                    .lock()
+                    .expect("request lock")
+                    .iter()
+                    .map(|request| request.url.clone())
+                    .collect()
+            }
+
+            pub(super) fn push(&self, reply: Reply) {
+                self.replies.lock().expect("reply lock").push_back(reply);
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl WalletHttpHost for HistoryHost {
+            async fn execute_http(
+                &self,
+                request: HttpRequest,
+            ) -> Result<HttpResponse, HttpHostError> {
+                self.requests
+                    .lock()
+                    .expect("request lock")
+                    .push(request.clone());
+                assert!(
+                    request.url.contains("/api/v3/actions?"),
+                    "unexpected request {}",
+                    request.url
+                );
+                let reply = self
+                    .replies
+                    .lock()
+                    .expect("reply lock")
+                    .pop_front()
+                    .expect("a scripted reply");
+                match reply {
+                    Reply::Page(body) => Ok(response(request, 200, body)),
+                    Reply::Status(status) => Ok(response(request, status, b"{}".to_vec())),
+                    Reply::HostFailure => Err(HttpHostError::Failed {
+                        kind: HttpHostErrorKind::Offline,
+                        diagnostic: "scripted offline".to_owned(),
+                    }),
+                }
+            }
+
+            async fn cancel_http(&self, _request_id: HttpRequestId) {}
+        }
+
+        /// Returns `phrase` for every secret read and records each reason.
+        pub(super) struct PhraseHost {
+            pub(super) phrase: String,
+            pub(super) reasons: Mutex<Vec<SecretAccessReason>>,
+        }
+
+        impl PhraseHost {
+            pub(super) fn new(phrase: &str) -> Arc<Self> {
+                Arc::new(Self {
+                    phrase: phrase.to_owned(),
+                    reasons: Mutex::new(Vec::new()),
+                })
+            }
+
+            pub(super) fn reads(&self) -> usize {
+                self.reasons.lock().expect("reason lock").len()
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl WalletPlatformHost for PhraseHost {
+            async fn read_protected_secret(
+                &self,
+                request: ProtectedSecretRead,
+            ) -> Result<Vec<u8>, ProtectedSecretHostError> {
+                self.reasons
+                    .lock()
+                    .expect("reason lock")
+                    .push(request.reason);
+                Ok(self.phrase.as_bytes().to_vec())
+            }
+
+            async fn store_protected_secret(
+                &self,
+                _request: ProtectedSecretStore,
+            ) -> Result<(), ProtectedSecretHostError> {
+                panic!("not used by encrypted comments")
+            }
+
+            async fn delete_protected_secret(
+                &self,
+                _secret_ref: ProtectedSecretRef,
+            ) -> Result<(), ProtectedSecretHostError> {
+                panic!("not used by encrypted comments")
+            }
+
+            async fn load_journal(
+                &self,
+                _key: JournalKey,
+            ) -> Result<Option<JournalRecord>, JournalHostError> {
+                panic!("not used by encrypted comments")
+            }
+
+            async fn compare_exchange_journal(
+                &self,
+                _mutation: JournalCompareExchange,
+            ) -> Result<JournalCompareExchangeResult, JournalHostError> {
+                panic!("not used by encrypted comments")
+            }
+        }
+    }
+
+    fn decrypt(client: &WalletClient, body: Boc) -> Result<String, WalletClientError> {
+        block_on(client.decrypt_comment(DecryptCommentRequest {
+            sender: history::sender(),
+            body,
+        }))
+    }
+
+    #[test]
+    fn a_rotated_wallet_decrypts_its_current_and_anchor_keys_without_history() {
+        let keys = history::keys();
+        let http = history::HistoryHost::new(Vec::new());
+        let platform = history::PhraseHost::new(&keys.current_phrase);
+        let client =
+            WalletClient::new(client_config(), http.clone(), platform.clone()).expect("client");
+
+        let current = decrypt(
+            &client,
+            history::comment_to(&keys.current, "to the current key"),
+        )
+        .expect("the current signing key decrypts");
+        let anchor = decrypt(
+            &client,
+            history::comment_to(&keys.anchor, "to the anchor key"),
+        )
+        .expect("the anchor key decrypts");
+
+        assert_eq!(current, "to the current key");
+        assert_eq!(anchor, "to the anchor key");
+        assert!(http.urls().is_empty(), "{:?}", http.urls());
+        assert_eq!(platform.reads(), 2);
+        assert!(slot_released(&client));
+    }
+
+    #[test]
+    fn a_lost_signing_key_is_recovered_from_the_key_change_history() {
+        let keys = history::keys();
+        let config = client_config();
+        let wallet = config.address.clone();
+        let relayed_for_another_wallet = history::rotation(
+            &TonAddressString::try_from(RECIPIENT).expect("recipient"),
+            &keys.current,
+            &SigningKey::from_bytes(&[9; 32]),
+        );
+        let mut actions = vec![relayed_for_another_wallet];
+        actions.extend(history::full_history(&wallet, &keys));
+        let http = history::HistoryHost::new(vec![history::Reply::Page(history::page(actions))]);
+        let platform = history::PhraseHost::new(&keys.current_phrase);
+        let client = WalletClient::new(config, http.clone(), platform.clone()).expect("client");
+
+        let first = decrypt(
+            &client,
+            history::comment_to(&keys.lost, "sent before rotation"),
+        )
+        .expect("the recovered key decrypts");
+        let second = decrypt(&client, history::comment_to(&keys.lost, "another old one"))
+            .expect("the cached history is reused");
+
+        assert_eq!(first, "sent before rotation");
+        assert_eq!(second, "another old one");
+        assert_eq!(
+            http.urls(),
+            [format!(
+                "https://provider.example/api/v3/actions?account={}&action_type=change_wallet_key&limit=100&offset=0&sort=desc",
+                wallet.as_str()
+            )],
+            "one history read serves both comments"
+        );
+        assert_eq!(
+            *platform.reasons.lock().expect("reason lock"),
+            [
+                SecretAccessReason::DecryptComment,
+                SecretAccessReason::DecryptComment
+            ]
+        );
+        assert!(slot_released(&client));
+    }
+
+    #[test]
+    fn the_history_is_read_page_by_page() {
+        let keys = history::keys();
+        let config = client_config();
+        let wallet = config.address.clone();
+        let failed = serde_json::json!({
+            "success": false,
+            "type": "change_wallet_key",
+            "details": { "destination": wallet.as_str() }
+        });
+        let http = history::HistoryHost::new(vec![
+            history::Reply::Page(history::page(vec![failed; 100])),
+            history::Reply::Page(history::page(history::full_history(&wallet, &keys))),
+        ]);
+        let platform = history::PhraseHost::new(&keys.current_phrase);
+        let client = WalletClient::new(config, http.clone(), platform).expect("client");
+
+        let comment = decrypt(&client, history::comment_to(&keys.lost, "on page two"))
+            .expect("the second page completes the history");
+
+        assert_eq!(comment, "on page two");
+        let urls = http.urls();
+        assert_eq!(urls.len(), 2);
+        assert!(urls[0].contains("&offset=0&"), "{}", urls[0]);
+        assert!(urls[1].contains("&offset=100&"), "{}", urls[1]);
+    }
+
+    #[test]
+    fn a_history_without_the_current_key_is_a_retryable_lookup_failure() {
+        let keys = history::keys();
+        let config = client_config();
+        let wallet = config.address.clone();
+        let lagging = vec![history::rotation(&wallet, &keys.anchor, &keys.lost)];
+        let http = history::HistoryHost::new(vec![history::Reply::Page(history::page(lagging))]);
+        let platform = history::PhraseHost::new(&keys.current_phrase);
+        let client = WalletClient::new(config, http.clone(), platform).expect("client");
+        let body = history::comment_to(&keys.lost, "indexed later");
+
+        let error = decrypt(&client, body.clone()).expect_err("the history lags");
+        assert!(
+            matches!(
+                error,
+                WalletClientError::EncryptedCommentLookupFailed { .. }
+            ),
+            "{error:?}"
+        );
+        assert!(slot_released(&client));
+
+        http.push(history::Reply::Page(history::page(history::full_history(
+            &wallet, &keys,
+        ))));
+        let comment = decrypt(&client, body).expect("a retry reads the history again");
+
+        assert_eq!(comment, "indexed later");
+        assert_eq!(http.urls().len(), 2);
+    }
+
+    #[test]
+    fn a_provider_failure_while_reading_history_releases_the_slot() {
+        let keys = history::keys();
+        for reply in [
+            history::Reply::HostFailure,
+            history::Reply::Status(500),
+            history::Reply::Page(b"{\"error\":\"unsupported\"}".to_vec()),
+        ] {
+            let http = history::HistoryHost::new(vec![reply]);
+            let platform = history::PhraseHost::new(&keys.current_phrase);
+            let client =
+                WalletClient::new(client_config(), http.clone(), platform).expect("client");
+
+            let error = decrypt(
+                &client,
+                history::comment_to(&keys.lost, "unreadable for now"),
+            )
+            .expect_err("the history is unavailable");
+
+            assert!(
+                matches!(
+                    error,
+                    WalletClientError::EncryptedCommentLookupFailed { .. }
+                ),
+                "{error:?}"
+            );
+            assert_eq!(http.urls().len(), 1);
+            assert!(slot_released(&client));
+            assert!(client.lock().expect("state lock").key_changes.is_none());
+        }
+    }
+
+    #[test]
+    fn a_comment_for_no_key_of_this_wallet_fails_after_the_history() {
+        let keys = history::keys();
+        let config = client_config();
+        let wallet = config.address.clone();
+        let http = history::HistoryHost::new(vec![history::Reply::Page(history::page(
+            history::full_history(&wallet, &keys),
+        ))]);
+        let platform = history::PhraseHost::new(&keys.current_phrase);
+        let client = WalletClient::new(config, http.clone(), platform).expect("client");
+        let stranger = SigningKey::from_bytes(&[5; 32]);
+
+        let error = decrypt(&client, history::comment_to(&stranger, "not for us"))
+            .expect_err("no wallet key matches");
+
+        assert!(
+            matches!(
+                &error,
+                WalletClientError::EncryptedCommentUnavailable { diagnostic }
+                    if diagnostic.contains("authentication failed")
+            ),
+            "{error:?}"
+        );
+        assert_eq!(http.urls().len(), 1);
+        assert!(slot_released(&client));
+    }
+
+    #[test]
+    fn an_unrotated_wallet_never_reads_history() {
+        let keys = history::keys();
+        let anchor_only = MNEMONIC
+            .split_whitespace()
+            .take(12)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let http = history::HistoryHost::new(Vec::new());
+        let platform = history::PhraseHost::new(&anchor_only);
+        let client = WalletClient::new(client_config(), http.clone(), platform).expect("client");
+
+        let error = decrypt(&client, history::comment_to(&keys.lost, "someone else's"))
+            .expect_err("only the anchor key exists");
+
+        assert!(
+            matches!(error, WalletClientError::EncryptedCommentUnavailable { .. }),
+            "{error:?}"
+        );
+        assert!(http.urls().is_empty());
+        assert!(slot_released(&client));
+    }
+
+    #[test]
+    fn a_malformed_body_fails_before_any_history_read() {
+        let keys = history::keys();
+        let http = history::HistoryHost::new(Vec::new());
+        let platform = history::PhraseHost::new(&keys.current_phrase);
+        let client =
+            WalletClient::new(client_config(), http.clone(), platform.clone()).expect("client");
+        let truncated = {
+            use ton::ton_core::cell::TonCell;
+            use ton::ton_core::traits::tlb::TLB as _;
+            let mut cell = TonCell::builder();
+            cell.write_num(&0x2167_da4b_u32, 32).expect("opcode writes");
+            cell.write_bits([0_u8; 20], 160)
+                .expect("short payload writes");
+            let cell = cell.build().expect("cell builds");
+            Boc::try_from(cell.to_boc().expect("BOC encodes")).expect("valid BOC")
+        };
+
+        let error = decrypt(&client, truncated).expect_err("the body is malformed");
+
+        assert!(
+            matches!(error, WalletClientError::EncryptedCommentUnavailable { .. }),
+            "{error:?}"
+        );
+        assert!(http.urls().is_empty());
+        assert_eq!(platform.reads(), 0, "shape errors never read the secret");
     }
 }

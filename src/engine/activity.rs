@@ -387,6 +387,7 @@ mod tests {
             activity_has_more: false,
             nft_offset: 0,
             nfts_has_more: false,
+            key_changes: None,
             next_id: 1,
             refresh_generation: 0,
             pagination_generation: 0,

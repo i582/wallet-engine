@@ -1,3 +1,4 @@
+use std::cmp::Reverse;
 use std::collections::HashSet;
 use std::env;
 use std::fs::File;
@@ -13,15 +14,16 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use reqwest::Method;
+use reqwest::Url;
 use reqwest::blocking::Client;
 use serde_json::{Value, json};
 use tempfile::TempDir;
-use ton::block_tlb::{CommonMsgInfoInt, Msg};
+use ton::block_tlb::{CommonMsgInfo, CommonMsgInfoInt, Msg, Tx, TxDescr};
 use ton::tlb_adapters::{DictKeyAdapterUint, DictValAdapterTLB, TLBHashMap};
 use ton::ton_core::cell::TonCell;
 use ton::ton_core::traits::tlb::TLB;
 use ton::ton_core::types::TonAddress;
-use ton::ton_core::types::tlb_core::{TLBCoins, TLBRef};
+use ton::ton_core::types::tlb_core::{MsgAddressExt, TLBCoins, TLBRef};
 use ton::ton_wallet::{
     TonWallet, WALLET_SUBWALLET_ID_DEFAULT_TESTNET, WalletData, WalletExtMsgBody, WalletVersion,
 };
@@ -36,6 +38,17 @@ use super::test_wallet;
 const READY_TIMEOUT: Duration = Duration::from_secs(45);
 const CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// Opcode of Wallet rev00's `OnKeyHasBeenChangedEvent` external-out log.
+const KEY_CHANGED_LOG_OPCODE: u32 = 0xeba1_9948;
+/// Opcodes of Wallet rev00's `ChangePublicKeyRequestI` and `ChangePublicKeyRequestE`.
+const CHANGE_PUBLIC_KEY_OPCODES: [u32; 2] = [0xfbba_99c7, 0xfbba_99c8];
+const REQUEST_SIGNATURE_BITS: usize = 512;
+const KEY_BITS: usize = 256;
+/// Toncenter's action type for a Wallet rev00 signing-key rotation.
+const CHANGE_WALLET_KEY_ACTION: &str = "change_wallet_key";
+/// The most transactions the localnet transaction helpers read for one account.
+const MAX_SHIM_TRANSACTIONS: usize = 100;
+
 pub(super) struct LocalnetHttpHost {
     localnet: Mutex<Localnet>,
     address: String,
@@ -43,6 +56,7 @@ pub(super) struct LocalnetHttpHost {
     submitted_message: Mutex<Option<SubmittedMessage>>,
     submitted_boc_base64: Mutex<Option<String>>,
     activity_requests: Mutex<Vec<String>>,
+    key_change_action_requests: Mutex<Vec<String>>,
     request_gate: Mutex<Option<RequestGate>>,
     request_changed: Condvar,
 }
@@ -80,6 +94,7 @@ impl LocalnetHttpHost {
             submitted_message: Mutex::new(None),
             submitted_boc_base64: Mutex::new(None),
             activity_requests: Mutex::new(Vec::new()),
+            key_change_action_requests: Mutex::new(Vec::new()),
             request_gate: Mutex::new(None),
             request_changed: Condvar::new(),
         })
@@ -99,6 +114,20 @@ impl LocalnetHttpHost {
 
     pub(super) fn last_activity_request(&self) -> Option<String> {
         lock(&self.activity_requests).last().cloned()
+    }
+
+    /// Counts the Toncenter v3 `change_wallet_key` action requests the indexer shim received.
+    pub(super) fn key_change_action_request_count(&self) -> usize {
+        lock(&self.key_change_action_requests).len()
+    }
+
+    /// Returns the wallet's raw localnet transactions, newest first.
+    pub(super) fn wallet_transactions(&self) -> Result<Vec<Tx>, String> {
+        let transactions = lock(&self.localnet).raw_transactions(&self.address)?;
+        Ok(transactions
+            .into_iter()
+            .map(|transaction| transaction.transaction)
+            .collect())
     }
 
     pub(super) fn pause_next_request(&self, name: String, kind: RequestKind) {
@@ -437,6 +466,16 @@ impl LocalnetHttpHost {
             lock(&self.activity_requests).push(request.url.clone());
         }
 
+        if request.method == HttpMethod::Get
+            && let Some(query) = KeyChangeActionsQuery::parse(&request.url)
+        {
+            lock(&self.key_change_action_requests).push(request.url.clone());
+            let body = lock(&self.localnet)
+                .key_change_actions(&query)
+                .map_err(|error| host_error(HttpHostErrorKind::Other, &error))?;
+            return Ok(json_response(request, &body));
+        }
+
         if request.method == HttpMethod::Post
             && let Ok(payload) = serde_json::from_slice::<Value>(&request.body)
             && payload.get("method").and_then(Value::as_str) == Some("runGetMethod")
@@ -446,15 +485,7 @@ impl LocalnetHttpHost {
                 .wallet_get_method(address, get_method)
                 .map_err(|error| host_error(HttpHostErrorKind::Other, &error))?
         {
-            return Ok(HttpResponse {
-                status: 200,
-                headers: vec![HttpHeader {
-                    name: "content-type".to_owned(),
-                    value: "application/json".to_owned(),
-                }],
-                body: body.to_string().into_bytes(),
-                final_url: request.url.clone(),
-            });
+            return Ok(json_response(request, &body));
         }
 
         let method = match request.method {
@@ -907,6 +938,115 @@ impl Localnet {
         )
     }
 
+    /// Reads and decodes an account's raw transactions, newest first.
+    ///
+    /// The simulator returns every transaction's complete BOC in `data`, so
+    /// the decoded transaction carries the exact inbound and outbound
+    /// messages the contract processed and emitted.
+    fn raw_transactions(&self, address: &str) -> Result<Vec<LocalnetTransaction>, String> {
+        let limit = MAX_SHIM_TRANSACTIONS.to_string();
+        let url = Url::parse_with_params(
+            &format!("{}/api/v2/getTransactions", self.base_url),
+            [("address", address), ("limit", limit.as_str())],
+        )
+        .map_err(|error| error.to_string())?;
+        let (status, body) = request(&self.client, Method::GET, url.as_str(), None)?;
+        if !(200..300).contains(&status) {
+            return Err(format!(
+                "localnet transactions request failed with HTTP {status}: {body}"
+            ));
+        }
+        let entries = body
+            .get("result")
+            .and_then(Value::as_array)
+            .ok_or_else(|| format!("localnet transactions response has no result: {body}"))?;
+        if entries.len() >= MAX_SHIM_TRANSACTIONS {
+            return Err(format!(
+                "account {address} has at least {MAX_SHIM_TRANSACTIONS} transactions; \
+                 the localnet helpers read only one page"
+            ));
+        }
+
+        let mut transactions = entries
+            .iter()
+            .map(|entry| {
+                let data = entry
+                    .get("data")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| format!("localnet transaction has no raw data: {entry}"))?;
+                let transaction = Tx::from_boc_base64(data)
+                    .map_err(|error| format!("localnet transaction data is invalid: {error}"))?;
+                Ok(LocalnetTransaction {
+                    hash: entry
+                        .pointer("/transaction_id/hash")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    transaction,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        transactions.sort_by_key(|entry| Reverse(entry.transaction.lt));
+        Ok(transactions)
+    }
+
+    /// Serves Toncenter v3 `change_wallet_key` actions from the account's real transactions.
+    ///
+    /// Acton's simulator has no v3 actions index, so `/api/v3/actions` is 404
+    /// there. This is a test stand-in for Toncenter's action classifier, in
+    /// the same spirit as [`Self::wallet_get_method`]: every successful
+    /// transaction of the account whose inbound message is a Wallet rev00
+    /// `ChangePublicKeyRequestI`/`E` and which emitted the
+    /// `OnKeyHasBeenChangedEvent` log becomes one Toncenter v1.3-shaped
+    /// `change_wallet_key` action. The installed key comes from the request,
+    /// the encrypted old private key from the log the contract emitted, and
+    /// the source is the relaying sender of an internal request or `null`
+    /// for an external one. The shim does not reconstruct the rotation
+    /// signature and reports it as `null`. Actions are sorted by logical
+    /// time, then `offset` and `limit` apply, as on Toncenter.
+    fn key_change_actions(&self, query: &KeyChangeActionsQuery) -> Result<Value, String> {
+        let account = TonAddress::from_str(&query.account)
+            .map_err(|error| format!("key-change account is invalid: {error}"))?;
+        let mut actions = Vec::new();
+        for LocalnetTransaction { hash, transaction } in self.raw_transactions(&query.account)? {
+            let Some(rotation) = observed_key_rotation(&transaction) else {
+                continue;
+            };
+            let destination = TonAddress::new(account.workchain, transaction.account_addr.clone());
+            let lt = transaction.lt.to_string();
+            actions.push(json!({
+                "trace_id": hash,
+                "action_id": hash,
+                "start_lt": lt,
+                "end_lt": lt,
+                "transactions": hash.iter().collect::<Vec<_>>(),
+                "type": CHANGE_WALLET_KEY_ACTION,
+                "success": true,
+                "details": {
+                    "source": rotation.source,
+                    "destination": raw_address(&destination),
+                    "new_public_key": hex(&rotation.new_public_key),
+                    "rotation_signature": Value::Null,
+                    "encrypted_old_private_key": hex(&rotation.encrypted_old_private_key),
+                },
+                "finality": "finalized"
+            }));
+        }
+        if !query.newest_first {
+            actions.reverse();
+        }
+        let actions = actions
+            .into_iter()
+            .skip(query.offset)
+            .take(query.limit)
+            .collect::<Vec<_>>();
+
+        Ok(json!({
+            "actions": actions,
+            "address_book": {},
+            "metadata": {}
+        }))
+    }
+
     /// Serves a wallet get method from the account's storage cell.
     ///
     /// Localnet's `runGetMethod` executes the on-account trampoline without
@@ -1029,6 +1169,198 @@ fn request(
 
 fn read_log(path: &Path) -> String {
     std::fs::read_to_string(path).unwrap_or_else(|error| format!("<failed to read log: {error}>"))
+}
+
+/// One decoded simulator transaction and the hash the simulator reported for it.
+struct LocalnetTransaction {
+    hash: Option<String>,
+    transaction: Tx,
+}
+
+/// A Toncenter v3 `/api/v3/actions` request for one account's key rotations.
+struct KeyChangeActionsQuery {
+    account: String,
+    limit: usize,
+    offset: usize,
+    newest_first: bool,
+}
+
+impl KeyChangeActionsQuery {
+    /// Toncenter's default page size when a request has no `limit`.
+    const DEFAULT_LIMIT: usize = 10;
+
+    /// Recognizes only `change_wallet_key` action requests with an account filter.
+    ///
+    /// Every other URL, including other v3 action queries, returns `None` and
+    /// keeps the simulator's own answer.
+    fn parse(url: &str) -> Option<Self> {
+        let url = Url::parse(url).ok()?;
+        if !url.path().ends_with("/api/v3/actions") {
+            return None;
+        }
+        let mut account = None;
+        let mut action_type = None;
+        let mut limit = Self::DEFAULT_LIMIT;
+        let mut offset = 0;
+        let mut newest_first = true;
+        for (name, value) in url.query_pairs() {
+            match name.as_ref() {
+                "account" => account = Some(value.into_owned()),
+                "action_type" => action_type = Some(value.into_owned()),
+                "limit" => limit = value.parse().ok()?,
+                "offset" => offset = value.parse().ok()?,
+                "sort" => newest_first = value != "asc",
+                _ => {}
+            }
+        }
+        if action_type.as_deref() != Some(CHANGE_WALLET_KEY_ACTION) {
+            return None;
+        }
+        Some(Self {
+            account: account?,
+            limit,
+            offset,
+            newest_first,
+        })
+    }
+}
+
+/// A successful Wallet rev00 key rotation observed in one transaction.
+struct ObservedKeyRotation {
+    /// The raw address that relayed an internal request, or `None` for an external one.
+    source: Option<String>,
+    new_public_key: [u8; 32],
+    encrypted_old_private_key: [u8; 32],
+}
+
+/// Classifies one transaction as a successful key rotation.
+///
+/// The transaction must not be aborted, its inbound message must be a
+/// `ChangePublicKeyRequestI`/`E`, and it must emit exactly one
+/// `OnKeyHasBeenChangedEvent` log. Contract revisions without the log are not
+/// reported.
+fn observed_key_rotation(transaction: &Tx) -> Option<ObservedKeyRotation> {
+    if transaction_aborted(transaction) {
+        return None;
+    }
+    let in_msg = transaction.msgs.in_msg.as_ref()?;
+    let new_public_key = change_key_request_public_key(&in_msg.body.value)?;
+    let mut logs = transaction
+        .msgs
+        .out_msgs
+        .iter()
+        .filter(|message| matches!(message.info, CommonMsgInfo::ExtOut(_)))
+        .map(parse_key_changed_log);
+    let encrypted_old_private_key = match (logs.next(), logs.next()) {
+        (Some(Ok(encrypted)), None) => encrypted,
+        _ => return None,
+    };
+    let source = match &in_msg.info {
+        CommonMsgInfo::Int(info) => Some(raw_address(
+            &TonAddress::from_msg_address(info.src.clone()).ok()?,
+        )),
+        CommonMsgInfo::ExtIn(_) | CommonMsgInfo::ExtOut(_) => None,
+    };
+    Some(ObservedKeyRotation {
+        source,
+        new_public_key,
+        encrypted_old_private_key,
+    })
+}
+
+/// Reports whether a transaction's description marks it aborted.
+pub(super) fn transaction_aborted(transaction: &Tx) -> bool {
+    match &*transaction.descr {
+        TxDescr::Ord(value) => value.aborted,
+        TxDescr::Storage(_) => false,
+        TxDescr::TickTock(value) => value.aborted,
+        TxDescr::SplitPrepare(value) => value.aborted,
+        TxDescr::SplitInstall(value) => !value.installed,
+        TxDescr::MergePrepare(value) => value.aborted,
+        TxDescr::MergeInstall(value) => value.aborted,
+    }
+}
+
+/// Returns the new public key of a signed `ChangePublicKeyRequestI`/`E` body.
+///
+/// The body is the 512-bit request signature followed by the request:
+/// opcode, subwallet ID, `valid_until`, seqno, and the new 256-bit key.
+pub(super) fn change_key_request_public_key(body: &TonCell) -> Option<[u8; 32]> {
+    let mut parser = body.parser();
+    let _signature = parser.read_bits(REQUEST_SIGNATURE_BITS).ok()?;
+    let opcode: u32 = parser.read_num(32).ok()?;
+    if !CHANGE_PUBLIC_KEY_OPCODES.contains(&opcode) {
+        return None;
+    }
+    let _subwallet_id: u32 = parser.read_num(32).ok()?;
+    let _valid_until: u32 = parser.read_num(32).ok()?;
+    let _seqno: u32 = parser.read_num(32).ok()?;
+    <[u8; 32]>::try_from(parser.read_bits(KEY_BITS).ok()?).ok()
+}
+
+/// Parses one `OnKeyHasBeenChangedEvent` log and returns its encrypted old private key.
+///
+/// The log is an external-out message to `addr_none` whose body is exactly
+/// the 32-bit opcode and the 256-bit encrypted key, with no refs.
+pub(super) fn parse_key_changed_log(message: &Msg) -> Result<[u8; 32], String> {
+    let CommonMsgInfo::ExtOut(info) = &message.info else {
+        return Err("the key-changed log is not an external-out message".to_owned());
+    };
+    if info.dst != MsgAddressExt::NONE {
+        return Err(format!(
+            "the key-changed log destination is {:?}, not addr_none",
+            info.dst
+        ));
+    }
+    if message.init.is_some() {
+        return Err("the key-changed log carries a StateInit".to_owned());
+    }
+    let body = &message.body.value;
+    let expected_bits = KEY_BITS + 32;
+    if body.data_len_bits() != expected_bits || !body.refs().is_empty() {
+        return Err(format!(
+            "the key-changed log body has {} bits and {} refs, expected {expected_bits} bits and no refs",
+            body.data_len_bits(),
+            body.refs().len()
+        ));
+    }
+    let mut parser = body.parser();
+    let opcode: u32 = parser.read_num(32).map_err(|error| error.to_string())?;
+    if opcode != KEY_CHANGED_LOG_OPCODE {
+        return Err(format!(
+            "the key-changed log opcode is {opcode:#010x}, expected {KEY_CHANGED_LOG_OPCODE:#010x}"
+        ));
+    }
+    let encrypted = parser
+        .read_bits(KEY_BITS)
+        .map_err(|error| error.to_string())?;
+    <[u8; 32]>::try_from(encrypted)
+        .map_err(|_| "the key-changed log key is not 32 bytes".to_owned())
+}
+
+/// Formats an address in Toncenter's raw `workchain:HEX` form.
+fn raw_address(address: &TonAddress) -> String {
+    format!(
+        "{}:{}",
+        address.workchain,
+        hex(address.hash.as_slice()).to_ascii_uppercase()
+    )
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn json_response(request: &HttpRequest, body: &Value) -> HttpResponse {
+    HttpResponse {
+        status: 200,
+        headers: vec![HttpHeader {
+            name: "content-type".to_owned(),
+            value: "application/json".to_owned(),
+        }],
+        body: body.to_string().into_bytes(),
+        final_url: request.url.clone(),
+    }
 }
 
 fn host_error(kind: HttpHostErrorKind, diagnostic: &str) -> HttpHostError {

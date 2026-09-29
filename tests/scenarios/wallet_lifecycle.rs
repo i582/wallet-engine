@@ -100,9 +100,22 @@ fn repeated_external_key_rotation_executes_on_the_wallet_contract() {
 }
 
 #[test]
+fn comment_sent_to_a_replaced_signing_key_decrypts_after_repeated_rotation() {
+    execute_comment_to_replaced_signing_key_decrypts_on_localnet().expect(
+        "comments to every signing key must decrypt, recovering the replaced key from its log",
+    );
+}
+
+#[test]
 fn uninitialized_key_rotation_deploys_with_zero_seqno() {
     execute_uninitialized_key_rotation_deploys_with_zero_seqno_on_localnet()
         .expect("an undeployed wallet must rotate with seqno zero and anchor StateInit");
+}
+
+#[test]
+fn rotated_phrase_cannot_rotate_an_undeployed_wallet() {
+    execute_rotated_phrase_cannot_rotate_an_undeployed_wallet_on_localnet()
+        .expect("only the initial 12-word phrase may deploy the wallet during rotation");
 }
 
 #[test]

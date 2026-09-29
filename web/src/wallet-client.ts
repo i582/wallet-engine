@@ -169,7 +169,22 @@ export class WalletClient {
     return (await this.raw.resolveEncryptedCommentRecipient(request)) as number[]
   }
 
-  /** Explicitly authorizes and decrypts one TON encrypted-comment BOC. */
+  /**
+   * Explicitly authorizes and decrypts one TON encrypted-comment BOC.
+   *
+   * The body may be encrypted to any signing key this wallet ever had. The protected secret is
+   * read once per call. The engine first tries the current signing key and the anchor key
+   * (words 1-12 of the recovery phrase) without any HTTP request. Only when neither matches and
+   * the wallet has rotated its key does it request the wallet's `change_wallet_key` actions from
+   * Toncenter v3 (`/api/v3/actions`, one request per 100 rotations) and recover each earlier
+   * signing key from the encrypted old key its rotation published. That history holds no secret,
+   * and the client reuses it while it still includes the current signing key.
+   *
+   * Rejects with an `Error` whose message starts with `encrypted-comment recipient lookup failed`
+   * when the provider did not answer or its history does not include the current signing key yet;
+   * a retry can succeed. Rejects with `encrypted comment is unavailable` when no key of this
+   * wallet decrypts the body or the body is malformed.
+   */
   async decryptComment(request: DecryptCommentRequest): Promise<string> {
     this.assertOpen()
     return (await this.raw.decryptComment(request)) as string

@@ -1,4 +1,5 @@
 import {afterAll, beforeAll, describe, expect, test} from "bun:test"
+import {createHash, createHmac, createPrivateKey, createPublicKey, pbkdf2Sync} from "node:crypto"
 
 import {
   BrowserHttpHost,
@@ -12,9 +13,12 @@ import {
   mnemonicWordlist,
   parseTonAddress,
   parseTonTransferLink,
+  type CreatedWallet,
   type HttpRequest,
   type NftTransferPreviewRequest,
+  type PreparedKeyRotation,
   type WalletClientConfig,
+  type WalletDescriptor,
   type WalletStatuslessHost,
 } from "../src"
 import {MemoryJournal} from "./memory-journal"
@@ -724,6 +728,232 @@ describe("high-level WASM API", () => {
       expect(urls).toEqual([])
     })
   })
+
+  describe("encrypted comments to a rotated wallet", () => {
+    // Words 1-12 of a recovery phrase keep the anchor key and the address; every rotation
+    // replaces words 13-24, the signing key. This wallet rotated twice, so its phrase no
+    // longer holds the key the first rotation installed.
+    interface RotatedWallet {
+      readonly platform: BrowserPlatformHost
+      readonly secrets: RecordingSecrets
+      readonly initial: CreatedWallet
+      readonly firstRotation: PreparedKeyRotation
+      readonly secondRotation: PreparedKeyRotation
+      /** The wallet as imported from its phrase after the second rotation. */
+      readonly descriptor: WalletDescriptor
+      /** The replaced signing key encrypted with the new one, as each rotation publishes it. */
+      readonly encryptedOldKeys: {readonly first: Buffer; readonly second: Buffer}
+      /** Toncenter v3 `change_wallet_key` actions of both rotations, newest first. */
+      readonly actions: unknown[]
+      readonly sender: string
+      readonly comments: {
+        readonly toAnchor: string
+        readonly toReplaced: string
+        readonly toCurrent: string
+        readonly toStranger: string
+      }
+    }
+
+    const rotationRequest = {validUntil: 1_900_000_000, messageKind: "external"} as const
+    const strangerPublicKey = "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"
+    const setupAnswers: ChainAnswers = {publicKeyHex: "", actions: []}
+    let wallet: RotatedWallet
+
+    beforeAll(async () => {
+      wallet = await rotatedWallet()
+    })
+
+    async function rotatedWallet(): Promise<RotatedWallet> {
+      const secrets = new RecordingSecrets()
+      const platform = new BrowserPlatformHost({secrets, journal: new MemoryJournal()})
+      const lifecycle = await WalletLifecycle.create(platform)
+      lifecycles.push(lifecycle)
+
+      const initial = await lifecycle.createWallet({
+        recordId: "rotated-comment-wallet",
+        network: "testnet",
+      })
+      const firstRotation = await rotateKey(platform, initial.descriptor)
+      const replaced = await lifecycle.importWallet({
+        recordId: "rotated-comment-wallet-1",
+        network: "testnet",
+        recoveryWords: firstRotation.replacementRecoveryPhrase.phrase.split(" "),
+      })
+      const secondRotation = await rotateKey(platform, replaced)
+      const descriptor = await lifecycle.importWallet({
+        recordId: "rotated-comment-wallet-2",
+        network: "testnet",
+        recoveryWords: secondRotation.replacementRecoveryPhrase.phrase.split(" "),
+      })
+
+      const anchorSeed = signingSeed(initial.recoveryPhrase.phrase)
+      const replacedSeed = signingSeed(firstRotation.replacementRecoveryPhrase.phrase)
+      const currentSeed = signingSeed(secondRotation.replacementRecoveryPhrase.phrase)
+      const encryptedOldKeys = {
+        first: encryptOldPrivateKey(anchorSeed, replacedSeed),
+        second: encryptOldPrivateKey(replacedSeed, currentSeed),
+      }
+      const rawAddress = await convertTonAddress(initial.descriptor.address, {kind: "raw"})
+
+      // Another wallet encrypts to whichever key the recipient's `get_public_key` reports.
+      const senderWallet = await lifecycle.createWallet({
+        recordId: "rotated-comment-sender",
+        network: "testnet",
+      })
+      const sender = await connect(platform, senderWallet.descriptor)
+      const recipient = initial.descriptor.address
+      return {
+        platform,
+        secrets,
+        initial,
+        firstRotation,
+        secondRotation,
+        descriptor,
+        encryptedOldKeys,
+        actions: [
+          changeWalletKeyAction(rawAddress, secondRotation.newPublicKey, encryptedOldKeys.second),
+          changeWalletKeyAction(rawAddress, firstRotation.newPublicKey, encryptedOldKeys.first),
+        ],
+        sender: senderWallet.descriptor.address,
+        comments: {
+          toAnchor: await encryptTo(sender, recipient, initial.descriptor.publicKey, "anchor"),
+          toReplaced: await encryptTo(sender, recipient, firstRotation.newPublicKey, "replaced"),
+          toCurrent: await encryptTo(sender, recipient, secondRotation.newPublicKey, "current"),
+          toStranger: await encryptTo(
+            sender,
+            recipient,
+            Array.from(Buffer.from(strangerPublicKey, "hex")),
+            "stranger",
+          ),
+        },
+      }
+    }
+
+    async function connect(
+      platform: BrowserPlatformHost,
+      descriptor: WalletDescriptor,
+    ): Promise<WalletClient> {
+      const client = await WalletClient.create(
+        {...walletConfig(descriptor), localSecretRef: descriptor.secretRef},
+        {platformHost: platform, fetch: toncenterFetch([], setupAnswers)},
+      )
+      clients.push(client)
+      return client
+    }
+
+    async function rotateKey(
+      platform: BrowserPlatformHost,
+      descriptor: WalletDescriptor,
+    ): Promise<PreparedKeyRotation> {
+      return await (await connect(platform, descriptor)).prepareKeyRotation(rotationRequest)
+    }
+
+    async function encryptTo(
+      sender: WalletClient,
+      recipient: string,
+      publicKey: readonly number[],
+      comment: string,
+    ): Promise<string> {
+      setupAnswers.publicKeyHex = Buffer.from(publicKey).toString("hex")
+      return await sender.createEncryptedComment({recipient, comment})
+    }
+
+    async function currentClient(actions: unknown[]) {
+      const urls: string[] = []
+      const chain: ChainAnswers = {publicKeyHex: "", actions}
+      const client = await WalletClient.create(
+        {...walletConfig(wallet.descriptor), localSecretRef: wallet.descriptor.secretRef},
+        {platformHost: wallet.platform, fetch: toncenterFetch(urls, chain)},
+      )
+      clients.push(client)
+      return {client, urls, chain, secretReads: wallet.secrets.reasons.length}
+    }
+
+    test("publishes each replaced key encrypted as the history fixture reports it", () => {
+      const {initial, firstRotation, secondRotation, descriptor, encryptedOldKeys} = wallet
+
+      expect(descriptor.address).toBe(initial.descriptor.address)
+      expect(descriptor.publicKey).toEqual(initial.descriptor.publicKey)
+      // The seeds derived here, independently of the engine, match the engine's public keys.
+      expect(ed25519PublicKey(signingSeed(initial.recoveryPhrase.phrase))).toEqual(
+        initial.descriptor.publicKey,
+      )
+      expect(ed25519PublicKey(signingSeed(firstRotation.replacementRecoveryPhrase.phrase))).toEqual(
+        firstRotation.newPublicKey,
+      )
+      expect(
+        ed25519PublicKey(signingSeed(secondRotation.replacementRecoveryPhrase.phrase)),
+      ).toEqual(secondRotation.newPublicKey)
+      // Each signed rotation request carries the value in a 256-bit cell, whose data a BOC
+      // stores verbatim; the contract logs the same value for Toncenter to report.
+      expect(Buffer.from(firstRotation.signedBoc, "base64").includes(encryptedOldKeys.first)).toBe(
+        true,
+      )
+      expect(
+        Buffer.from(secondRotation.signedBoc, "base64").includes(encryptedOldKeys.second),
+      ).toBe(true)
+    })
+
+    test("decrypts comments to the current and anchor keys without HTTP", async () => {
+      const {client, urls, secretReads} = await currentClient(wallet.actions)
+
+      await expect(
+        client.decryptComment({sender: wallet.sender, body: wallet.comments.toCurrent}),
+      ).resolves.toBe("current")
+      await expect(
+        client.decryptComment({sender: wallet.sender, body: wallet.comments.toAnchor}),
+      ).resolves.toBe("anchor")
+
+      expect(urls).toEqual([])
+      expect(wallet.secrets.reasons.slice(secretReads)).toEqual([
+        "decryptComment",
+        "decryptComment",
+      ])
+    })
+
+    test("recovers a replaced signing key from the Toncenter key-change history", async () => {
+      const {client, urls, secretReads} = await currentClient(wallet.actions)
+      const request = {sender: wallet.sender, body: wallet.comments.toReplaced}
+
+      await expect(client.decryptComment(request)).resolves.toBe("replaced")
+
+      expect(urls).toHaveLength(1)
+      const url = new URL(urls[0] ?? "")
+      expect(`${url.origin}${url.pathname}`).toBe("https://testnet.toncenter.com/api/v3/actions")
+      expect(Object.fromEntries(url.searchParams)).toEqual({
+        account: wallet.descriptor.address,
+        action_type: "change_wallet_key",
+        limit: "100",
+        offset: "0",
+        sort: "desc",
+      })
+
+      // The history holds no secret, so the client reuses it while it reaches the current key.
+      await expect(client.decryptComment(request)).resolves.toBe("replaced")
+      expect(urls).toHaveLength(1)
+      expect(wallet.secrets.reasons.slice(secretReads)).toEqual([
+        "decryptComment",
+        "decryptComment",
+      ])
+    })
+
+    test("separates a lagging key-change history from a comment no key decrypts", async () => {
+      const {client, urls, chain} = await currentClient([])
+      const request = {sender: wallet.sender, body: wallet.comments.toReplaced}
+
+      // The indexer has not reported the rotation that installed the current key yet.
+      await expect(client.decryptComment(request)).rejects.toThrow(
+        "encrypted-comment recipient lookup failed",
+      )
+      chain.actions = wallet.actions
+      await expect(client.decryptComment(request)).resolves.toBe("replaced")
+      await expect(
+        client.decryptComment({sender: wallet.sender, body: wallet.comments.toStranger}),
+      ).rejects.toThrow("encrypted comment is unavailable")
+
+      expect(urls).toHaveLength(2)
+    })
+  })
 })
 
 function accountResponse(state: string): Response {
@@ -731,6 +961,91 @@ function accountResponse(state: string): Response {
     ok: true,
     result: {balance: "1000000000", state, sync_utime: 1_800_000_000},
   })
+}
+
+/** Answers of `toncenterFetch`; tests may change them between calls. */
+interface ChainAnswers {
+  /** Hex key every `get_public_key` call returns. */
+  publicKeyHex: string
+  /** Actions every `/api/v3/actions` page returns. */
+  actions: unknown[]
+}
+
+/** Serves an active wallet with seqno 42 and records every requested URL. */
+function toncenterFetch(urls: string[], chain: ChainAnswers): typeof globalThis.fetch {
+  return mockFetch(async (input, init) => {
+    const url = String(input)
+    urls.push(url)
+    if (url.includes("/api/v3/actions?")) {
+      return Response.json({actions: chain.actions, address_book: {}, metadata: {}})
+    }
+    if (url.includes("getAddressInformation")) {
+      return accountResponse("active")
+    }
+    const body = new TextDecoder().decode(init?.body as Uint8Array)
+    const request = JSON.parse(body) as {method: string; params: {method: string}}
+    if (request.method !== "runGetMethod") {
+      throw new TypeError(`unexpected Toncenter call ${request.method}`)
+    }
+    const value = request.params.method === "seqno" ? "0x2a" : `0x${chain.publicKeyHex}`
+    return Response.json({ok: true, result: {exit_code: 0, stack: [["num", value]]}})
+  })
+}
+
+/** One successful rotation of `wallet` in the Toncenter v3 `/actions` format. */
+function changeWalletKeyAction(
+  wallet: string,
+  newPublicKey: readonly number[],
+  encryptedOldPrivateKey: Uint8Array,
+): unknown {
+  return {
+    type: "change_wallet_key",
+    success: true,
+    details: {
+      source: null,
+      destination: wallet.toUpperCase(),
+      new_public_key: Buffer.from(newPublicKey).toString("hex"),
+      rotation_signature: null,
+      encrypted_old_private_key: Buffer.from(encryptedOldPrivateKey).toString("hex"),
+    },
+  }
+}
+
+/**
+ * Ed25519 seed of the signing half of a recovery phrase: words 13-24, or the only 12 words
+ * before the first rotation. Like the engine, it derives a passphraseless BIP-39 seed and then
+ * the SLIP-0010 key on m/44'/607'/0'.
+ */
+function signingSeed(phrase: string): Buffer {
+  const half = phrase.split(" ").slice(-12).join(" ")
+  let node = createHmac("sha512", "ed25519 seed")
+    .update(pbkdf2Sync(half, "mnemonic", 2048, 64, "sha512"))
+    .digest()
+  for (const index of [44, 607, 0]) {
+    const hardened = Buffer.alloc(4)
+    hardened.writeUInt32BE(index + 2 ** 31)
+    node = createHmac("sha512", node.subarray(32))
+      .update(Buffer.concat([Buffer.alloc(1), node.subarray(0, 32), hardened]))
+      .digest()
+  }
+  return node.subarray(0, 32)
+}
+
+function ed25519PublicKey(seed: Uint8Array): number[] {
+  const pkcs8Prefix = Buffer.from("302e020100300506032b657004220420", "hex")
+  const privateKey = createPrivateKey({
+    key: Buffer.concat([pkcs8Prefix, seed]),
+    format: "der",
+    type: "pkcs8",
+  })
+  const spki = createPublicKey(privateKey).export({format: "der", type: "spki"})
+  return Array.from(spki.subarray(-32))
+}
+
+/** `sha256(newSeed ‖ "keyChangeSaltV1") XOR oldSeed`, which a rotation publishes. */
+function encryptOldPrivateKey(oldSeed: Uint8Array, newSeed: Uint8Array): Buffer {
+  const mask = createHash("sha256").update(newSeed).update("keyChangeSaltV1").digest()
+  return Buffer.from(mask.map((byte, index) => byte ^ (oldSeed[index] ?? 0)))
 }
 
 class RecordingSecrets extends MemorySecrets {
