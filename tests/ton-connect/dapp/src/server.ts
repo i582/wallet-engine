@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import {
 	createServer as createHTTPServer,
 	type IncomingMessage,
@@ -109,8 +109,28 @@ class MemoryStorage implements IStorage {
 }
 
 const port = parsePort(process.env.PORT, 4173);
-const config = parseConfig(process.env.TON_CONNECT_DAPP_CONFIG);
 const servesInsecureHTTP = process.env.TON_CONNECT_INSECURE_HTTP === "1";
+const server = servesInsecureHTTP
+	? createHTTPServer()
+	: createHTTPSServer({
+			key: readFileSync(requiredEnvironment("TON_CONNECT_TLS_KEY")),
+			cert: readFileSync(requiredEnvironment("TON_CONNECT_TLS_CERTIFICATE")),
+		});
+
+// Keep the OS-assigned port bound while constructing this actor's URLs.
+await new Promise<void>((resolve, reject) => {
+	server.once("error", reject);
+	server.listen(port, "127.0.0.1", resolve);
+});
+const address = server.address();
+if (address === null || typeof address === "string") {
+	throw new Error("dApp actor did not bind a TCP port");
+}
+const origin = `${servesInsecureHTTP ? "http" : "https"}://127.0.0.1:${address.port}`;
+const config = renderConfig(
+	parseConfig(process.env.TON_CONNECT_DAPP_CONFIG),
+	origin,
+);
 const storage = new MemoryStorage();
 const state: ActorState = initialActorState(config);
 const walletsList = ["wallet-engine-test", "tonkeeper"].map((appName) => ({
@@ -160,17 +180,14 @@ const requestHandler = (
 		sendJson(response, 400, { error: message });
 	});
 };
-const server = servesInsecureHTTP
-	? createHTTPServer(requestHandler)
-	: createHTTPSServer(
-			{
-				key: readFileSync(requiredEnvironment("TON_CONNECT_TLS_KEY")),
-				cert: readFileSync(requiredEnvironment("TON_CONNECT_TLS_CERTIFICATE")),
-			},
-			requestHandler,
-		);
+server.on("request", requestHandler);
 
-server.listen(port, "127.0.0.1");
+// Publish only a complete origin, through a file unique to the owning harness.
+const readyFile = process.env.TON_CONNECT_DAPP_READY_FILE;
+if (readyFile !== undefined) {
+	writeFileSync(`${readyFile}.pending`, origin);
+	renameSync(`${readyFile}.pending`, readyFile);
+}
 
 process.on("SIGTERM", () => {
 	server.close();
@@ -508,6 +525,19 @@ function parseConfig(value: string | undefined): DappActorConfig {
 	return parsed;
 }
 
+/** Renders origin placeholders only after the actor owns its listening socket. */
+function renderConfig(config: DappActorConfig, origin: string): DappActorConfig {
+	return {
+		...config,
+		manifestUrl: config.manifestUrl.replaceAll("{actor_origin}", origin),
+		manifest: {
+			...config.manifest,
+			url: config.manifest.url.replaceAll("{actor_origin}", origin),
+			iconUrl: config.manifest.iconUrl.replaceAll("{actor_origin}", origin),
+		},
+	};
+}
+
 /** Validates every field needed to construct the SDK and serve the dApp manifest. */
 function isDappActorConfig(value: unknown): value is DappActorConfig {
 	if (typeof value !== "object" || value === null) {
@@ -557,7 +587,7 @@ function parsePort(value: string | undefined, fallback: number): number {
 		return fallback;
 	}
 	const parsed = Number.parseInt(value, 10);
-	if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
+	if (!Number.isInteger(parsed) || parsed < 0 || parsed > 65535) {
 		throw new Error(`invalid PORT: ${value}`);
 	}
 	return parsed;

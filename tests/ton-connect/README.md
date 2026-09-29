@@ -57,6 +57,8 @@ NODE=/absolute/path/to/node cargo test --test ton_connect_e2e
 
 The harness starts bridge and dApp processes on available ports, waits for
 readiness, and always terminates child processes when a scenario finishes.
+The dApp binds port zero and publishes its actual origin through a private
+startup file, so concurrent scenarios cannot mistake another actor for their own.
 The Rust CI job builds the pinned official bridge revision and TypeScript dApp
 before it runs the scenarios. It sets `TON_CONNECT_BRIDGE_BIN` explicitly.
 

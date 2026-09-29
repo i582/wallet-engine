@@ -4,7 +4,7 @@ use std::{
     io,
     net::TcpListener,
     num::{NonZeroU32, NonZeroUsize},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::Arc,
     thread,
@@ -2802,9 +2802,9 @@ fn start_dapp(
             actor.display()
         )));
     }
-    let port = free_port()?;
-    let base_url = format!("https://127.0.0.1:{port}");
-    let rendered_config = fixture.config.render(&base_url, bridge_url);
+    let ready_directory = tempfile::tempdir()?;
+    let ready_path = ready_directory.path().join("origin");
+    let rendered_config = fixture.config.render(ACTOR_ORIGIN, bridge_url);
     let actor_config = serde_json::to_string(&rendered_config)?;
     let fixtures =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/ton-connect/dapp/fixtures");
@@ -2812,8 +2812,9 @@ fn start_dapp(
     let tls_certificate = fixtures.join("localhost-cert.pem");
     let child = Command::new(env::var_os("NODE").unwrap_or_else(|| "node".into()))
         .arg(actor)
-        .env("PORT", port.to_string())
+        .env("PORT", "0")
         .env("TON_CONNECT_DAPP_CONFIG", actor_config)
+        .env("TON_CONNECT_DAPP_READY_FILE", &ready_path)
         .env("TON_CONNECT_TLS_KEY", tls_key)
         .env("TON_CONNECT_TLS_CERTIFICATE", tls_certificate)
         .stdout(Stdio::null())
@@ -2823,8 +2824,29 @@ fn start_dapp(
         name: "TypeScript TON Connect dApp",
         child,
     };
+    let base_url = wait_for_dapp_origin(&mut process, &ready_path)?;
     wait_until_ready(http, &mut process, &format!("{base_url}/health"))?;
     Ok((process, base_url))
+}
+
+/// Reads only this actor's startup handshake, never another actor's health endpoint.
+fn wait_for_dapp_origin(process: &mut ManagedChild, ready_path: &Path) -> TestResult<String> {
+    let deadline = Instant::now()
+        .checked_add(PROCESS_START_TIMEOUT)
+        .ok_or_else(|| failure("process start timeout overflow"))?;
+    while Instant::now() < deadline {
+        process.ensure_running()?;
+        match std::fs::read_to_string(ready_path) {
+            Ok(origin) => return Ok(origin),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    Err(failure(format!(
+        "{} did not publish its listening origin",
+        process.name
+    )))
 }
 
 /// Expands every `{actor_origin}` placeholder without changing other fixture text.
@@ -3001,4 +3023,66 @@ fn assert_journal_order(journal: &[DappJournalEvent], expected: &[&str]) -> Test
 /// Creates a lightweight boxed test error from an assertion or fixture diagnostic.
 fn failure(message: impl Into<String>) -> Box<dyn Error> {
     Box::new(io::Error::other(message.into()))
+}
+
+#[cfg(test)]
+mod startup_tests {
+    use super::*;
+
+    /// Concurrent actors must report their own bound origin and retain their own bridge config.
+    #[test]
+    fn concurrent_dapps_keep_their_origins_and_configurations_isolated() -> TestResult {
+        const ACTOR_COUNT: usize = 8;
+        let barrier = std::sync::Barrier::new(ACTOR_COUNT);
+        let fixture = dapp().config(DappConfig::new(
+            "{actor_origin}/tonconnect-manifest.json",
+            DappManifestConfig::new(
+                "{actor_origin}",
+                "Concurrent startup dApp",
+                "{actor_origin}/icon.png",
+            ),
+        ));
+        let http = Client::builder()
+            .timeout(Duration::from_secs(2))
+            .danger_accept_invalid_certs(true)
+            .build()?;
+        let actors = thread::scope(|scope| {
+            let handles = (0..ACTOR_COUNT)
+                .map(|index| {
+                    let barrier = &barrier;
+                    let fixture = &fixture;
+                    let http = &http;
+                    scope.spawn(move || {
+                        let bridge_url = format!("http://127.0.0.1:1/bridge-{index}");
+                        let _ = barrier.wait();
+                        let (process, origin) = start_dapp(http, fixture, &bridge_url)
+                            .map_err(|error| error.to_string())?;
+                        let expected = fixture.config.render(&origin, &bridge_url);
+                        Ok::<_, String>((process, origin, expected))
+                    })
+                })
+                .collect::<Vec<_>>();
+            handles
+                .into_iter()
+                .map(|handle| {
+                    handle
+                        .join()
+                        .map_err(|_| failure("dApp startup thread panicked"))?
+                        .map_err(failure)
+                })
+                .collect::<TestResult<Vec<_>>>()
+        })?;
+
+        let mut origins = std::collections::HashSet::new();
+        for (_process, origin, expected) in &actors {
+            assert!(origins.insert(origin), "actors shared a listening origin");
+            let state: DappState = http
+                .get(format!("{origin}/state"))
+                .send()?
+                .error_for_status()?
+                .json()?;
+            assert_eq!(&state.config, expected);
+        }
+        Ok(())
+    }
 }
