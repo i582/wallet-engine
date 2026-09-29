@@ -31,6 +31,7 @@ final class IOSScenarioRunner {
     private var expectedDappConfig: DappActorConfig?
     private var lastTransaction: RenderedTransactionRequest?
     private var rememberedActivity: [String: IOSActivityObservation] = [:]
+    private var usesLocalnet = false
 
     /// Creates a native runner for one generated client scenario.
     init(
@@ -58,6 +59,7 @@ final class IOSScenarioRunner {
     /// Executes every scenario step in declaration order and identifies a failure.
     func run(_ definition: ScenarioDefinition) async throws {
         try await provider.reset()
+        usesLocalnet = false
         for (offset, step) in definition.steps.enumerated() {
             do {
                 try await execute(step.action)
@@ -78,6 +80,7 @@ final class IOSScenarioRunner {
         switch action.kind {
         case .networkLocalnet:
             try await provider.useLocalnet()
+            usesLocalnet = true
         case .walletOpen:
             try driver.open()
         case .walletCreate:
@@ -150,7 +153,10 @@ final class IOSScenarioRunner {
         case .expectScreenshot:
             let name = try required(action.name, field: "screenshot name")
             let target = try required(action.target, field: "screenshot target")
-            try snapshots.verify(name: name, capture: driver.capture(target: target))
+            try snapshots.verify(
+                name: name,
+                capture: driver.capture(target: target, hideBalance: usesLocalnet)
+            )
         }
     }
 

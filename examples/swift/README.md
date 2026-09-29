@@ -112,9 +112,21 @@ change the baselines. To replace the baselines, run:
 TON_CONNECT_BRIDGE_BIN=/absolute/path/to/bridge3 just example-swift-e2e-update-snapshots
 ```
 
+Alternatively, manually run the **Swift** GitHub Actions workflow with
+`update-snapshots` enabled. It records the screenshots, reruns the suite against
+them, and uploads the `ios-snapshots` artifact only if both runs succeed.
+
 Review every changed image before commit. Git stores the PNG files in Git LFS.
 The recovery screenshot masks the wallet address and recovery words before it
 writes the image.
+
+The localnet activity screenshot temporarily hides the balance through the wallet's
+visibility control, then restores it. Live fees change the balance's digits and
+text size, so keeping it visible would also move the surrounding layout. Other
+dashboard screenshots still check the displayed balance. Transaction screenshots
+exclude only the generated Message BOC value column; its label and the remaining
+review fields remain part of the visual comparison. Activity timestamps are also
+excluded because they vary between runs.
 
 ## Integration map
 

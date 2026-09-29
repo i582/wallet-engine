@@ -8,6 +8,11 @@ on:
     branches:
       - master
   workflow_dispatch:
+    inputs:
+      update-snapshots:
+        description: Record iOS screenshot baselines for review
+        type: boolean
+        default: false
 
 permissions: { }
 
@@ -97,7 +102,23 @@ jobs:
         run: just example-swift-e2e-install
 
       - name: Run iOS client scenarios
+        env:
+          UPDATE_IOS_SNAPSHOTS: ${{ inputs.update-snapshots && '1' || '0' }}
         run: just example-swift-e2e
+
+      - name: Verify recorded iOS snapshots
+        if: ${{ inputs.update-snapshots }}
+        env:
+          UPDATE_IOS_SNAPSHOTS: "0"
+        run: just example-swift-e2e
+
+      - name: Upload recorded iOS snapshots
+        if: ${{ inputs.update-snapshots }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ios-snapshots
+          path: examples/swift/WalletEngineAppUITests/Snapshots
+          if-no-files-found: error
 
       - name: Upload iOS E2E diagnostics
         if: failure()

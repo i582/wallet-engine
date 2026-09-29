@@ -481,6 +481,7 @@ private struct TonConnectTransactionView: View {
                         value: String(send.emulation.transactionCount)
                     )
                     PreviewRow(label: "Message BOC", value: compact(send.messageBocBase64))
+                        .accessibilityIdentifier("ton-connect-message-boc-row")
                 case .sign(let sign):
                     PreviewRow(label: "Network fee", value: "Paid by relayer")
                     PreviewRow(label: "Valid until", value: String(sign.validUntil))

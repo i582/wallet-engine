@@ -319,8 +319,44 @@ final class IOSWalletDriver {
         try requireFullyVisible(summary, description: "the complete transaction summary")
     }
 
+    /// Hides the live balance while capturing localnet pages, then restores its visibility.
+    func capture(target: ScreenshotTarget, hideBalance: Bool = false) throws -> SnapshotCapture {
+        guard hideBalance, target == .page else {
+            return try captureCurrentAppearance(target: target)
+        }
+        let balance = app.otherElements["Balance"]
+        try require(balance, description: "the wallet balance")
+        guard let originalValue = balance.value as? String else {
+            throw IOSWalletDriverError.missingElement("the wallet balance value")
+        }
+        guard originalValue != "Hidden" else {
+            return try captureCurrentAppearance(target: target)
+        }
+        let hide = app.buttons["Hide balance"]
+        try require(hide, description: "the hide-balance action")
+        hide.tap()
+
+        let result: Result<SnapshotCapture, Error> = Result {
+            guard waitForValue("Hidden", in: balance) else {
+                throw IOSWalletDriverError.missingElement("the hidden wallet balance")
+            }
+            return try captureCurrentAppearance(target: target)
+        }
+
+        // Restore even when capture or comparison-region discovery failed.
+        if balance.value as? String == "Hidden" {
+            let show = app.buttons["Show balance"]
+            try require(show, description: "the show-balance action")
+            show.tap()
+        }
+        guard waitForValue(originalValue, in: balance) else {
+            throw IOSWalletDriverError.missingElement("the restored wallet balance")
+        }
+        return try result.get()
+    }
+
     /// Captures the complete wallet surface and masks recovery secrets when required.
-    func capture(target: ScreenshotTarget) throws -> SnapshotCapture {
+    private func captureCurrentAppearance(target: ScreenshotTarget) throws -> SnapshotCapture {
         let element = app
         var masks = [CGRect]()
         if target == .recovery {
@@ -334,15 +370,15 @@ final class IOSWalletDriver {
         return SnapshotCapture(
             screenshot: element.screenshot(),
             masks: masks,
-            ignoredComparisonRegions: ignoredComparisonRegions(in: element, target: target)
+            ignoredComparisonRegions: try ignoredComparisonRegions(in: element, target: target)
         )
     }
 
-    /// Finds system chrome and dynamic transaction timestamps that are not snapshot state.
+    /// Finds system chrome, generated BOC bytes, and dynamic activity timestamps.
     private func ignoredComparisonRegions(
         in element: XCUIElement,
         target: ScreenshotTarget
-    ) -> [CGRect] {
+    ) throws -> [CGRect] {
         let origin = element.frame.origin
         let navigationBar = app.navigationBars.firstMatch
         let statusBarHeight = navigationBar.exists
@@ -354,6 +390,26 @@ final class IOSWalletDriver {
             width: element.frame.width,
             height: statusBarHeight
         )]
+        if target == .dialog {
+            let summary = app.staticTexts["Message BOC"]
+            if summary.exists {
+                let row = app.descendants(matching: .any)["ton-connect-message-boc-row"]
+                try require(row, description: "the message BOC row")
+                let valueStart = summary.frame.maxX + 2
+                let frame = row.frame
+                guard valueStart < frame.maxX, !frame.isEmpty else {
+                    throw IOSWalletDriverError.missingElement("the message BOC value column")
+                }
+                regions.append(
+                    CGRect(
+                        x: valueStart,
+                        y: frame.minY,
+                        width: frame.maxX - valueStart,
+                        height: frame.height
+                    ).offsetBy(dx: -origin.x, dy: -origin.y)
+                )
+            }
+        }
         guard target == .page else {
             return regions
         }
