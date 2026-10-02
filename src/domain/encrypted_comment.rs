@@ -4,21 +4,24 @@ use crate::{Boc, TonAddressString};
 
 /// Requests a ready-to-send TON encrypted-comment body.
 ///
-/// The engine uses the supplied recipient public key or loads it from chain
-/// state, then asks the platform host to authorize access to this wallet's
-/// protected mnemonic.
+/// The engine loads the recipient public key from chain state, or uses the
+/// supplied key for an undeployed recipient, then asks the platform host to
+/// authorize access to this wallet's protected mnemonic.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateEncryptedCommentRequest {
-    /// Recipient wallet address. Must expose `get_public_key` when no key is supplied.
+    /// Recipient wallet address. An active wallet must expose `get_public_key`.
     pub recipient: TonAddressString,
     /// UTF-8 comment to encrypt. Its encoded form must not exceed 960 bytes.
     pub comment: String,
-    /// Optional 32-byte Ed25519 public key used instead of an on-chain lookup.
+    /// Optional 32-byte Ed25519 public key of an undeployed recipient.
     ///
-    /// The engine verifies this key against `recipient` by deriving supported
-    /// wallet addresses with default parameters. A mismatch or unsupported
-    /// wallet configuration is rejected before authorizing the sender's secret.
+    /// The engine always reads the recipient account state first. An active
+    /// wallet's `get_public_key` answer is used and this key is ignored. For a
+    /// nonexistent or uninitialized account, this key is used after the engine
+    /// verifies that it derives `recipient` with supported default wallet
+    /// parameters. A mismatch or unsupported wallet configuration is rejected
+    /// before authorizing the sender's secret.
     #[serde(default)]
     #[uniffi(default = None)]
     pub recipient_public_key: Option<Vec<u8>>,
@@ -34,9 +37,9 @@ pub struct CreateEncryptedCommentRequest {
 pub struct EncryptedCommentRecipientRequest {
     /// Recipient wallet address.
     pub recipient: TonAddressString,
-    /// Optional 32-byte Ed25519 public key used instead of an on-chain lookup.
+    /// Optional 32-byte Ed25519 public key of an undeployed recipient.
     ///
-    /// It is verified against `recipient` exactly as
+    /// It is used and verified against `recipient` exactly as
     /// [`CreateEncryptedCommentRequest::recipient_public_key`] is.
     #[serde(default)]
     #[uniffi(default = None)]

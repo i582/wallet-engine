@@ -1034,13 +1034,15 @@ optional destination `StateInit`. A body is empty, a plaintext comment, or one
 caller-built payload cell.
 
 For an encrypted transfer comment, call `createEncryptedComment` before
-preview. The engine uses the optional 32-byte Ed25519 `recipientPublicKey`, or
-reads the recipient account state and calls `get_public_key` on an active
-recipient wallet when it is omitted or `null`. Supplying the key skips that
-lookup and supports uninitialized wallets. The engine locally reconstructs
-supported default wallet `StateInit` values from the supplied key and requires
-one to derive the recipient address. A mismatch
-is rejected before any HTTP request or protected-secret access. It authorizes
+preview. The engine always reads the recipient account state. For an active
+wallet it calls `get_public_key` and ignores any supplied key, because the
+contract reports its current key while a key derived from the address is only
+its initial one. For a nonexistent or uninitialized account it uses the
+optional 32-byte Ed25519 `recipientPublicKey`: the engine locally reconstructs
+supported default wallet `StateInit` values from the key and requires one to
+derive the recipient address. Without that key, or when it does not match, an
+undeployed recipient cannot receive an encrypted comment. Any rejection happens
+before protected-secret access. It authorizes
 the protected sender mnemonic through the platform host, applies the TON
 Ed25519/X25519, HMAC-SHA512, AES-256-CBC, and snake-cell format with the
 wallet's current signing key as the sender key, and returns a complete BOC.
@@ -1053,18 +1055,19 @@ Supplied-key verification supports Wallet V1/V2, V3/V4 with default wallet IDs
 (including workchain-aware defaults), V5R1 with a network- and workchain-aware
 default ID, and the engine's Wallet rev00 with its default ID in workchain 0.
 Custom wallet IDs and unsupported initial parameters are rejected. This local
-verification applies only when `recipientPublicKey` is supplied.
+verification applies only when `recipientPublicKey` is supplied for an
+undeployed recipient.
 
 To learn whether a comment for a recipient can be encrypted before any secret
 is involved, call `resolveEncryptedCommentRecipient` with the same `recipient`
 and optional `recipientPublicKey`. It resolves the key exactly as
 `createEncryptedComment` does and returns the 32 bytes that call would encrypt
 for, but it never requests a protected secret, so a client without a local
-signing secret can call it too. A supplied key is verified locally, without an
-HTTP request and without taking the single-flight slot.
+signing secret can call it too. It reads the account state and takes the
+single-flight slot even when a key is supplied.
 `EncryptedCommentUnavailable` means the recipient cannot receive an encrypted
-comment: the supplied key does not derive its address, its wallet is not
-deployed or is frozen, or its contract returned no public key.
+comment: its wallet is frozen, its contract returned no public key, or its
+wallet is not deployed and no supplied key derives its address.
 `EncryptedCommentLookupFailed` means the provider failed, limited, or cancelled
 the lookup, so nothing is known about the recipient and the call can be
 retried. `createEncryptedComment` returns the same two errors, before it

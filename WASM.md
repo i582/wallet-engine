@@ -290,12 +290,13 @@ const boc = await client.createEncryptedComment({
 const body = {kind: "rawPayload" as const, boc}
 ```
 
-Supplying `recipientPublicKey` skips the recipient's `get_public_key` lookup,
-including for an uninitialized wallet. Omit it or pass `null` to use the lookup.
-The engine verifies locally that the supplied key derives the recipient address
-using [supported default wallet parameters](README.md#sending-gram).
-Unmatched keys or unsupported parameters are rejected before any HTTP request
-or protected-secret access. The engine asks the platform host for the protected
+The engine always reads the recipient account state. An active wallet's
+`get_public_key` answer is used and `recipientPublicKey` is ignored. For an
+undeployed wallet the engine uses `recipientPublicKey` after verifying locally
+that it derives the recipient address using
+[supported default wallet parameters](README.md#sending-gram). A missing or
+unmatched key for an undeployed wallet is rejected before protected-secret
+access. The engine asks the platform host for the protected
 mnemonic with reason `"encryptComment"`. Put `body` into the same immutable
 intent passed to `previewSend` and `send`.
 
@@ -305,7 +306,7 @@ protected-secret access, resolve its key first:
 ```ts
 const key = await client.resolveEncryptedCommentRecipient({
   recipient: destination,
-  recipientPublicKey: recipientKeyBytes, // Optional, verified as above.
+  recipientPublicKey: recipientKeyBytes, // Optional, used as above.
 })
 ```
 

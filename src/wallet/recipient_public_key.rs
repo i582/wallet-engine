@@ -18,9 +18,8 @@ use crate::{Network, TonAddressString};
 /// use their standard wallet IDs, including the workchain-aware SDK defaults;
 /// Wallet rev00 uses the engine's network-specific ID in workchain zero. Custom
 /// wallet IDs and unknown wallet contracts cannot be proven with only a key and
-/// are rejected. This binds only the initial key; a Wallet rev00 recipient
-/// running this engine still decrypts comments encrypted to it after a
-/// signing-key rotation, because decryption also tries the anchor key.
+/// are rejected. This binds only the initial key, so the engine uses it only for
+/// an undeployed recipient, whose initial key is its current key.
 pub(crate) fn verify_recipient_public_key(
     recipient: &TonAddressString,
     public_key: &[u8; 32],

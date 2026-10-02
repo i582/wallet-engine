@@ -4,6 +4,10 @@ This file records user-visible changes to Wallet Engine.
 
 ## [Unreleased]
 
+### Changed
+
+- `create_encrypted_comment` and `resolve_encrypted_comment_recipient` now treat `recipient_public_key` as a hint for an undeployed recipient. They always read the recipient account state: an active wallet's `get_public_key` answer is used and a supplied key is ignored, while a nonexistent or uninitialized account uses the supplied key after verifying that it derives the recipient address. A key derived from the address is only the wallet's initial key, so for a wallet that had rotated its key, a supplied key encrypted comments to a replaced key. Supplying a key no longer skips HTTP, and `resolve_encrypted_comment_recipient` with a key now takes the single-flight slot.
+
 ## [0.0.7] - 2026-09-29
 
 ### Added

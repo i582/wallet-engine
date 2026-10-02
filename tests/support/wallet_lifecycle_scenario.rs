@@ -32,12 +32,12 @@ pub(crate) fn wallet_lifecycle_scenario(name: impl Into<String>) -> WalletLifecy
 }
 
 pub(crate) fn execute_repeated_key_rotation_on_localnet() -> Result<(), String> {
-    rotate_twice_on_localnet(|_| Ok(())).map(|_| ())
+    rotate_twice_on_localnet(|_| Ok(()), |_, ()| Ok(())).map(|_| ())
 }
 
 /// Decrypts comments sent to every signing key of a twice-rotated wallet.
 ///
-/// The wallet rotates K0 (anchor) -> K1 -> K2 on localnet. While K1 is
+/// The wallet rotates K0 (anchor) -> K1 -> K2 on localnet. While each key is
 /// current, an independent sender encrypts a comment to the key the wallet's
 /// `get_public_key` reports, exactly as another wallet would. After the second
 /// rotation the recovery phrase holds only K0 and K2, so the engine must read
@@ -50,25 +50,23 @@ pub(crate) fn execute_comment_to_replaced_signing_key_decrypts_on_localnet() -> 
     const CURRENT_KEY_COMMENT: &str = "sent to the current key K2";
     const ANCHOR_KEY_COMMENT: &str = "sent to the anchor key K0";
 
-    let rotation = rotate_twice_on_localnet(|context| {
-        let sender = comment_sender(context)?;
-        let lost_key_comment = sender.encrypt_to_on_chain_key(context, LOST_KEY_COMMENT)?;
-        Ok((sender, lost_key_comment))
-    })?;
+    let rotation = rotate_twice_on_localnet(
+        |context| {
+            let sender = comment_sender(context)?;
+            let anchor_key_comment = sender.encrypt_to_on_chain_key(context, ANCHOR_KEY_COMMENT)?;
+            Ok((sender, anchor_key_comment))
+        },
+        |context, (sender, anchor_key_comment)| {
+            let lost_key_comment = sender.encrypt_to_on_chain_key(context, LOST_KEY_COMMENT)?;
+            Ok((sender, anchor_key_comment, lost_key_comment))
+        },
+    )?;
     let RepeatedKeyRotation {
         context,
         second,
-        between_rotations: (sender, lost_key_comment),
+        between_rotations: (sender, anchor_key_comment, lost_key_comment),
     } = rotation;
     let current_key_comment = sender.encrypt_to_on_chain_key(&context, CURRENT_KEY_COMMENT)?;
-    let anchor_key_comment = block_on(sender.client.create_encrypted_comment(
-        CreateEncryptedCommentRequest {
-            recipient: context.wallet_address.clone(),
-            comment: ANCHOR_KEY_COMMENT.to_owned(),
-            recipient_public_key: Some(test_wallet().public_key()),
-        },
-    ))
-    .map_err(|error| format!("encrypting to the anchor key failed: {error}"))?;
 
     // Only the latest phrase remains: anchor K0 plus signing K2. K1 is gone.
     let rotated_descriptor = block_on(
@@ -164,9 +162,11 @@ struct RepeatedKeyRotation<T> {
 ///
 /// Each rotation must confirm, install its key on-chain, and emit the
 /// contract's key-changed log with the old key encrypted under the new one.
-/// `between_rotations` runs while K1 is the wallet's current signing key.
-fn rotate_twice_on_localnet<T>(
-    between_rotations: impl FnOnce(&LocalnetRotationContext) -> Result<T, String>,
+/// `before_rotations` runs once the wallet is deployed with K0, and
+/// `between_rotations` receives its result while K1 is the current signing key.
+fn rotate_twice_on_localnet<B, T>(
+    before_rotations: impl FnOnce(&LocalnetRotationContext) -> Result<B, String>,
+    between_rotations: impl FnOnce(&LocalnetRotationContext, B) -> Result<T, String>,
 ) -> Result<RepeatedKeyRotation<T>, String> {
     let platform_host = Arc::new(MemoryPlatformHost::default());
     let lifecycle = WalletLifecycle::new(platform_host.clone());
@@ -186,6 +186,14 @@ fn rotate_twice_on_localnet<T>(
         std::str::from_utf8(fixture.recovery_phrase_bytes()).map_err(|error| error.to_string())?;
 
     localnet.spam_transfers(1)?;
+    let context = LocalnetRotationContext {
+        platform_host: platform_host.clone(),
+        lifecycle: lifecycle.clone(),
+        localnet: localnet.clone(),
+        wallet_address: wallet_address.clone(),
+    };
+    let before_rotations = before_rotations(&context)?;
+
     let first_client =
         localnet_wallet_client(initial_descriptor, localnet.clone(), platform_host.clone())?;
     let first = block_on(
@@ -240,13 +248,7 @@ fn rotate_twice_on_localnet<T>(
     assert_localnet_public_key(&localnet, &first.new_public_key, "first")?;
     assert_key_changed_log(&localnet, &first, initial_phrase, "first")?;
 
-    let context = LocalnetRotationContext {
-        platform_host: platform_host.clone(),
-        lifecycle: lifecycle.clone(),
-        localnet: localnet.clone(),
-        wallet_address: wallet_address.clone(),
-    };
-    let between_rotations = between_rotations(&context)?;
+    let between_rotations = between_rotations(&context, before_rotations)?;
 
     let second_descriptor = block_on(
         lifecycle.import_wallet(ImportWalletRequest {

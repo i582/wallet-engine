@@ -603,7 +603,7 @@ describe("high-level WASM API", () => {
           fetch: mockFetch(async input => {
             fetchCount += 1
             return String(input).includes("getAddressInformation")
-              ? accountResponse("active")
+              ? accountResponse(keySource === "supplied" ? "uninitialized" : "active")
               : Response.json({result: {stack: [["num", `0x${peerPublicKey}`]]}})
           }),
         },
@@ -625,13 +625,13 @@ describe("high-level WASM API", () => {
       })
 
       expect(comment).toBe("private hello")
-      // The lookup reads the account state, then calls `get_public_key`.
-      expect(fetchCount).toBe(keySource === "supplied" ? 0 : 2)
+      // The lookup reads the account state, then calls `get_public_key` on an active wallet.
+      expect(fetchCount).toBe(keySource === "supplied" ? 1 : 2)
       expect(secrets.reasons).toEqual(["encryptComment", "decryptComment"])
     },
   )
 
-  test("rejects a mismatched encrypted-comment key before HTTP or secret access", async () => {
+  test("rejects a mismatched key for an undeployed recipient before secret access", async () => {
     const secrets = new RecordingSecrets()
     const encryptedPlatform = new BrowserPlatformHost({
       secrets,
@@ -653,7 +653,7 @@ describe("high-level WASM API", () => {
         platformHost: encryptedPlatform,
         fetch: mockFetch(async () => {
           fetchCount += 1
-          return new Response()
+          return accountResponse("uninitialized")
         }),
       },
     )
@@ -667,8 +667,8 @@ describe("high-level WASM API", () => {
           Buffer.from("3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c", "hex"),
         ),
       }),
-    ).rejects.toBeInstanceOf(Error)
-    expect(fetchCount).toBe(0)
+    ).rejects.toThrow("encrypted comment is unavailable")
+    expect(fetchCount).toBe(1)
     expect(secrets.reasons).toEqual([])
   })
 
@@ -718,14 +718,24 @@ describe("high-level WASM API", () => {
       expect(secrets.reasons).toEqual([])
     })
 
-    test("verifies a supplied key locally", async () => {
-      const {client, created, urls} = await resolvingClient("active")
+    test("uses a verified supplied key for an undeployed recipient", async () => {
+      const {client, created, urls} = await resolvingClient("uninitialized")
       const key = await client.resolveEncryptedCommentRecipient({
         recipient: created.descriptor.address,
         recipientPublicKey: created.descriptor.publicKey,
       })
       expect(key).toEqual(created.descriptor.publicKey)
-      expect(urls).toEqual([])
+      expect(urls).toHaveLength(1)
+    })
+
+    test("prefers an active recipient's on-chain key over a supplied key", async () => {
+      const {client, created, urls} = await resolvingClient("active")
+      const key = await client.resolveEncryptedCommentRecipient({
+        recipient: created.descriptor.address,
+        recipientPublicKey: created.descriptor.publicKey,
+      })
+      expect(Buffer.from(key).toString("hex")).toBe(peerPublicKey)
+      expect(urls).toHaveLength(2)
     })
   })
 

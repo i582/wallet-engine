@@ -26,24 +26,25 @@ use super::send_http::{PublicKeyAnswer, build_public_key_request, parse_public_k
 use super::send_state::SensitiveBytes;
 use super::state::{OperationFamily, State, ensure_running};
 
-enum RecipientPublicKeySource {
-    Provided([u8; 32]),
-    OnChain {
-        account: HttpRequest,
-        public_key: HttpRequest,
-    },
+/// Requests and inputs that resolve one recipient's public key.
+///
+/// `hint` is the caller-supplied key. It is used only when the account state
+/// shows an undeployed wallet, and only after it derives `recipient`.
+struct RecipientKeyLookup {
+    recipient: TonAddressString,
+    network: Network,
+    hint: Option<[u8; 32]>,
+    account: HttpRequest,
+    public_key: HttpRequest,
 }
 
 #[uniffi::export]
 impl WalletClient {
     /// Creates a TON encrypted-comment body ready for `SendMessageBody::RawPayload`.
     ///
-    /// The engine uses the supplied recipient public key or calls the recipient
-    /// wallet's `get_public_key` get-method, then asks the platform host to
-    /// authorize this wallet's protected mnemonic. The sender key is this
-    /// wallet's current signing key.
-    /// A supplied key must locally derive the recipient's address using supported
-    /// default wallet parameters. Verification happens before secret authorization.
+    /// The engine resolves the recipient public key, then asks the platform
+    /// host to authorize this wallet's protected mnemonic. The sender key is
+    /// this wallet's current signing key.
     /// No secret is requested when the comment is already too large.
     /// The recipient key is resolved exactly as
     /// [`Self::resolve_encrypted_comment_recipient`] resolves it, including its
@@ -57,9 +58,9 @@ impl WalletClient {
                 "the encrypted comment exceeds 960 UTF-8 bytes",
             ));
         }
-        let provided_public_key = provided_recipient_key(request.recipient_public_key.as_deref())?;
+        let hint = recipient_key_hint(request.recipient_public_key.as_deref())?;
 
-        let (generation, config, public_key_source, secret_request) = {
+        let (generation, config, lookup, secret_request) = {
             let mut state = self.lock()?;
             ensure_running(&state)?;
             let secret_ref = state
@@ -70,22 +71,14 @@ impl WalletClient {
             if state.active_send.is_some() || state.active_resolution.is_some() {
                 return Err(WalletClientError::SendAlreadyInProgress);
             }
-            if let Some(key) = &provided_public_key {
-                verify_provided_recipient_key(&request.recipient, key, state.config.network)?;
-            }
             let generation = next_resolution_generation(&mut state)?;
             let config = state.config.clone();
-            let public_key_source = recipient_public_key_source(
-                &mut state,
-                &config,
-                &request.recipient,
-                provided_public_key,
-            )?;
+            let lookup = recipient_key_lookup(&mut state, &config, request.recipient, hint)?;
             state.active_resolution = Some((generation, Vec::new()));
             (
                 generation,
                 config,
-                public_key_source,
+                lookup,
                 ProtectedSecretRead {
                     secret_ref,
                     reason: SecretAccessReason::EncryptComment,
@@ -95,7 +88,7 @@ impl WalletClient {
         };
 
         let recipient_public_key = self
-            .resolve_recipient_public_key(generation, public_key_source)
+            .resolve_recipient_public_key(generation, lookup)
             .await?;
 
         let secret = SensitiveBytes::new(
@@ -128,42 +121,39 @@ impl WalletClient {
     /// This answers whether [`Self::create_encrypted_comment`] with the same
     /// recipient and supplied key can encrypt, without a comment and without
     /// requesting any protected secret, so a client configured without a local
-    /// signing secret can ask it too. A supplied key is verified locally, with
-    /// no HTTP request and without the single-flight slot. Otherwise the engine
-    /// reads the recipient account state and, for an active contract, calls its
-    /// `get_public_key` get-method.
+    /// signing secret can ask it too. The engine reads the recipient account
+    /// state. For an active contract it calls the `get_public_key` get-method
+    /// and ignores any supplied key, because the contract reports its current
+    /// key. For an undeployed wallet it uses the supplied key after verifying
+    /// that the key derives the recipient address with supported default wallet
+    /// parameters.
     ///
     /// `EncryptedCommentUnavailable` means the recipient cannot receive an
-    /// encrypted comment: the supplied key does not derive its address, its
-    /// wallet is not deployed or is frozen, or its contract did not return a
-    /// public key. `EncryptedCommentLookupFailed` means the provider did not
+    /// encrypted comment: its wallet is frozen, its contract did not return a
+    /// public key, or its wallet is not deployed and no supplied key derives
+    /// its address. `EncryptedCommentLookupFailed` means the provider did not
     /// answer and nothing is known about the recipient.
     pub async fn resolve_encrypted_comment_recipient(
         &self,
         request: EncryptedCommentRecipientRequest,
     ) -> Result<Vec<u8>, WalletClientError> {
-        let provided_public_key = provided_recipient_key(request.recipient_public_key.as_deref())?;
+        let hint = recipient_key_hint(request.recipient_public_key.as_deref())?;
 
-        let (generation, public_key_source) = {
+        let (generation, lookup) = {
             let mut state = self.lock()?;
             ensure_running(&state)?;
-            if let Some(key) = provided_public_key {
-                verify_provided_recipient_key(&request.recipient, &key, state.config.network)?;
-                return Ok(key.to_vec());
-            }
             if state.active_send.is_some() || state.active_resolution.is_some() {
                 return Err(WalletClientError::SendAlreadyInProgress);
             }
             let generation = next_resolution_generation(&mut state)?;
             let config = state.config.clone();
-            let public_key_source =
-                recipient_public_key_source(&mut state, &config, &request.recipient, None)?;
+            let lookup = recipient_key_lookup(&mut state, &config, request.recipient, hint)?;
             state.active_resolution = Some((generation, Vec::new()));
-            (generation, public_key_source)
+            (generation, lookup)
         };
 
         let recipient_public_key = self
-            .resolve_recipient_public_key(generation, public_key_source)
+            .resolve_recipient_public_key(generation, lookup)
             .await?;
         self.complete_encrypted_comment_operation(generation)?;
         Ok(recipient_public_key.to_vec())
@@ -398,6 +388,11 @@ fn encrypted_comment_error(message: impl AsRef<str>) -> WalletClientError {
 impl WalletClient {
     /// Resolves the recipient key while `generation` holds the resolution slot.
     ///
+    /// An active contract's `get_public_key` is authoritative, because a key
+    /// derived from the address is only the wallet's initial key. The caller's
+    /// hint is used only for an undeployed wallet, whose initial key is its
+    /// current key.
+    ///
     /// Every failure releases the slot. Only evidence about the recipient
     /// becomes `EncryptedCommentUnavailable`; a provider that did not answer
     /// becomes `EncryptedCommentLookupFailed`, so no caller gives up on
@@ -405,18 +400,10 @@ impl WalletClient {
     async fn resolve_recipient_public_key(
         &self,
         generation: u64,
-        source: RecipientPublicKeySource,
+        lookup: RecipientKeyLookup,
     ) -> Result<[u8; 32], WalletClientError> {
-        let (account_request, public_key_request) = match source {
-            RecipientPublicKeySource::Provided(key) => return Ok(key),
-            RecipientPublicKeySource::OnChain {
-                account,
-                public_key,
-            } => (account, public_key),
-        };
-
         let body = self
-            .execute_encrypted_comment_request(generation, &account_request)
+            .execute_encrypted_comment_request(generation, &lookup.account)
             .await?;
         let account = parse_account(&body).map_err(|error| {
             self.fail_encrypted_comment_lookup(generation, error.developer_message)
@@ -424,10 +411,15 @@ impl WalletClient {
         match account.status {
             AccountStatus::Active => {}
             AccountStatus::Nonexistent | AccountStatus::Uninitialized => {
-                return Err(self.fail_encrypted_comment(
-                    generation,
-                    "the recipient wallet is not deployed and cannot report its public key",
-                ));
+                let Some(key) = lookup.hint else {
+                    return Err(self.fail_encrypted_comment(
+                        generation,
+                        "the recipient wallet is not deployed and no recipient public key was supplied",
+                    ));
+                };
+                verify_recipient_public_key(&lookup.recipient, &key, lookup.network)
+                    .map_err(|error| self.fail_encrypted_comment(generation, error.to_string()))?;
+                return Ok(key);
             }
             AccountStatus::Frozen => {
                 return Err(self.fail_encrypted_comment(
@@ -444,7 +436,7 @@ impl WalletClient {
         }
 
         let body = self
-            .execute_encrypted_comment_request(generation, &public_key_request)
+            .execute_encrypted_comment_request(generation, &lookup.public_key)
             .await?;
         match parse_public_key(&body) {
             Ok(PublicKeyAnswer::Key(key)) => Ok(key),
@@ -489,19 +481,10 @@ impl WalletClient {
     }
 }
 
-fn provided_recipient_key(key: Option<&[u8]>) -> Result<Option<[u8; 32]>, WalletClientError> {
+fn recipient_key_hint(key: Option<&[u8]>) -> Result<Option<[u8; 32]>, WalletClientError> {
     key.map(<[u8; 32]>::try_from).transpose().map_err(|_| {
         encrypted_comment_error(EncryptedCommentError::InvalidPeerPublicKey.to_string())
     })
-}
-
-fn verify_provided_recipient_key(
-    recipient: &TonAddressString,
-    key: &[u8; 32],
-    network: Network,
-) -> Result<(), WalletClientError> {
-    verify_recipient_public_key(recipient, key, network)
-        .map_err(|error| encrypted_comment_error(error.to_string()))
 }
 
 fn next_resolution_generation(state: &mut State) -> Result<u64, WalletClientError> {
@@ -512,23 +495,23 @@ fn next_resolution_generation(state: &mut State) -> Result<u64, WalletClientErro
     Ok(state.resolution_generation)
 }
 
-fn recipient_public_key_source(
+fn recipient_key_lookup(
     state: &mut State,
     config: &WalletClientConfig,
-    recipient: &TonAddressString,
-    provided: Option<[u8; 32]>,
-) -> Result<RecipientPublicKeySource, WalletClientError> {
-    if let Some(key) = provided {
-        return Ok(RecipientPublicKeySource::Provided(key));
-    }
+    recipient: TonAddressString,
+    hint: Option<[u8; 32]>,
+) -> Result<RecipientKeyLookup, WalletClientError> {
     let account = build_toncenter_v2_request(
         config,
         state.allocate_request_id()?,
         "getAddressInformation",
         &[("address", recipient.as_str())],
     )?;
-    let public_key = build_public_key_request(config, state.allocate_request_id()?, recipient)?;
-    Ok(RecipientPublicKeySource::OnChain {
+    let public_key = build_public_key_request(config, state.allocate_request_id()?, &recipient)?;
+    Ok(RecipientKeyLookup {
+        recipient,
+        network: config.network,
+        hint,
         account,
         public_key,
     })
@@ -778,18 +761,16 @@ mod tests {
         );
     }
 
+    const RECIPIENT_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
     #[test]
-    fn supplied_key_skips_http_and_encrypts_for_the_recipient() {
-        const RECIPIENT_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    fn supplied_key_encrypts_for_an_undeployed_recipient() {
         let recipient_wallet =
             derive_wallet(RECIPIENT_MNEMONIC, Network::Testnet).expect("recipient wallet derives");
         let recipient = TonAddressString::from_address(&recipient_wallet.address, Network::Testnet);
         let config = client_config();
         let source = config.address.clone();
-        let http = Arc::new(PublicKeyHost {
-            public_key: [0; 32],
-            requests: Mutex::new(Vec::new()),
-        });
+        let http = Arc::new(RecipientHost::new(Some("uninit"), GetterReply::HostFailure));
         let platform = Arc::new(SecretHost {
             reasons: Mutex::new(Vec::new()),
         });
@@ -810,7 +791,7 @@ mod tests {
         let plaintext = decrypt_comment_with_keys([&recipient_keys.signing], &source, &body)
             .expect("recipient decrypts the comment");
         assert_eq!(plaintext, "secret for an undeployed wallet");
-        assert!(http.requests.lock().expect("request lock").is_empty());
+        assert_eq!(http.request_count(), 1, "only the account state is read");
         assert_eq!(
             *platform.reasons.lock().expect("reason lock"),
             [SecretAccessReason::EncryptComment],
@@ -862,15 +843,15 @@ mod tests {
     }
 
     #[test]
-    fn supplied_key_for_another_wallet_is_rejected_before_io() {
+    fn supplied_key_for_another_undeployed_wallet_is_rejected_before_the_secret() {
         let config = client_config();
         let recipient = config.address.clone();
         let correct_key = config.public_key.clone();
         let wrong_key = SigningKey::from_bytes(&[7; 32]).verifying_key().to_bytes();
-        let http = Arc::new(PublicKeyHost {
-            public_key: wrong_key,
-            requests: Mutex::new(Vec::new()),
-        });
+        let http = Arc::new(RecipientHost::new(
+            Some("uninit"),
+            GetterReply::Key(wrong_key),
+        ));
         let platform = Arc::new(SecretHost {
             reasons: Mutex::new(Vec::new()),
         });
@@ -889,7 +870,7 @@ mod tests {
             error,
             encrypted_comment_error(EncryptedCommentError::RecipientPublicKeyMismatch.to_string()),
         );
-        assert!(http.requests.lock().expect("request lock").is_empty());
+        assert_eq!(http.request_count(), 1, "the getter never runs");
         assert!(platform.reasons.lock().expect("reason lock").is_empty());
         assert!(
             client
@@ -907,11 +888,45 @@ mod tests {
             }),
         )
         .expect("rejected key does not leave a pending operation");
-        assert!(http.requests.lock().expect("request lock").is_empty());
+        assert_eq!(http.request_count(), 2);
         assert_eq!(
             *platform.reasons.lock().expect("reason lock"),
             [SecretAccessReason::EncryptComment],
         );
+    }
+
+    /// The recipient's address still derives from its initial key, but its
+    /// contract reports a rotated one. A comment must use the rotated key.
+    #[test]
+    fn active_recipient_key_replaces_a_supplied_initial_key() {
+        let recipient_wallet =
+            derive_wallet(RECIPIENT_MNEMONIC, Network::Testnet).expect("recipient wallet derives");
+        let recipient = TonAddressString::from_address(&recipient_wallet.address, Network::Testnet);
+        let rotated = SigningKey::from_bytes(&[9; 32]);
+        let config = client_config();
+        let source = config.address.clone();
+        let http = Arc::new(RecipientHost::new(
+            Some("active"),
+            GetterReply::Key(rotated.verifying_key().to_bytes()),
+        ));
+        let client = WalletClient::new(config, http.clone(), secret_host()).expect("client builds");
+
+        let body = block_on(
+            client.create_encrypted_comment(CreateEncryptedCommentRequest {
+                recipient,
+                comment: "for the current key".to_owned(),
+                recipient_public_key: Some(recipient_wallet.key_pair.public_key.to_vec()),
+            }),
+        )
+        .expect("comment encrypts with the on-chain key");
+
+        assert_eq!(
+            decrypt_comment_with_keys([&rotated], &source, &body)
+                .expect("the rotated key decrypts the comment"),
+            "for the current key"
+        );
+        assert_eq!(http.request_count(), 2);
+        assert!(slot_released(&client));
     }
 
     fn resolve(
@@ -984,36 +999,91 @@ mod tests {
     }
 
     #[test]
-    fn resolution_verifies_a_supplied_key_locally_even_while_the_slot_is_busy() {
+    fn resolution_uses_a_supplied_key_only_for_an_undeployed_recipient() {
         let config = secretless_config();
         let recipient = config.address.clone();
         let correct_key = config.public_key.clone();
         let wrong_key = SigningKey::from_bytes(&[7; 32]).verifying_key().to_bytes();
-        let http = Arc::new(RecipientHost::new(None, GetterReply::HostFailure));
-        let platform = secret_host();
-        let client =
-            WalletClient::new(config, http.clone(), platform.clone()).expect("client builds");
+
+        for state in ["uninit", "uninitialized", "nonexist"] {
+            let http = Arc::new(RecipientHost::new(Some(state), GetterReply::Key(wrong_key)));
+            let platform = secret_host();
+            let client = WalletClient::new(config.clone(), http.clone(), platform.clone())
+                .expect("client builds");
+
+            assert_eq!(
+                resolve(&client, recipient.clone(), Some(correct_key.clone())),
+                Ok(correct_key.clone()),
+                "{state}: the supplied key derives the recipient"
+            );
+            let error = resolve(&client, recipient.clone(), Some(wrong_key.to_vec()))
+                .expect_err("a key that does not derive the recipient fails");
+            assert!(
+                matches!(error, WalletClientError::EncryptedCommentUnavailable { .. }),
+                "{state}: {error:?}"
+            );
+            assert_eq!(http.request_count(), 2, "{state} never runs the getter");
+            assert!(platform.reasons.lock().expect("reason lock").is_empty());
+            assert!(slot_released(&client), "{state}");
+        }
+
+        let http = Arc::new(RecipientHost::new(
+            Some("frozen"),
+            GetterReply::Key(wrong_key),
+        ));
+        let client = WalletClient::new(config, http.clone(), secret_host()).expect("client builds");
+        let error = resolve(&client, recipient, Some(correct_key))
+            .expect_err("a frozen recipient cannot receive encrypted comments");
+        assert!(
+            matches!(error, WalletClientError::EncryptedCommentUnavailable { .. }),
+            "{error:?}"
+        );
+        assert_eq!(http.request_count(), 1);
+        assert!(slot_released(&client));
+    }
+
+    #[test]
+    fn resolution_ignores_a_supplied_key_for_an_active_recipient() {
+        let config = secretless_config();
+        let recipient = config.address.clone();
+        let initial_key = config.public_key.clone();
+        let current_key = SigningKey::from_bytes(&[7; 32]).verifying_key().to_bytes();
+        let http = Arc::new(RecipientHost::new(
+            Some("active"),
+            GetterReply::Key(current_key),
+        ));
+        let client = WalletClient::new(config, http.clone(), secret_host()).expect("client builds");
+
+        // Neither the initial key nor an unverifiable one replaces the contract's answer.
+        for supplied in [initial_key, vec![0x33; 32]] {
+            assert_eq!(
+                resolve(&client, recipient.clone(), Some(supplied)),
+                Ok(current_key.to_vec())
+            );
+        }
+        assert_eq!(http.request_count(), 4);
+        assert!(slot_released(&client));
+    }
+
+    #[test]
+    fn resolution_with_a_supplied_key_still_takes_the_slot() {
+        let config = secretless_config();
+        let recipient = config.address.clone();
+        let correct_key = config.public_key.clone();
+        let http = Arc::new(RecipientHost::new(Some("uninit"), GetterReply::HostFailure));
+        let client = WalletClient::new(config, http.clone(), secret_host()).expect("client builds");
         client.lock().expect("state lock").active_resolution = Some((u64::MAX, Vec::new()));
 
         assert_eq!(
-            resolve(&client, recipient.clone(), Some(correct_key.clone()))
-                .expect("the supplied key derives the recipient"),
-            correct_key
-        );
-        assert!(matches!(
-            resolve(&client, recipient.clone(), Some(wrong_key.to_vec())),
-            Err(WalletClientError::EncryptedCommentUnavailable { .. })
-        ));
-        assert!(matches!(
-            resolve(&client, recipient.clone(), Some(vec![7; 31])),
-            Err(WalletClientError::EncryptedCommentUnavailable { .. })
-        ));
-        assert_eq!(
-            resolve(&client, recipient, None),
+            resolve(&client, recipient.clone(), Some(correct_key)),
             Err(WalletClientError::SendAlreadyInProgress)
         );
+        // A malformed key is rejected before the slot is checked.
+        assert!(matches!(
+            resolve(&client, recipient, Some(vec![7; 31])),
+            Err(WalletClientError::EncryptedCommentUnavailable { .. })
+        ));
         assert_eq!(http.request_count(), 0);
-        assert!(platform.reasons.lock().expect("reason lock").is_empty());
     }
 
     #[test]

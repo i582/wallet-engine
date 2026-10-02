@@ -172,14 +172,14 @@ one transaction produces multiple activity rows, so do not sum it per row.
 ## Encrypted comments
 
 Call `WalletClient.createEncryptedComment` with the recipient and UTF-8 text.
-Optionally set `CreateEncryptedCommentRequest.recipientPublicKey` to the
-recipient's 32-byte Ed25519 key to skip the `get_public_key` lookup, including
-for an uninitialized wallet. The engine verifies that the supplied key derives
-the recipient address using supported default wallet parameters; see
+The engine reads the recipient account state and calls `get_public_key` on an
+active wallet. Optionally set `CreateEncryptedCommentRequest.recipientPublicKey`
+to the recipient's 32-byte Ed25519 key so an undeployed wallet can receive the
+comment; an active wallet's on-chain key always takes precedence. The engine
+verifies that the supplied key derives the recipient address using supported
+default wallet parameters; see
 [supplied-key verification](README.md#sending-gram). A mismatch is rejected
-before any HTTP request or protected-secret access. The default `nil` uses the
-lookup, which reads the recipient account state and calls `get_public_key` on
-an active wallet. The engine requests the protected mnemonic with
+before protected-secret access. The engine requests the protected mnemonic with
 `SecretAccessReason.encryptComment`, and returns a BOC. Use that BOC as a
 `SendMessageBody.rawPayload`, then preview and send the same intent.
 
