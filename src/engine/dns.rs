@@ -13,7 +13,6 @@ use crate::{
     WalletClientConfig, WalletClientError,
 };
 
-const DNS_RECURSION_TTL: u8 = 10;
 const MAX_DNS_NAME_BYTES: usize = 126;
 const WALLET_CATEGORY_HASH: &str = "6NRAUIc9uoZap8Fwq0zOZNkIOaNNz9bPcdFOAgVEOxs=";
 
@@ -124,9 +123,8 @@ fn build_dns_resolve_request(
         id,
         "dnsResolve",
         &serde_json::json!({
-            "address": root,
-            "name": name,
-            "ttl": DNS_RECURSION_TTL,
+            "resolver_address": root,
+            "domain": name,
         }),
     )
 }
