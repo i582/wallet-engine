@@ -453,8 +453,9 @@ mod tests {
         let requests = http.requests.lock().expect("request lock");
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0]["method"], "dnsResolve");
-        assert_eq!(requests[0]["params"]["address"], ROOT_RAW);
-        assert_eq!(requests[0]["params"]["name"], "foundation.ton");
-        assert_eq!(requests[0]["params"]["ttl"], DNS_RECURSION_TTL);
+        assert_eq!(requests[0]["params"], json!({
+            "domain": "foundation.ton",
+            "resolver_address": ROOT_RAW,
+        }));
     }
 }
