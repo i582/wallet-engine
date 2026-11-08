@@ -11,6 +11,11 @@ export type SendAmount =
       /** Transfer the complete remaining balance after network fees. */
       readonly kind: "all"
     }
+  | {
+      readonly kind: "exactWithMode"
+      readonly nanograms: string
+      readonly mode: number
+    }
 
 /** The body encoded into one outgoing internal TON message. */
 export type SendMessageBody =

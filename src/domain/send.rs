@@ -18,6 +18,10 @@ pub enum SendAmount {
     },
     /// Send the complete remaining wallet balance after network fees.
     All,
+    ExactWithMode {
+        nanograms: UnsignedDecimalString,
+        mode: u8,
+    },
 }
 
 impl SendAmount {
@@ -125,8 +129,15 @@ impl SendIntent {
 
         let mut total = UnsignedDecimalString::from(0_u64);
         for message in &self.messages {
-            let SendAmount::Exact { nanograms } = &message.amount else {
-                return Ok(None);
+            let nanograms = match &message.amount {
+                SendAmount::Exact { nanograms } => nanograms,
+                SendAmount::ExactWithMode { nanograms, mode } => {
+                    if mode & !(1 | 2 | 16) != 0 {
+                        return Err(SendIntentError::InvalidExactSendMode);
+                    }
+                    nanograms
+                }
+                SendAmount::All => return Ok(None),
             };
             total = Add::add(&total, nanograms);
         }
@@ -143,6 +154,8 @@ pub(crate) enum SendIntentError {
     /// Carry-all-balance mode cannot be combined with another outgoing message.
     #[error("whole-balance transfer must be the only message in its batch")]
     WholeBalanceInBatch,
+    #[error("send mode is incompatible with an exact wallet debit")]
+    InvalidExactSendMode,
 }
 
 /// Requests one signed wallet transfer.

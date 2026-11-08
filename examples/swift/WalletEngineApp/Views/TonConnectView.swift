@@ -541,7 +541,7 @@ private struct TonConnectTransactionView: View {
     /// Formats one message amount for the approval interface.
     private func amount(for message: SendMessage) -> String {
         switch message.amount {
-        case .exact(let nanograms):
+        case .exact(let nanograms), .exactWithMode(let nanograms, _):
             "\(GramAmount.format(nanograms: nanograms)) GRAM"
         case .all:
             "Complete balance"

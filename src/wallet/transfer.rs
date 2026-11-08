@@ -322,6 +322,17 @@ pub(crate) fn prepare_transfer_emulation(
         .map_err(TransferError::InvalidBoc)
 }
 
+#[uniffi::export]
+#[must_use]
+pub fn build_contract_state_init(code: Vec<u8>, data: Vec<u8>) -> Option<Boc> {
+    let code = Boc::try_from(code).ok()?;
+    let data = Boc::try_from(data).ok()?;
+    let code = TonCell::from_boc(code.as_bytes().to_vec()).ok()?;
+    let data = TonCell::from_boc(data.as_bytes().to_vec()).ok()?;
+    let state_init = StateInit::new(code, data);
+    Boc::try_from(state_init.to_boc().ok()?).ok()
+}
+
 /// Serializes one ordered message batch and selects each wallet send mode.
 fn build_internal_messages(
     send_messages: &[SendMessage],
@@ -346,6 +357,12 @@ fn build_internal_message(send_message: &SendMessage) -> Result<(TonCell, u8), T
             (amount, EXACT_AMOUNT_SEND_MODE)
         }
         SendAmount::All => (0, ALL_BALANCE_SEND_MODE),
+        SendAmount::ExactWithMode { nanograms, mode } => {
+            let amount = nanograms
+                .try_to::<u128>()
+                .map_err(|_| TransferError::AmountOutOfRange)?;
+            (amount, *mode)
+        }
     };
     let mut info = CommonMsgInfoInt::new(
         send_message.destination.as_address().to_msg_address(),
@@ -544,6 +561,78 @@ mod tests {
         let message = Msg::<TonCell>::from_cell(&cell).expect("decode internal message");
 
         assert_eq!(&*message.body, &payload);
+    }
+
+    #[test]
+    fn escrow_contract_message_preserves_exact_mode_and_deployment_cells() {
+        let mut code = TonCell::builder();
+        code.write_num(&17_u8, 8).unwrap();
+        let code = code.build().unwrap();
+        let mut data = TonCell::builder();
+        data.write_num(&42_u8, 8).unwrap();
+        let data = data.build().unwrap();
+        let state_init = build_contract_state_init(code.to_boc().unwrap(), data.to_boc().unwrap())
+            .expect("valid state init");
+        let message = send_message(
+            SendAmount::ExactWithMode {
+                nanograms: 1_000_000_001_u64.into(),
+                mode: 2,
+            },
+            SendMessageBody::RawPayload {
+                boc: Boc::try_from(data.to_boc().unwrap()).unwrap(),
+            },
+            Some(state_init),
+        );
+        let intent = SendIntent {
+            expiration: SendExpiration::EngineDefault,
+            messages: vec![message],
+        };
+        assert_eq!(
+            intent
+                .exact_value_total()
+                .unwrap()
+                .unwrap()
+                .try_to::<u64>()
+                .unwrap(),
+            1_000_000_001
+        );
+        let source = derive_source(PRE_ROTATION_MNEMONIC.as_bytes(), Network::Testnet).unwrap();
+        let source = TonAddressString::from_address(&source, Network::Testnet);
+        let mut request = single_message_request("escrow-offer");
+        request.intent = intent;
+        let prepared = prepare_transfer(
+            PRE_ROTATION_MNEMONIC.as_bytes(),
+            &NonEmptyString::try_from("escrow-wallet").unwrap(),
+            &source,
+            Network::Testnet,
+            &request,
+            &FreshSendAccount {
+                status: crate::AccountStatus::Active,
+                seqno: 7,
+            },
+            1_900_000_000,
+        )
+        .expect("escrow wallet message signs");
+        let envelope = Msg::<TonCell>::from_boc(prepared.signed_boc.as_bytes().to_vec()).unwrap();
+        let (body, _) = WalletExtMsgBody::read_signed(&mut envelope.body.value.parser()).unwrap();
+        assert_eq!(body.msgs_modes, vec![2]);
+        let message = Msg::<TonCell>::from_cell(&body.msgs[0]).unwrap();
+        let info = message.info.as_int().unwrap();
+        assert_eq!(
+            info.dst,
+            TonAddress::from_str(DESTINATION).unwrap().to_msg_address()
+        );
+        assert_eq!(info.value.coins, TLBCoins::new(1_000_000_001));
+        assert_eq!(&*message.body, &data);
+        assert_eq!(&*message.init.unwrap(), &StateInit::new(code, data));
+        assert!(build_contract_state_init(vec![0; 4], vec![]).is_none());
+
+        let mut unsafe_intent = request.intent;
+        unsafe_intent.messages[0].amount = SendAmount::ExactWithMode {
+            nanograms: 1_u64.into(),
+            mode: 128,
+        };
+        assert!(unsafe_intent.exact_value_total().is_err());
     }
 
     #[test]
