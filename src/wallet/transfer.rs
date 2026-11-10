@@ -226,12 +226,14 @@ pub(crate) fn prepare_internal_signed_transfer(
 }
 
 /// Builds both supported delivery forms from one account snapshot and expiry.
+#[allow(clippy::too_many_arguments, reason = "Both signed forms share the same wallet state")]
 pub(crate) fn prepare_transfer_pair(
     mnemonic_bytes: &[u8],
     record_id: &NonEmptyString,
     source: &TonAddressString,
     network: Network,
     request: &SendRequest,
+    gasless_intent: Option<crate::SendIntent>,
     account: &FreshSendAccount,
     valid_until: u64,
 ) -> Result<(PreparedTransfer, PreparedTransfer), TransferError> {
@@ -244,12 +246,16 @@ pub(crate) fn prepare_transfer_pair(
         account,
         valid_until,
     )?;
+    let gasless_request = gasless_intent.map(|intent| SendRequest {
+        intent,
+        ..request.clone()
+    });
     let internal = prepare_internal_signed_transfer(
         mnemonic_bytes,
         record_id,
         source,
         network,
-        request,
+        gasless_request.as_ref().unwrap_or(request),
         account,
         valid_until,
     )?;
@@ -849,6 +855,7 @@ mod tests {
             &source,
             Network::Testnet,
             &request,
+            None,
             &account,
             valid_until,
         )
@@ -879,6 +886,67 @@ mod tests {
         assert_eq!(external_body.valid_until, internal_body.valid_until);
         assert_eq!(external_body.msg_seqno, account.seqno);
         assert_eq!(external_body.valid_until, valid_until as u32);
+    }
+
+    #[test]
+    fn transfer_pair_signs_distinct_normal_and_gasless_contract_messages() {
+        let source = derive_source(PRE_ROTATION_MNEMONIC.as_bytes(), Network::Testnet)
+            .expect("fixture mnemonic derives a wallet");
+        let source = TonAddressString::from_address(&source, Network::Testnet);
+        let normal = single_message_request("paired-contract-transfer");
+        let mut gasless = normal.intent.clone();
+        gasless.messages[0].amount = SendAmount::ExactWithMode {
+            nanograms: "0".to_owned().try_into().expect("zero is a valid amount"),
+            mode: 2,
+        };
+        gasless.messages[0].destination = TonAddressString::try_from(
+            "0:3333333333333333333333333333333333333333333333333333333333333333",
+        )
+        .expect("valid alternate destination");
+        gasless.messages[0].bounce = true;
+        gasless.messages[0].body = SendMessageBody::Comment {
+            text: "relayed accept".to_owned(),
+        };
+        let account = FreshSendAccount {
+            status: crate::AccountStatus::Active,
+            seqno: 42,
+        };
+
+        let (external, internal) = prepare_transfer_pair(
+            PRE_ROTATION_MNEMONIC.as_bytes(),
+            &NonEmptyString::try_from("record").expect("record id is valid"),
+            &source,
+            Network::Testnet,
+            &normal,
+            Some(gasless.clone()),
+            &account,
+            1_900_000_000,
+        )
+        .expect("both contract variants sign");
+
+        let external_message = Msg::<TonCell>::from_boc(external.signed_boc.as_bytes().to_vec())
+            .expect("external BOC decodes");
+        let (external_body, _) =
+            WalletExtMsgBody::read_signed(&mut external_message.body.value.parser())
+                .expect("external signed body decodes");
+        let internal_message = Msg::<TonCell>::from_boc(internal.signed_boc.as_bytes().to_vec())
+            .expect("internal BOC decodes");
+        let (internal_body, _) = ton::ton_wallet::WalletInternalSignedBody::read_signed(
+            &mut internal_message.body.value.parser(),
+        )
+        .expect("internal signed body decodes");
+
+        let (normal_message, normal_mode) = build_internal_message(&normal.intent.messages[0])
+            .expect("normal message builds");
+        let (gasless_message, gasless_mode) = build_internal_message(&gasless.messages[0])
+            .expect("gasless message builds");
+        assert_ne!(normal_message, gasless_message);
+        assert_eq!(external_body.msgs, vec![normal_message]);
+        assert_eq!(external_body.msgs_modes, vec![normal_mode]);
+        assert_eq!(internal_body.msgs, vec![gasless_message]);
+        assert_eq!(internal_body.msgs_modes, vec![gasless_mode]);
+        assert_eq!(external_body.msg_seqno, internal_body.msg_seqno);
+        assert_eq!(external_body.valid_until, internal_body.valid_until);
     }
 
     #[test]

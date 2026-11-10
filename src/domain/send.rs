@@ -184,8 +184,11 @@ pub struct SendRequest {
 pub struct PrepareTransferRequest {
     /// A unique identifier chosen by the application for the prepared transfer.
     pub operation_id: NonEmptyString,
-    /// The immutable messages and expiration policy covered by both signatures.
+    /// The normal messages and the expiration policy shared by both forms.
     pub intent: SendIntent,
+    /// Optional alternate messages for internal delivery through the relayer.
+    #[serde(default)]
+    pub gasless_messages: Option<Vec<SendMessage>>,
 }
 
 /// Two signed delivery forms prepared from the same wallet state.

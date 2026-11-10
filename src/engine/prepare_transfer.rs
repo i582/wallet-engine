@@ -21,8 +21,7 @@ impl WalletClient {
     ///
     /// The client fetches account state and `seqno` once, resolves one
     /// `valid_until`, and unlocks the protected phrase once. Both returned BOCs
-    /// therefore authorize the same transfer and are mutually exclusive
-    /// delivery alternatives. This method does not read or write the send
+    /// share a sequence number and are mutually exclusive delivery alternatives. This method does not read or write the send
     /// journal and does not submit either message.
     pub async fn prepare_transfer(
         &self,
@@ -31,6 +30,15 @@ impl WalletClient {
         let requested = request
             .intent
             .exact_value_total()
+            .map_err(|_| WalletClientError::InvalidSendRequest)?;
+        let gasless_intent = request.gasless_messages.map(|messages| crate::SendIntent {
+            expiration: request.intent.expiration.clone(),
+            messages,
+        });
+        let gasless_requested = gasless_intent
+            .as_ref()
+            .map(crate::SendIntent::exact_value_total)
+            .transpose()
             .map_err(|_| WalletClientError::InvalidSendRequest)?;
         let operation_id = request.operation_id.clone();
         let send_request = SendRequest {
@@ -96,7 +104,12 @@ impl WalletClient {
             }
         };
 
-        if let Some(requested_nanograms) = requested
+        let minimum_requested = match (requested, gasless_requested) {
+            (Some(normal), Some(Some(gasless))) => Some(normal.min(gasless)),
+            (normal, None) => normal,
+            _ => None,
+        };
+        if let Some(requested_nanograms) = minimum_requested
             && requested_nanograms > account.balance_nanograms
         {
             let error = WalletClientError::InsufficientBalance {
@@ -164,6 +177,7 @@ impl WalletClient {
             &expected_source,
             config.network,
             &send_request,
+            gasless_intent,
             &fresh,
             valid_until,
         )
