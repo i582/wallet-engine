@@ -47,6 +47,7 @@
 mod domain;
 mod engine;
 mod ton_connect;
+mod ton_connect_tlb;
 mod transport;
 mod types;
 mod wallet;
@@ -54,6 +55,10 @@ mod wallet;
 pub use domain::*;
 pub use engine::{WalletClient, WalletPlatformHost};
 pub use ton_connect::*;
+pub use ton_connect_tlb::{
+    TonConnectSignDataCellDecoding, TonConnectSignDataCellFailure, TonConnectSignDataCellField,
+    decode_ton_connect_sign_data_cell,
+};
 pub use transport::*;
 pub use types::{
     Base64Hash, Base64HashError, Boc, BocError, NonEmptyString, NonEmptyStringError,
