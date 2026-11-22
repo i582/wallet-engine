@@ -542,8 +542,8 @@ describe("high-level WASM API", () => {
         const request = JSON.parse(body) as {method: string; params: Record<string, unknown>}
         methods.push(request.method)
         expect(request.method).toBe("dnsResolve")
-        expect(request.params.name).toBe("foundation.ton")
-        expect(request.params.address).toBe(
+        expect(request.params.domain).toBe("foundation.ton")
+        expect(request.params.resolver_address).toBe(
           "-1:efe71d13860afaa6aeaeaf636f9168487f80f1031b0bf8d939ae49d3ea7f7da0",
         )
         return Response.json({
