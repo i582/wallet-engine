@@ -226,7 +226,10 @@ pub(crate) fn prepare_internal_signed_transfer(
 }
 
 /// Builds both supported delivery forms from one account snapshot and expiry.
-#[allow(clippy::too_many_arguments, reason = "Both signed forms share the same wallet state")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Both signed forms share the same wallet state"
+)]
 pub(crate) fn prepare_transfer_pair(
     mnemonic_bytes: &[u8],
     record_id: &NonEmptyString,
@@ -936,10 +939,10 @@ mod tests {
         )
         .expect("internal signed body decodes");
 
-        let (normal_message, normal_mode) = build_internal_message(&normal.intent.messages[0])
-            .expect("normal message builds");
-        let (gasless_message, gasless_mode) = build_internal_message(&gasless.messages[0])
-            .expect("gasless message builds");
+        let (normal_message, normal_mode) =
+            build_internal_message(&normal.intent.messages[0]).expect("normal message builds");
+        let (gasless_message, gasless_mode) =
+            build_internal_message(&gasless.messages[0]).expect("gasless message builds");
         assert_ne!(normal_message, gasless_message);
         assert_eq!(external_body.msgs, vec![normal_message]);
         assert_eq!(external_body.msgs_modes, vec![normal_mode]);
