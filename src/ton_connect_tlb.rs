@@ -116,10 +116,14 @@ const DETAIL_ECHO_CHARS: usize = 32;
 
 /// Decodes a `signData` cell by the last declaration of its TL-B schema.
 ///
-/// The cell is the decoded BoC from the request. `testnet` selects the
+/// The cell is the decoded `BoC` from the request. `testnet` selects the
 /// test-only flag of friendly addresses. No fields are returned on failure.
 #[must_use]
 #[uniffi::export]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "UniFFI exports owned strings at the foreign-language boundary"
+)]
 pub fn decode_ton_connect_sign_data_cell(
     schema: String,
     cell: Vec<u8>,
